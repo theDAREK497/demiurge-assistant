@@ -1,0 +1,5 @@
+{
+  "name": "Demiurge Assistant",
+  "description": "Worldbuilding and TTRPG assistant with local LLM integration, Wiki, Timeline, and Hex Maps.",
+  "requestFramePermissions": []
+}
