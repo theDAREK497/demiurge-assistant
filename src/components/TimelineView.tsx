@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { api } from '../api';
 import { Clock, Edit2, Save, X, Plus, Trash2, ArrowLeft, GripVertical } from 'lucide-react';
+import { MarkdownEditor } from './MarkdownEditor';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { SectionHelp } from './SectionHelp';
 
 export const TimelineView = () => {
   const { t } = useLanguage();
@@ -139,11 +143,11 @@ export const TimelineView = () => {
                 placeholder="Date (e.g. 1482 DR)"
               />
             </div>
-            <textarea 
+            <MarkdownEditor 
               value={editForm.description}
-              onChange={e => setEditForm({...editForm, description: e.target.value})}
-              className="w-full bg-stone-950 border border-stone-800 rounded-lg px-4 py-3 text-stone-300 h-64 resize-none"
+              onChange={(val) => setEditForm({...editForm, description: val})}
               placeholder="Detailed description..."
+              minHeight="250px"
             />
             <div className="flex justify-between items-center mt-6">
               <div className="flex items-center space-x-2">
@@ -183,10 +187,13 @@ export const TimelineView = () => {
               </span>
             </div>
             <div className="prose prose-invert prose-emerald max-w-none">
-              {viewingEvent.description?.split('\n').map((para: string, i: number) => (
-                <p key={i} className="text-stone-300 leading-relaxed mb-4 whitespace-pre-wrap">{para}</p>
-              ))}
-              {!viewingEvent.description && <p className="text-stone-500 italic">No description provided.</p>}
+              {viewingEvent.description ? (
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {viewingEvent.description}
+                </ReactMarkdown>
+              ) : (
+                <p className="text-stone-500 italic">No description provided.</p>
+              )}
             </div>
           </div>
         )}
@@ -197,7 +204,21 @@ export const TimelineView = () => {
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto h-full flex flex-col">
       <div className="flex justify-between items-center mb-8">
-        <h2 className="text-3xl font-bold text-stone-100">{t.nav_timeline}</h2>
+        <h2 className="text-3xl font-bold text-stone-100 flex items-center">
+          {t.nav_timeline}
+          <SectionHelp content={
+            <>
+              <h3 className="text-xl font-bold text-emerald-400 mb-4">Справка по Хронологии</h3>
+              <p>Здесь вы можете создать ленту событий, происходящих в вашей вселенной.</p>
+              <ul className="list-disc list-inside space-y-2 mt-2">
+                <li><strong>Индекс сортировки:</strong> При добавлении или редактировании карточки используйте "Order Index", чтобы расставить события по порядку. Обычно это год или эпоха.</li>
+                <li><strong>Даты:</strong> Поле "Дата / Эра" является текстовым. Впишите туда любой удобный формат даты (например, "41 Месяц, 30 Эра", или "2077 год").</li>
+                <li><strong>Скрытые события:</strong> Как и везде, в Хронологии могут быть секреты, не показываемые игрокам. (По умолчанию они показываются все, если не используется Режим Игрока). Установите галочку "secret", чтобы скрыть от игроков.</li>
+                <li><strong>Быстрая смена порядка:</strong> Если список длинный, вы можете перетащить (drag-and-drop) событие, схватив за иконку с точками слева, чтобы автоматически обновить "Order Index".</li>
+              </ul>
+            </>
+          } />
+        </h2>
         <button 
           onClick={handleCreateNew} 
           className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded-xl flex items-center transition-colors px-4"
@@ -307,11 +328,11 @@ export const TimelineView = () => {
                           placeholder="Date"
                         />
                       </div>
-                      <textarea 
+                      <MarkdownEditor 
                         value={editForm.description}
-                        onChange={e => setEditForm({...editForm, description: e.target.value})}
-                        className="w-full bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-sm text-stone-300 h-24 resize-none"
+                        onChange={(val) => setEditForm({...editForm, description: val})}
                         placeholder="Event Description"
+                        minHeight="150px"
                       />
                       <div className="flex justify-between items-center mt-4">
                         <div className="flex items-center space-x-2">
@@ -349,7 +370,11 @@ export const TimelineView = () => {
                         <h3 className="text-xl font-bold text-emerald-400 line-clamp-1">{event.title}</h3>
                         <span className="text-sm font-mono text-stone-500 shrink-0 ml-2">{event.event_date}</span>
                       </div>
-                      <p className="text-stone-300 line-clamp-3">{event.description}</p>
+                      <div className="prose prose-invert prose-emerald prose-sm max-w-none line-clamp-3">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {event.description || ''}
+                        </ReactMarkdown>
+                      </div>
                     </>
                   )}
                 </div>

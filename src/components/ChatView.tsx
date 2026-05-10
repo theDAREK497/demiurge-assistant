@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { api } from '../api';
 import { Send, Bot, User } from 'lucide-react';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -42,6 +43,12 @@ export const ChatView = () => {
     }
   };
 
+  const quickPrompts = [
+    { label: "👤 Сгенерируй NPC", prompt: "Пожалуйста, придумай случайного уникального NPC для этого мира. Дай ему имя, краткую историю и секрет. Выведи JSON блок для добавления его в entities." },
+    { label: "🗺️ Новая локация", prompt: "Придумай интересную локацию, которую могли бы посетить игроки. Опиши её атмосферу и выведи JSON блок для добавления в entities." },
+    { label: "⚔️ Идея квеста", prompt: "Сгенерируй завязку для нового квеста. В чем проблема, кто заказчик и какая награда? Выведи JSON блок для добавления квеста, используя существующую схему квестов." },
+  ];
+
   return (
     <div className="flex flex-col h-full bg-stone-900">
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -63,7 +70,9 @@ export const ChatView = () => {
                   ? 'bg-emerald-600/20 text-emerald-100 rounded-tr-none' 
                   : 'bg-stone-800 text-stone-200 rounded-tl-none'
               }`}>
-                <pre className="whitespace-pre-wrap font-sans">{msg.content}</pre>
+                <div className="whitespace-pre-wrap font-sans text-sm">
+                  <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                </div>
               </div>
             </div>
           </div>
@@ -88,26 +97,54 @@ export const ChatView = () => {
       </div>
 
       <div className="p-4 bg-stone-950 border-t border-stone-800">
-        <div className="max-w-4xl mx-auto relative">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder={t.chat_placeholder}
-            className="w-full bg-stone-900 border border-stone-700 rounded-2xl pl-4 pr-14 py-4 text-stone-200 focus:outline-none focus:border-emerald-500 resize-none h-16"
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="absolute right-2 top-2 bottom-2 w-12 flex items-center justify-center bg-emerald-600 hover:bg-emerald-500 disabled:bg-stone-800 disabled:text-stone-500 text-white rounded-xl transition-colors"
-          >
-            <Send size={20} />
-          </button>
+        <div className="max-w-4xl mx-auto relative space-y-2">
+          {/* Quick Prompts */}
+          <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
+            {quickPrompts.map((q, idx) => (
+              <button
+                key={idx}
+                onClick={async () => {
+                  if (isLoading) return;
+                  const newMessages: Message[] = [...messages, { role: 'user', content: q.prompt }];
+                  setMessages(newMessages);
+                  setIsLoading(true);
+                  try {
+                    const reply = await api.chat(newMessages);
+                    setMessages([...newMessages, { role: 'assistant', content: reply }]);
+                  } catch (error: any) {
+                    setMessages([...newMessages, { role: 'assistant', content: `Error: ${error.message}` }]);
+                  } finally {
+                    setIsLoading(false);
+                  }
+                }}
+                className="whitespace-nowrap bg-stone-800 hover:bg-stone-700 text-stone-300 text-sm px-3 py-1.5 rounded-full border border-stone-700 transition-colors shrink-0"
+              >
+                {q.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder={t.chat_placeholder}
+              className="w-full bg-stone-900 border border-stone-700 rounded-2xl pl-4 pr-14 py-4 text-stone-200 focus:outline-none focus:border-emerald-500 resize-none h-16"
+            />
+            <button
+              onClick={handleSend}
+              disabled={isLoading || !input.trim()}
+              className="absolute right-2 top-2 bottom-2 w-12 flex items-center justify-center bg-emerald-600 hover:bg-emerald-500 disabled:bg-stone-800 disabled:text-stone-500 text-white rounded-xl transition-colors"
+            >
+              <Send size={20} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

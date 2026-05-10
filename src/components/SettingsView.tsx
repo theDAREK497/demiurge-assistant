@@ -1,11 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { api } from '../api';
+import { Download, Upload } from 'lucide-react';
 
 export const SettingsView = () => {
   const { t, lang, setLang } = useLanguage();
-  const [endpoint, setEndpoint] = useState('http://localhost:1234/v1');
-  const [model, setModel] = useState('local-model');
+  
+  // Text AI Settings
+  const [llmProvider, setLlmProvider] = useState('openai');
+  const [llmEndpoint, setLlmEndpoint] = useState('http://localhost:1234/v1');
+  const [llmModel, setLlmModel] = useState('local-model');
+  const [llmApiKey, setLlmApiKey] = useState('');
+  
+  // Image AI Settings
+  const [imageProvider, setImageProvider] = useState('sd');
+  const [imageEndpoint, setImageEndpoint] = useState('http://127.0.0.1:7860');
+  const [imageApiKey, setImageApiKey] = useState('');
+
   const [saved, setSaved] = useState(false);
   
   const [universes, setUniverses] = useState<any[]>([]);
@@ -15,11 +26,26 @@ export const SettingsView = () => {
 
   useEffect(() => {
     const loadSettings = async () => {
-      const savedEndpoint = await api.getSettings('llm_endpoint');
-      if (savedEndpoint) setEndpoint(savedEndpoint);
+      const savedLlmProvider = await api.getSettings('llm_provider');
+      if (savedLlmProvider) setLlmProvider(savedLlmProvider);
+
+      const savedLlmEndpoint = await api.getSettings('llm_endpoint');
+      if (savedLlmEndpoint) setLlmEndpoint(savedLlmEndpoint);
       
-      const savedModel = await api.getSettings('llm_model');
-      if (savedModel) setModel(savedModel);
+      const savedLlmModel = await api.getSettings('llm_model');
+      if (savedLlmModel) setLlmModel(savedLlmModel);
+
+      const savedLlmApiKey = await api.getSettings('llm_api_key');
+      if (savedLlmApiKey) setLlmApiKey(savedLlmApiKey);
+
+      const savedImageProvider = await api.getSettings('image_provider');
+      if (savedImageProvider) setImageProvider(savedImageProvider);
+
+      const savedImageEndpoint = await api.getSettings('image_endpoint');
+      if (savedImageEndpoint) setImageEndpoint(savedImageEndpoint);
+
+      const savedImageApiKey = await api.getSettings('image_api_key');
+      if (savedImageApiKey) setImageApiKey(savedImageApiKey);
       
       const data = await api.getUniverses();
       setUniverses(data);
@@ -36,8 +62,15 @@ export const SettingsView = () => {
   }, []);
 
   const handleSave = async () => {
-    await api.saveSettings('llm_endpoint', endpoint);
-    await api.saveSettings('llm_model', model);
+    await api.saveSettings('llm_provider', llmProvider);
+    await api.saveSettings('llm_endpoint', llmEndpoint);
+    await api.saveSettings('llm_model', llmModel);
+    await api.saveSettings('llm_api_key', llmApiKey);
+    
+    await api.saveSettings('image_provider', imageProvider);
+    await api.saveSettings('image_endpoint', imageEndpoint);
+    await api.saveSettings('image_api_key', imageApiKey);
+
     if (currentUniverseId) {
       await api.saveSettings('current_universe_id', currentUniverseId);
       api.setUniverseId(currentUniverseId);
@@ -88,6 +121,57 @@ export const SettingsView = () => {
       setDeleteConfirmId(id);
       setTimeout(() => setDeleteConfirmId(null), 3000);
     }
+  };
+
+  const handleExport = async () => {
+    try {
+      const response = await fetch('/api/export');
+      const data = await response.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `demiurge-backup-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Export failed', e);
+      alert(t.settings_export_error);
+    }
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!confirm(t.settings_import_warning)) {
+      e.target.value = '';
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await fetch('/api/import', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (response.ok) {
+        alert(t.settings_import_success);
+        window.location.reload();
+      } else {
+        const err = await response.json();
+        alert(`${t.settings_import_error}: ${err.error}`);
+      }
+    } catch (e) {
+      console.error('Import failed', e);
+      alert(t.settings_import_error);
+    }
+    e.target.value = '';
   };
 
   return (
@@ -173,38 +257,144 @@ export const SettingsView = () => {
           </select>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-stone-400 mb-2">
-            {t.settings_llm_endpoint}
-          </label>
-          <input 
-            type="text"
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
-            placeholder="http://localhost:1234/v1"
-          />
+        <div className="pt-4 border-t border-stone-800">
+          <h4 className="text-lg font-bold text-stone-200 mb-4">{t.settings_ai_text}</h4>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_provider}
+              </label>
+              <select 
+                value={llmProvider}
+                onChange={(e) => setLlmProvider(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+              >
+                <option value="openai">{t.settings_provider_openai}</option>
+                <option value="gemini">{t.settings_provider_gemini}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_llm_endpoint}
+              </label>
+              <input 
+                type="text"
+                value={llmEndpoint}
+                onChange={(e) => setLlmEndpoint(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="http://localhost:1234/v1"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_llm_model}
+              </label>
+              <input 
+                type="text"
+                value={llmModel}
+                onChange={(e) => setLlmModel(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="local-model"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_api_key}
+              </label>
+              <input 
+                type="password"
+                value={llmApiKey}
+                onChange={(e) => setLlmApiKey(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="sk-..."
+              />
+            </div>
+          </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-stone-400 mb-2">
-            {t.settings_llm_model}
-          </label>
-          <input 
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
-            placeholder="local-model"
-          />
+        <div className="pt-4 border-t border-stone-800">
+          <h4 className="text-lg font-bold text-stone-200 mb-4">{t.settings_ai_image}</h4>
+          
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_provider}
+              </label>
+              <select 
+                value={imageProvider}
+                onChange={(e) => setImageProvider(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+              >
+                <option value="sd">{t.settings_provider_sd}</option>
+                <option value="openai">{t.settings_provider_dalle}</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_image_endpoint}
+              </label>
+              <input 
+                type="text"
+                value={imageEndpoint}
+                onChange={(e) => setImageEndpoint(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="http://127.0.0.1:7860"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-400 mb-2">
+                {t.settings_api_key}
+              </label>
+              <input 
+                type="password"
+                value={imageApiKey}
+                onChange={(e) => setImageApiKey(e.target.value)}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
+                placeholder="sk-..."
+              />
+            </div>
+          </div>
         </div>
 
         <button 
           onClick={handleSave}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 px-4 rounded-xl transition-colors flex justify-center items-center"
+          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 px-4 rounded-xl transition-colors flex justify-center items-center mt-6"
         >
           {saved ? t.settings_saved : t.settings_save}
         </button>
+      </div>
+
+      <div className="space-y-6 bg-stone-900 p-6 rounded-2xl border border-stone-800 mb-8">
+        <h3 className="text-xl font-bold text-emerald-400">{t.settings_export_import_title}</h3>
+        <div className="flex flex-col sm:flex-row gap-4">
+          <button 
+            onClick={handleExport}
+            className="flex-1 bg-stone-800 hover:bg-stone-700 text-stone-200 font-medium py-3 px-4 rounded-xl transition-colors flex justify-center items-center gap-2"
+          >
+            <Download size={18} />
+            {t.settings_export_btn}
+          </button>
+          
+          <label className="flex-1 bg-stone-800 hover:bg-stone-700 text-stone-200 font-medium py-3 px-4 rounded-xl transition-colors flex justify-center items-center gap-2 cursor-pointer">
+            <Upload size={18} />
+            {t.settings_import_btn}
+            <input 
+              type="file" 
+              accept=".json" 
+              className="hidden" 
+              onChange={handleImport}
+            />
+          </label>
+        </div>
+        <p className="text-stone-500 text-sm">
+          {t.settings_export_import_desc}
+        </p>
       </div>
 
       <div className="space-y-6 bg-stone-900 p-6 rounded-2xl border border-stone-800">

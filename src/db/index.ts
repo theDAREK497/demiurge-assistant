@@ -66,6 +66,35 @@ export function initDb() {
       conditions TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS journal_logs (
+      id TEXT PRIMARY KEY,
+      universe_id TEXT,
+      title TEXT NOT NULL,
+      content TEXT,
+      session_date TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS quests (
+      id TEXT PRIMARY KEY,
+      universe_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT,
+      order_index INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS boards (
+      id TEXT PRIMARY KEY,
+      universe_id TEXT,
+      name TEXT NOT NULL,
+      data TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   try { db.exec("ALTER TABLE entities ADD COLUMN universe_id TEXT;"); } catch (e) {}
@@ -74,6 +103,10 @@ export function initDb() {
   try { db.exec("ALTER TABLE entities ADD COLUMN image TEXT;"); } catch (e) {}
   try { db.exec("ALTER TABLE entities ADD COLUMN data TEXT;"); } catch (e) {}
   try { db.exec("ALTER TABLE random_tables ADD COLUMN rollType TEXT;"); } catch (e) {}
+  try { db.exec("ALTER TABLE journal_logs ADD COLUMN is_secret INTEGER DEFAULT 0;"); } catch (e) {}
+  try { db.exec("ALTER TABLE quests ADD COLUMN is_secret INTEGER DEFAULT 0;"); } catch (e) {}
+  try { db.exec("ALTER TABLE map_nodes ADD COLUMN is_secret INTEGER DEFAULT 0;"); } catch (e) {}
+  try { db.exec("ALTER TABLE entities ADD COLUMN is_secret INTEGER DEFAULT 0;"); } catch (e) {}
 
   // Migrate existing data to a default universe if they don't have one
   const defaultUniverseId = 'default-universe';

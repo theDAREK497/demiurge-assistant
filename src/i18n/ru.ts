@@ -5,6 +5,8 @@ export const ru = {
   nav_timeline: "Таймлайн",
   nav_map: "Карта Мира",
   nav_tables: "Случайные таблицы",
+  nav_journal: "Журнал",
+  nav_quests: "Квесты",
   nav_settings: "Настройки",
   loading: "Загрузка...",
   
@@ -17,7 +19,16 @@ export const ru = {
   settings_create: "Создать",
   settings_generate_demo: "Сгенерировать демо-вселенную (Sci-Fi)",
   settings_app_settings: "Настройки Приложения",
-  settings_llm_endpoint: "URL локального сервера LLM (например, LM Studio)",
+  settings_ai_text: "Текстовый ИИ (Чат, Журнал)",
+  settings_ai_image: "Генерация изображений",
+  settings_provider: "Провайдер",
+  settings_provider_openai: "OpenAI-совместимый (LM Studio, ChatGPT, DeepSeek, Qwen)",
+  settings_provider_gemini: "Google Gemini",
+  settings_provider_sd: "Stable Diffusion (Automatic1111)",
+  settings_provider_dalle: "OpenAI DALL-E",
+  settings_api_key: "API Ключ (если требуется)",
+  settings_image_endpoint: "URL сервера генерации (напр. http://127.0.0.1:7860)",
+  settings_llm_endpoint: "URL сервера LLM (напр. http://localhost:1234/v1)",
   settings_llm_model: "Название модели",
   settings_language: "Язык",
   settings_save: "Сохранить",
@@ -47,6 +58,16 @@ export const ru = {
   settings_help_step3_4: "Нажмите Save Settings.",
   settings_help_step3_5: "Теперь вы можете использовать ИИ-чат и генерацию контента абсолютно бесплатно и приватно!",
   
+  // Export/Import
+  settings_export_import_title: "Экспорт и Импорт",
+  settings_export_btn: "Экспорт мира",
+  settings_import_btn: "Импорт мира",
+  settings_export_import_desc: "Экспорт сохранит все ваши вселенные, сущности, карты и настройки в один JSON файл. Импорт полностью перезапишет текущие данные.",
+  settings_import_warning: "Внимание! Импорт полностью перезапишет все текущие данные. Продолжить?",
+  settings_import_success: "Импорт успешно завершен! Приложение будет перезагружено.",
+  settings_import_error: "Ошибка импорта",
+  settings_export_error: "Ошибка экспорта",
+
   // Chat
   chat_placeholder: "Опишите вашу идею, локацию или персонажа...",
   chat_send: "Отправить",
@@ -68,6 +89,8 @@ export const ru = {
   wiki_back: "Назад к Вики",
   wiki_entity_name: "Имя сущности",
   wiki_image_url: "URL изображения или загрузить...",
+  wiki_generate_image: "Сгенерировать портрет",
+  wiki_generating: "Генерация...",
   wiki_upload_image: "Загрузить изображение",
   wiki_description: "Подробное описание... Используйте [[Имя Сущности]] для ссылок на другие страницы.",
   wiki_tags: "Теги (через запятую)",
@@ -78,6 +101,11 @@ export const ru = {
   wiki_no_entities: "Сущности не найдены.",
   wiki_delete_confirm: "Вы уверены, что хотите удалить эту сущность?",
   wiki_upload_failed: "Не удалось загрузить изображение",
+  wiki_list_view: "Список",
+  wiki_graph_view: "Граф связей",
+  wiki_graph_help: "Колесико мыши для масштаба, перетаскивание для перемещения. Кликните на узел, чтобы открыть.",
+  wiki_backlinks: "Связанные упоминания",
+  wiki_backlinks_empty: "Нет связанных упоминаний.",
   
   // Map
   map_title: "Карта Мира",
@@ -166,5 +194,57 @@ export const ru = {
   tables_cancel: "Отмена",
   tables_save: "Сохранить таблицу",
   tables_roll_col: "Бросок",
-  tables_result_col: "Результат"
+  tables_result_col: "Результат",
+
+  // Markdown Editor
+  md_edit: "Редактировать",
+  md_preview: "Предпросмотр",
+  md_help: "Поддерживается Markdown (**, *, #, -, 1., [ссылка](url))",
+
+  // Journal
+  journal_title: "Журнал кампании",
+  journal_placeholder: "Опишите, что произошло на сессии... (Например: Герои прибыли в Ривенделл и встретили Элронда. Они узнали о кольце и решили отправиться в Мордор.)",
+  journal_analyze: "Анализировать с ИИ",
+  journal_analyzing: "Анализ...",
+  journal_results_title: "Извлеченные данные",
+  journal_no_results: "ИИ не нашел новых сущностей или событий. Попробуйте описать подробнее.",
+  journal_entities_found: "Найденные сущности",
+  journal_events_found: "Найденные события",
+  journal_save_selected: "Сохранить выбранное",
+  journal_saved_success: "Данные успешно сохранены в Вики и Таймлайн!",
+  journal_error: "Ошибка при анализе. Проверьте настройки ИИ.",
+  journal_new_log: "Новая запись",
+  journal_title_placeholder: "Название сессии...",
+  journal_date: "Дата сессии",
+  journal_save_log: "Сохранить запись",
+  journal_logs_list: "История сессий",
+  journal_empty: "Журнал пуст. Добавьте первую запись!",
+  journal_back: "Назад к списку",
+  journal_delete_confirm: "Удалить эту запись?",
+
+  // Quests
+  quests_title: "Доска квестов",
+  quests_add: "Добавить квест",
+  quests_todo: "Зацепки",
+  quests_in_progress: "Активные",
+  quests_done: "Выполнено",
+  quests_failed: "Провалено",
+  quests_new_title: "Новый квест",
+  quests_delete_confirm: "Удалить квест?",
+
+  // Boards
+  boards_title: "Доски расследований",
+  boards_create: "Создать доску",
+  boards_new_name: "Новая доска",
+  boards_back: "Назад",
+  boards_save: "Сохранить",
+  boards_add_note: "Добавить заметку",
+  boards_delete_confirm: "Удалить эту доску?",
+  boards_empty: "Нет досок. Создайте первую для расследования!",
+
+  // Help
+  help_title: "Справка и Руководство",
+  help_markdown: "Справка по Markdown",
+  help_sections: "Разделы приложения",
+  help_player_mode: "Режим Игрока и Скрытые элементы",
 };

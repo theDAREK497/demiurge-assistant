@@ -2,6 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../api';
 import { Plus, Trash2, Edit2, Save, X, Dices, Search, Filter } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
+import { MarkdownEditor } from './MarkdownEditor';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { SectionHelp } from './SectionHelp';
 
 export const RandomTablesView = () => {
   const { t } = useLanguage();
@@ -143,7 +147,19 @@ export const RandomTablesView = () => {
   return (
     <div className="p-4 md:p-8 max-w-6xl mx-auto h-full flex flex-col">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-3xl font-bold text-stone-100">{t.tables_title}</h2>
+        <h2 className="text-3xl font-bold text-stone-100 flex items-center">
+          {t.tables_title}
+          <SectionHelp content={
+            <>
+              <h3 className="text-xl font-bold text-emerald-400 mb-4">Справка по Случайным таблицам</h3>
+              <p>Раздел помогает генерировать случайные события, лут, НПС и другие элементы на лету.</p>
+              <ul className="list-disc list-inside space-y-2 mt-2">
+                <li><strong>Условия:</strong> При редактировании таблицы вы можете задать условия перевеса (например, "Ночь", "Дождь", "Уровень 5"). Если условие совпадает, может выпасть особый результат.</li>
+                <li><strong>Бросок:</strong> Нажмите на иконку кубиков на карточке таблицы, чтобы сгенерировать случайную строку из списка её записей с учетом заданных условий (работает взвешенный шанс).</li>
+              </ul>
+            </>
+          } />
+        </h2>
         <button 
           onClick={handleCreateNew} 
           className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded-xl flex items-center transition-colors px-4"
@@ -242,7 +258,15 @@ export const RandomTablesView = () => {
                   </div>
                 </div>
                 
-                <p className="text-stone-400 text-sm mb-4">{table.description}</p>
+                <div className="prose prose-invert prose-emerald prose-sm max-w-none mb-4">
+                  {table.description ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {table.description}
+                    </ReactMarkdown>
+                  ) : (
+                    <span className="text-stone-500 italic">{t.wiki_no_description}</span>
+                  )}
+                </div>
                 
                 {table.conditions && table.conditions.length > 0 && (
                   <div className="mb-4">
@@ -332,14 +356,14 @@ const TableEditor = ({
         </select>
       </div>
       
-      <textarea 
+      <MarkdownEditor 
         value={editForm.description}
-        onChange={e => setEditForm({...editForm, description: e.target.value})}
-        className="w-full bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 text-sm text-stone-300 h-20 resize-none mb-4 shrink-0"
+        onChange={(val) => setEditForm({...editForm, description: val})}
         placeholder={t.tables_description}
+        minHeight="100px"
       />
 
-      <div className="mb-6 shrink-0">
+      <div className="mb-6 shrink-0 mt-4">
         <div className="flex justify-between items-center mb-2">
           <h4 className="text-sm font-bold text-stone-300">{t.tables_conditions}</h4>
           <button onClick={onAddCondition} className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center">
