@@ -210,5 +210,37 @@ export const api = {
     }
     const data = await res.json();
     return data.reply;
+  },
+  extractEntities: async (text: string) => {
+    const res = await fetch('/api/extract-entities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, universe_id: currentUniverseId }),
+    });
+    if (!res.ok) {
+      const error = await res.json();
+      throw new Error(error.error || 'Failed to extract entities');
+    }
+    return res.json();
+  },
+  getChatSessions: async () => {
+    const res = await fetch(`/api/chat-sessions?universe_id=${currentUniverseId || ''}`);
+    return res.json();
+  },
+  getChatSession: async (id: string) => {
+    const res = await fetch(`/api/chat-sessions/${id}`);
+    if (!res.ok) return null;
+    return res.json();
+  },
+  saveChatSession: async (session: any) => {
+    const res = await fetch('/api/chat-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...session, universe_id: currentUniverseId }),
+    });
+    return res.json();
+  },
+  deleteChatSession: async (id: string) => {
+    await fetch(`/api/chat-sessions/${id}`, { method: 'DELETE' });
   }
 };

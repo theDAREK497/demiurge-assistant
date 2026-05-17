@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
 import { UndoProvider, useUndo } from './contexts/UndoContext';
 import { PlayerModeProvider, usePlayerMode } from './contexts/PlayerModeContext';
-import { Book, Map as MapIcon, Clock, MessageSquare, Settings as SettingsIcon, Menu, X, Dices, ScrollText, Network, HelpCircle, Undo2, Eye, EyeOff } from 'lucide-react';
+import { Book, Map as MapIcon, Clock, MessageSquare, Settings as SettingsIcon, Menu, X, Dices, ScrollText, Network, HelpCircle, Undo2, Eye, EyeOff, Database } from 'lucide-react';
 import { ChatView } from './components/ChatView';
 import { WikiView } from './components/WikiView';
 import { TimelineView } from './components/TimelineView';
@@ -14,6 +14,8 @@ import { QuestBoardView } from './components/QuestBoardView';
 import { DetectiveBoardView } from './components/DetectiveBoardView';
 import { HelpView } from './components/HelpView';
 import { api } from './api';
+
+import { DatabaseView } from './components/DatabaseView';
 
 const GlobalUndoButton = () => {
   const { hasUndo, popUndo, undoStack } = useUndo();
@@ -104,6 +106,7 @@ const MainLayout = () => {
     { id: 'journal', icon: ScrollText, label: t.nav_journal },
     { id: 'quests', icon: Book, label: t.nav_quests },
     { id: 'boards', icon: Network, label: t.boards_title || 'Boards' },
+    { id: 'database', icon: Database, label: 'Режим Разработчика' },
     { id: 'settings', icon: SettingsIcon, label: t.nav_settings },
     { id: 'help', icon: HelpCircle, label: t.help_title || 'Help' },
   ];
@@ -123,11 +126,11 @@ const MainLayout = () => {
       </div>
 
       {/* Sidebar */}
-      <div className={`${mobileMenuOpen ? 'flex' : 'hidden'} md:flex w-full md:w-64 bg-stone-950 border-r border-stone-800 flex-col absolute md:relative z-40 h-[calc(100vh-60px)] md:h-full top-[60px] md:top-0`}>
+      <div className={`${mobileMenuOpen ? 'flex' : 'hidden'} md:flex w-full md:w-72 bg-stone-950 border-r border-stone-800 flex-col absolute md:relative z-40 h-[calc(100vh-60px)] md:h-full top-[60px] md:top-0`}>
         <div className="hidden md:block p-6">
           <h1 className="text-xl font-bold text-emerald-500 tracking-tight">{t.app_name}</h1>
         </div>
-        <nav className="flex-1 px-4 py-4 md:py-0 space-y-2 overflow-y-auto">
+        <nav className="flex-1 px-4 py-4 md:py-0 space-y-2 overflow-y-auto w-full">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -138,14 +141,14 @@ const MainLayout = () => {
                   setActiveTab(tab.id);
                   setMobileMenuOpen(false);
                 }}
-                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-colors ${
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl transition-colors text-left text-sm lg:text-base ${
                   isActive 
                     ? 'bg-emerald-500/10 text-emerald-400' 
                     : 'text-stone-400 hover:bg-stone-800 hover:text-stone-200'
                 }`}
               >
-                <Icon size={20} />
-                <span className="font-medium">{tab.label}</span>
+                <Icon size={20} className="shrink-0" />
+                <span className="font-medium leading-tight whitespace-normal text-left">{tab.label}</span>
               </button>
             );
           })}
@@ -166,6 +169,7 @@ const MainLayout = () => {
           {activeTab === 'journal' && <JournalView />}
           {activeTab === 'quests' && <QuestBoardView />}
           {activeTab === 'boards' && <DetectiveBoardView />}
+          {activeTab === 'database' && <DatabaseView />}
           {activeTab === 'settings' && <SettingsView />}
           {activeTab === 'help' && <HelpView />}
         </main>

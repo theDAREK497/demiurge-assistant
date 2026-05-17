@@ -8,6 +8,26 @@ import { GoogleGenAI } from '@google/genai';
 
 const router = express.Router();
 
+router.post('/db/query', (req, res) => {
+  const { query } = req.body;
+  
+  if (!query) return res.status(400).json({ error: 'Query is missing' });
+  
+  try {
+    if (query.trim().toUpperCase().startsWith('SELECT') || query.trim().toUpperCase().startsWith('PRAGMA')) {
+      const stmt = db.prepare(query);
+      const results = stmt.all();
+      res.json({ results });
+    } else {
+      const stmt = db.prepare(query);
+      const info = stmt.run();
+      res.json({ results: [info] });
+    }
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, path.join(process.cwd(), 'public', 'uploads'))
@@ -530,6 +550,38 @@ router.delete('/random-tables/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// Chat Sessions
+router.get('/chat-sessions', (req, res) => {
+  const { universe_id } = req.query;
+  const stmt = db.prepare('SELECT id, universe_id, title, created_at, updated_at FROM chat_sessions WHERE universe_id = ? ORDER BY updated_at DESC');
+  res.json(stmt.all(universe_id));
+});
+
+router.get('/chat-sessions/:id', (req, res) => {
+  const stmt = db.prepare('SELECT * FROM chat_sessions WHERE id = ?');
+  const session: any = stmt.get(req.params.id);
+  if (session) {
+    session.messages = session.messages ? JSON.parse(session.messages) : [];
+    res.json(session);
+  } else {
+    res.status(404).json({ error: 'Not found' });
+  }
+});
+
+router.post('/chat-sessions', (req, res) => {
+  const { id, universe_id, title, messages } = req.body;
+  const newId = id || crypto.randomUUID();
+  const stmt = db.prepare('INSERT OR REPLACE INTO chat_sessions (id, universe_id, title, messages, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)');
+  stmt.run(newId, universe_id, title || 'Новый чат', JSON.stringify(messages || []));
+  res.json({ success: true, id: newId });
+});
+
+router.delete('/chat-sessions/:id', (req, res) => {
+  const stmt = db.prepare('DELETE FROM chat_sessions WHERE id = ?');
+  stmt.run(req.params.id);
+  res.json({ success: true });
+});
+
 // Chat / LLM Proxy
 router.post('/chat', async (req, res) => {
   try {
@@ -550,9 +602,10 @@ router.post('/chat', async (req, res) => {
     // Fetch current universe context
     let contextStr = '';
     if (universe_id) {
-      const entities = db.prepare('SELECT id, type, name, description, tags FROM entities WHERE universe_id = ?').all(universe_id);
+      const entities = db.prepare('SELECT id, type, name, description, tags, data FROM entities WHERE universe_id = ?').all(universe_id);
       const events = db.prepare('SELECT id, title, description, event_date FROM events WHERE universe_id = ? ORDER BY order_index ASC').all(universe_id);
-      const mapNodes = db.prepare('SELECT id, parent_id, type, name, description FROM map_nodes WHERE universe_id = ?').all(universe_id);
+      const mapNodes = db.prepare('SELECT id, parent_id, type, name, description, data FROM map_nodes WHERE universe_id = ?').all(universe_id);
+      const quests = db.prepare('SELECT id, title, description, status FROM quests WHERE universe_id = ?').all(universe_id);
       
       contextStr = `\n\nCURRENT UNIVERSE CONTEXT:\n`;
       if (entities.length > 0) {
@@ -564,6 +617,9 @@ router.post('/chat', async (req, res) => {
       if (mapNodes.length > 0) {
         contextStr += `Map Nodes (Galaxies, Systems, Planets):\n${JSON.stringify(mapNodes, null, 2)}\n`;
       }
+      if (quests.length > 0) {
+        contextStr += `Quests:\n${JSON.stringify(quests, null, 2)}\n`;
+      }
     }
 
     // We instruct the LLM to output JSON if it extracts entities
@@ -571,25 +627,7 @@ router.post('/chat', async (req, res) => {
 You have access to the current state of the user's universe. Use this context to answer questions and generate consistent ideas.
 ${contextStr}
 
-If the user provides information about NEW characters, locations, items, factions, events, or map nodes (galaxies, systems, planets), you should extract this information and return it in a JSON block at the end of your response.
-For any NEW item, generate a random UUID for its "id" field. If it's a map node that belongs to another node, use the parent's id in the "parent_id" field.
-Format the JSON block exactly like this:
-\`\`\`json
-{
-  "entities": [
-    { "id": "a1b2c3d4-...", "type": "npc", "name": "John Doe", "description": "A brave warrior", "tags": "human, warrior" }
-  ],
-  "events": [
-    { "id": "e5f6g7h8-...", "title": "The Great War", "description": "A war that lasted 100 years", "event_date": "Year 1000", "order_index": 1000 }
-  ],
-  "map_nodes": [
-    { "id": "i9j0k1l2-...", "parent_id": "parent_id_or_null", "type": "planet", "name": "Earth", "description": "A blue planet", "x": 400, "y": 300, "data": { "color": "#3b82f6", "size": 25 } }
-  ]
-}
-\`\`\`
-Valid entity types are: npc, enemy, item, location, country, faction, settlement, pc, event.
-Valid map_node types are: galaxy, system, planet.
-If there are no new entities, events, or map nodes to extract, just respond normally without the JSON block.`;
+IMPORTANT MARKDOWN RULE: Whenever you mention existing or newly created entities in your regular text response, you MUST wrap their names in double square brackets like [[John Doe]] or [[Earth]]. This allows the app to create Wiki links and relationships automatically!`;
 
     let reply = '';
 
@@ -622,7 +660,7 @@ If there are no new entities, events, or map nodes to extract, just respond norm
         headers['Authorization'] = `Bearer ${apiKey}`;
       }
 
-      const response = await fetch(`${endpoint}/chat/completions`, {
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -637,54 +675,184 @@ If there are no new entities, events, or map nodes to extract, just respond norm
       }
 
       const data = await response.json();
+      if (!data.choices || !data.choices[0]) {
+        throw new Error(`Invalid response from LLM (check if endpoint URL requires /v1): ${JSON.stringify(data)}`);
+      }
       reply = data.choices[0].message.content;
     }
 
-    let displayReply = reply;
+    res.json({ reply });
+  } catch (error: any) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    // Parse JSON block if exists
-    const jsonMatch = reply.match(/\`\`\`json\n([\s\S]*?)\n\`\`\`/);
-    if (jsonMatch) {
-      try {
-        const extracted = JSON.parse(jsonMatch[1]);
-        if (extracted.entities && Array.isArray(extracted.entities)) {
-          const stmt = db.prepare('INSERT OR REPLACE INTO entities (id, universe_id, type, name, description, tags, updated_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
-          const insertMany = db.transaction((entities) => {
-            for (const ent of entities) {
-              stmt.run(ent.id || crypto.randomUUID(), universe_id, ent.type, ent.name, ent.description, ent.tags || '');
-            }
-          });
-          insertMany(extracted.entities);
-        }
-        
-        if (extracted.events && Array.isArray(extracted.events)) {
-          const stmt = db.prepare('INSERT OR REPLACE INTO events (id, universe_id, title, description, event_date, order_index) VALUES (?, ?, ?, ?, ?, ?)');
-          const insertMany = db.transaction((events) => {
-            for (const ev of events) {
-              stmt.run(ev.id || crypto.randomUUID(), universe_id, ev.title, ev.description, ev.event_date || '', ev.order_index || 0);
-            }
-          });
-          insertMany(extracted.events);
-        }
+router.post('/extract-entities', async (req, res) => {
+  const { text, universe_id } = req.body;
+  if (!text || !universe_id) return res.status(400).json({ error: 'Missing text or universe_id' });
 
-        if (extracted.map_nodes && Array.isArray(extracted.map_nodes)) {
-          const stmt = db.prepare('INSERT OR REPLACE INTO map_nodes (id, universe_id, parent_id, type, name, description, x, y, data, is_secret) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-          const insertMany = db.transaction((nodes) => {
-            for (const node of nodes) {
-              stmt.run(node.id || crypto.randomUUID(), universe_id, node.parent_id || null, node.type, node.name, node.description || '', node.x || 0, node.y || 0, JSON.stringify(node.data || {}), 0);
-            }
-          });
-          insertMany(extracted.map_nodes);
-        }
-        
-        // Remove the JSON block from the reply shown to the user
-        displayReply = reply.replace(/\`\`\`json\n([\s\S]*?)\n\`\`\`/, '').trim();
-      } catch (e) {
-        console.error("Failed to parse extracted entities", e);
-      }
+  try {
+    const providerStmt = db.prepare("SELECT value FROM settings WHERE key = 'llm_provider'");
+    const provider = providerStmt.get()?.value || 'openai';
+
+    const endpointStmt = db.prepare("SELECT value FROM settings WHERE key = 'llm_endpoint'");
+    const endpoint = endpointStmt.get()?.value || 'http://localhost:1234/v1';
+
+    const modelStmt = db.prepare("SELECT value FROM settings WHERE key = 'llm_model'");
+    const model = modelStmt.get()?.value || 'local-model';
+
+    const apiKeyStmt = db.prepare("SELECT value FROM settings WHERE key = 'llm_api_key'");
+    const apiKey = apiKeyStmt.get()?.value || '';
+
+    const systemPrompt = `You are an AI assistant helping to extract game world entities from the given text.
+Extract new characters, locations, items, factions, events, map nodes, quests, random tables, or boards mentioned in the text.
+IMPORTANT: Do not extract more than 10-15 total top-level items at once. Keep descriptions concise to avoid hitting output token limits.
+Return ONLY a JSON object (wrapped in \`\`\`json ... \`\`\`) in the exact format:
+\`\`\`json
+{
+  "entities": [
+    { "id": "uuid", "type": "npc", "name": "Name", "description": "Desc", "tags": "tags", "data": {} }
+  ],
+  "events": [
+    { "id": "uuid", "title": "Title", "description": "Desc", "event_date": "Date", "order_index": 0 }
+  ],
+  "map_nodes": [
+    { "id": "uuid", "parent_id": null, "type": "planet", "name": "Name", "description": "Desc", "x": 0, "y": 0, "data": {} }
+  ],
+  "quests": [
+    { "id": "uuid", "title": "Title", "description": "Desc", "status": "todo", "order_index": 0 }
+  ],
+  "random_tables": [
+    { "id": "uuid", "name": "Name", "description": "Desc", "type": "general", "rollType": "weight", "entries": [], "conditions": [] }
+  ],
+  "boards": [
+    { "id": "uuid", "name": "Name", "data": { "nodes": [], "edges": [] } }
+  ]
+}
+\`\`\`
+If nothing fits, return empty arrays. DO NOT provide ANY text outside the JSON block.`;
+
+    let reply = '';
+    const messages = [{ role: 'user', content: text }];
+
+    if (provider === 'gemini') {
+      const ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: systemPrompt + '\n\n' + text,
+      });
+      reply = response.text;
+    } else {
+      const fullMessages = [
+        { role: 'system', content: systemPrompt },
+        ...messages
+      ];
+      const headers: any = { 'Content-Type': 'application/json' };
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, messages: fullMessages, temperature: 0.2 })
+      });
+      if (!response.ok) throw new Error(`LLM Error: ${response.statusText}`);
+      const data = await response.json();
+      reply = data.choices[0].message.content;
     }
 
-    res.json({ reply: displayReply });
+    const jsonMatch = reply.match(/\`\`\`(json)?\n([\s\S]*?)\n\`\`\`/i) || reply.match(/(\{[\s\S]*\})/i);
+    if (!jsonMatch) {
+      throw new Error('No JSON block found in LLM response');
+    }
+    
+    let jsonContent = jsonMatch.length > 2 ? jsonMatch[2] || jsonMatch[1] : jsonMatch[1];
+    if (jsonContent.startsWith('{') && !jsonContent.includes('```')) {
+      jsonContent = jsonMatch[0];
+    }
+    
+    let extracted;
+    try {
+      extracted = JSON.parse(jsonContent);
+    } catch (e: any) {
+      // Try to repair the JSON if it's truncated or slightly malformed
+      try {
+        const { jsonrepair } = await import('jsonrepair');
+        const repaired = jsonrepair(jsonContent);
+        extracted = JSON.parse(repaired);
+      } catch (repairError) {
+        throw new Error('Failed to parse JSON even after repair. Original error: ' + e.message);
+      }
+    }
+    
+    const counts = { entities: 0, events: 0, map_nodes: 0, quests: 0, random_tables: 0, boards: 0 };
+
+    if (extracted.entities && Array.isArray(extracted.entities)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO entities (id, universe_id, type, name, description, tags, data, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+      const insertMany = db.transaction((entities) => {
+        for (const ent of entities) {
+          stmt.run(ent.id || crypto.randomUUID(), universe_id, ent.type, ent.name, ent.description, ent.tags || '', ent.data ? JSON.stringify(ent.data) : null);
+          counts.entities++;
+        }
+      });
+      insertMany(extracted.entities);
+    }
+    
+    if (extracted.events && Array.isArray(extracted.events)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO events (id, universe_id, title, description, event_date, order_index) VALUES (?, ?, ?, ?, ?, ?)');
+      const insertMany = db.transaction((events) => {
+        for (const ev of events) {
+          stmt.run(ev.id || crypto.randomUUID(), universe_id, ev.title, ev.description, ev.event_date || '', ev.order_index || 0);
+          counts.events++;
+        }
+      });
+      insertMany(extracted.events);
+    }
+
+    if (extracted.map_nodes && Array.isArray(extracted.map_nodes)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO map_nodes (id, universe_id, parent_id, type, name, description, x, y, data, is_secret) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const insertMany = db.transaction((nodes) => {
+        for (const node of nodes) {
+          stmt.run(node.id || crypto.randomUUID(), universe_id, node.parent_id || null, node.type, node.name, node.description || '', node.x || 0, node.y || 0, JSON.stringify(node.data || {}), 0);
+          counts.map_nodes++;
+        }
+      });
+      insertMany(extracted.map_nodes);
+    }
+
+    if (extracted.quests && Array.isArray(extracted.quests)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO quests (id, universe_id, title, description, status, order_index, is_secret, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+      const insertMany = db.transaction((quests) => {
+        for (const quest of quests) {
+          stmt.run(quest.id || crypto.randomUUID(), universe_id, quest.title, quest.description || '', quest.status || 'todo', quest.order_index || 0, 0);
+          counts.quests++;
+        }
+      });
+      insertMany(extracted.quests);
+    }
+
+    if (extracted.random_tables && Array.isArray(extracted.random_tables)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO random_tables (id, universe_id, name, description, type, rollType, entries, conditions, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)');
+      const insertMany = db.transaction((tables) => {
+        for (const t of tables) {
+          stmt.run(t.id || crypto.randomUUID(), universe_id, t.name, t.description || '', t.type || 'general', t.rollType || 'weight', JSON.stringify(t.entries || []), JSON.stringify(t.conditions || []));
+          counts.random_tables++;
+        }
+      });
+      insertMany(extracted.random_tables);
+    }
+
+    if (extracted.boards && Array.isArray(extracted.boards)) {
+      const stmt = db.prepare('INSERT OR REPLACE INTO boards (id, universe_id, name, data, updated_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)');
+      const insertMany = db.transaction((boards) => {
+        for (const b of boards) {
+          stmt.run(b.id || crypto.randomUUID(), universe_id, b.name, b.data ? JSON.stringify(b.data) : '{}');
+          counts.boards++;
+        }
+      });
+      insertMany(extracted.boards);
+    }
+
+    res.json({ success: true, counts });
   } catch (error: any) {
     console.error(error);
     res.status(500).json({ error: error.message });
@@ -742,7 +910,7 @@ Do not include any markdown formatting like \`\`\`json, just the raw JSON string
         headers['Authorization'] = `Bearer ${apiKey}`;
       }
 
-      const response = await fetch(`${endpoint}/chat/completions`, {
+      const response = await fetch(`${endpoint.replace(/\/$/, '')}/chat/completions`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -760,6 +928,9 @@ Do not include any markdown formatting like \`\`\`json, just the raw JSON string
       }
 
       const data = await response.json();
+      if (!data.choices || !data.choices[0]) {
+        throw new Error(`Invalid response from LLM (check if endpoint URL requires /v1): ${JSON.stringify(data)}`);
+      }
       content = data.choices[0].message.content.trim();
     }
     

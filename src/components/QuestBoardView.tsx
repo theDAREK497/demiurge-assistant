@@ -176,9 +176,6 @@ export const QuestBoardView = () => {
           >
             <div className={`p-4 border-b-2 ${col.color} bg-stone-900 rounded-t-2xl flex justify-between items-center`}>
               <h3 className="font-bold text-stone-200">{col.title}</h3>
-              <span className="text-xs bg-stone-800 text-stone-400 px-2 py-1 rounded-full">
-                {visibleQuests.filter(q => q.status === col.id).length}
-              </span>
             </div>
             
             <div className="p-4 flex-1 overflow-y-auto space-y-3">

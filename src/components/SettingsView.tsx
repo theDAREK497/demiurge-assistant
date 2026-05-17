@@ -286,6 +286,11 @@ export const SettingsView = () => {
                 className="w-full bg-stone-950 border border-stone-800 rounded-xl px-4 py-3 text-stone-200 focus:outline-none focus:border-emerald-500 transition-colors"
                 placeholder="http://localhost:1234/v1"
               />
+              {llmProvider === 'openai' && (
+                <p className="text-xs text-stone-500 mt-2">
+                  Для локальных нейросетей (LM Studio, Ollama и др.) убедитесь, что адрес включает путь к API (например, <code className="text-emerald-400/70 bg-stone-900 px-1 rounded">/v1</code>).
+                </p>
+              )}
             </div>
 
             <div>
