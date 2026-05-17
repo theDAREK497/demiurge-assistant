@@ -1,7 +1,13 @@
-const { remark } = require('remark');
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Demiurge Assistant</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
 
-const md = 'This is a link: [Test](#wiki:Some Page) here.';
-const md2 = 'This is another: [Test](#wiki:Some%20Page) here.';
-
-console.log("Spaces:", remark().processSync(md).toString());
-console.log("Encoded:", remark().processSync(md2).toString());
