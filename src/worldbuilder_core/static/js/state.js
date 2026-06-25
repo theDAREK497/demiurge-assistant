@@ -5,6 +5,7 @@ export const state = {
   relationships: [],
   rules: [],
   proposals: [],
+  llmConfig: null,
   chatMessages: [],
 };
 

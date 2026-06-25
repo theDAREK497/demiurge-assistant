@@ -24,6 +24,7 @@ Current UI coverage:
 - create world rules;
 - switch Master/Player visibility;
 - preview retrieved RAG context;
+- configure persistent LLM provider settings;
 - send world-aware chat messages;
 - enable `save_to_wiki`;
 - review pending proposals;
@@ -45,6 +46,20 @@ The static UI is split into small browser modules:
 - `static/js/actions.js`: user actions and API mutations;
 - `static/js/main.js`: bootstrapping and event binding.
 - `static/js/theme.js`: light/dark theme handling.
+
+## LLM Settings
+
+The Settings tab calls `GET /api/llm/config` and `PUT /api/llm/config`.
+Saved values are stored in the local database and override environment defaults.
+
+For LM Studio, use:
+
+```text
+http://127.0.0.1:1234/v1
+```
+
+Role-specific model fields are optional. Empty fields fall back to the default
+model.
 
 ## Localization
 

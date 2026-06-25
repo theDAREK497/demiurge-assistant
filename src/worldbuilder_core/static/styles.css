@@ -262,6 +262,12 @@ h3 {
   min-width: 0;
 }
 
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 12px;
+}
+
 .panel-head {
   margin-bottom: 12px;
 }
@@ -401,7 +407,7 @@ button.item {
 
 .message.user {
   justify-self: end;
-  background: #edf6ee;
+  background: var(--panel-strong);
 }
 
 .message.assistant {
@@ -481,6 +487,10 @@ button.item {
     width: 100%;
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
   }
 
   .chat-form {

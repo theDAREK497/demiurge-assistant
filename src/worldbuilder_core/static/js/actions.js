@@ -2,7 +2,7 @@ import { api } from "./api.js";
 import { $, toast } from "./dom.js";
 import { t } from "./i18n.js";
 import { selectedWorld, state } from "./state.js";
-import { currentRole, renderAllWorldData, renderChat, renderSelectedWorld, renderWorlds } from "./render.js";
+import { currentRole, renderAllWorldData, renderChat, renderLlmConfig, renderSelectedWorld, renderWorlds } from "./render.js";
 
 export function splitTags(value) {
   return value
@@ -29,6 +29,33 @@ export async function loadHealth() {
     $("apiStatus").textContent = t("status.offline");
     $("apiStatus").className = "status-pill fail";
   }
+}
+
+export async function loadLlmConfig() {
+  state.llmConfig = await api("/llm/config");
+  renderLlmConfig();
+}
+
+export async function saveLlmConfig(event) {
+  event.preventDefault();
+  const payload = {
+    base_url: $("llmBaseUrl").value.trim(),
+    default_model: $("llmDefaultModel").value.trim(),
+    chat_model: $("llmChatModel").value.trim() || null,
+    extractor_model: $("llmExtractorModel").value.trim() || null,
+    summarizer_model: $("llmSummarizerModel").value.trim() || null,
+    critic_model: $("llmCriticModel").value.trim() || null,
+    api_key: $("llmApiKey").value.trim() || null,
+    clear_api_key: $("llmClearApiKey").checked,
+    timeout_seconds: Number($("llmTimeout").value),
+    max_entities_per_extract: Number($("llmMaxExtract").value),
+  };
+  state.llmConfig = await api("/llm/config", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+  renderLlmConfig();
+  toast(t("llm.saved"));
 }
 
 export async function loadWorlds() {
@@ -267,6 +294,7 @@ export function rerenderLocalizedState() {
   renderWorlds();
   renderSelectedWorld();
   renderAllWorldData();
+  renderLlmConfig();
   renderChat();
   if (!$("contextPreview").textContent.trim()) {
     $("contextPreview").textContent = t("context.empty");

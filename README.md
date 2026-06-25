@@ -13,6 +13,8 @@ The current milestone is a backend MVP:
 - master/player visibility filtering;
 - JSON import/export with stable UUID preservation;
 - OpenAI-compatible LLM adapter for LM Studio and similar providers;
+- persistent LLM provider settings with model roles;
+- lightweight RU/EN visual UI with light/dark themes;
 - SQLite by default;
 - FastAPI HTTP API.
 
@@ -40,6 +42,14 @@ $env:WORLDBUILDER_LLM_BASE_URL = "http://127.0.0.1:1234/v1"
 $env:WORLDBUILDER_LLM_MODEL = "your-loaded-model"
 ```
 
+Or configure it from the visual app:
+
+1. Open <http://127.0.0.1:8000/app/>.
+2. Go to the Settings tab.
+3. Set Base URL to `http://127.0.0.1:1234/v1`.
+4. Set the default/chat/extractor model names to the model loaded in LM Studio.
+5. Save the settings.
+
 Then call:
 
 - LLM config: <http://127.0.0.1:8000/api/llm/config>
@@ -57,6 +67,10 @@ Then call:
 python -m pytest
 python -m compileall src tests
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ## Project Notes
 

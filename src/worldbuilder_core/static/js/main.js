@@ -8,9 +8,11 @@ import {
   exportWorld,
   importWorld,
   loadHealth,
+  loadLlmConfig,
   loadWorldData,
   loadWorlds,
   rerenderLocalizedState,
+  saveLlmConfig,
   sendChat,
 } from "./actions.js";
 import { $, toast, wrap } from "./dom.js";
@@ -37,6 +39,7 @@ function bindEvents() {
   $("ruleForm").addEventListener("submit", wrap(createRule));
   $("chatForm").addEventListener("submit", sendChat);
   $("manualProposalForm").addEventListener("submit", wrap(createManualProposal));
+  $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
 
   $("refreshWorlds").addEventListener("click", wrap(loadWorlds));
@@ -45,6 +48,7 @@ function bindEvents() {
   $("refreshRules").addEventListener("click", wrap(loadWorldData));
   $("refreshProposals").addEventListener("click", wrap(loadWorldData));
   $("refreshContext").addEventListener("click", wrap(buildContext));
+  $("refreshLlmConfig").addEventListener("click", wrap(loadLlmConfig));
   $("exportWorld").addEventListener("click", wrap(exportWorld));
 
   $("entitySearch").addEventListener("search", wrap(loadWorldData));
@@ -77,6 +81,7 @@ export async function boot() {
     $("contextPreview").textContent = t("context.empty");
     renderChat();
     await loadHealth();
+    await loadLlmConfig();
     await loadWorlds();
   } catch (error) {
     toast(`${t("boot.failed")}: ${error.message}`, "error");

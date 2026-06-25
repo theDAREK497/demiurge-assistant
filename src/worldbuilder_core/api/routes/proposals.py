@@ -2,7 +2,6 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.config import get_settings
 from worldbuilder_core.models import ExtractionProposal, ProposalStatus
 from worldbuilder_core.schemas import ExtractionFromTextRequest, ExtractionProposalCreate, ExtractionProposalRead, ProposalApplyResult
 from worldbuilder_core.services.extraction import (
@@ -10,6 +9,7 @@ from worldbuilder_core.services.extraction import (
     extract_payload_with_llm,
 )
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
+from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
 from worldbuilder_core.services.proposals import (
     ProposalInvalidStateError,
     ProposalNotFoundError,
@@ -44,21 +44,21 @@ async def extract_proposal_from_text(
     payload: ExtractionFromTextRequest,
     session: DbSession,
 ) -> ExtractionProposal:
-    settings = get_settings()
-    max_entities = payload.max_entities or settings.max_entities_per_extract
+    runtime_settings = get_llm_runtime_settings(session)
+    max_entities = payload.max_entities or runtime_settings.max_entities_per_extract
     try:
         context = build_world_context(session, world_id, role=payload.role, query=payload.query, max_entities=max_entities)
     except RetrievalWorldNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found") from exc
 
-    llm_client = build_llm_client()
+    llm_client = build_llm_client(runtime_settings, default_model=runtime_settings.model_for("extractor"))
     try:
         extraction_payload = await extract_payload_with_llm(
             llm_client=llm_client,
             source_text=payload.source_text,
             context_text=context.context_text,
             max_entities=max_entities,
-            model=payload.model,
+            model=payload.model or runtime_settings.model_for("extractor"),
         )
     except LLMProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

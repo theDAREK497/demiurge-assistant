@@ -201,8 +201,27 @@ class LLMChatResponse(BaseModel):
 class LLMConfigRead(BaseModel):
     base_url: str
     default_model: str
+    chat_model: str | None = None
+    extractor_model: str | None = None
+    summarizer_model: str | None = None
+    critic_model: str | None = None
     has_api_key: bool
     timeout_seconds: float
+    max_entities_per_extract: int
+    persisted: bool = False
+
+
+class LLMConfigUpdate(BaseModel):
+    base_url: str = Field(min_length=1)
+    default_model: str = Field(min_length=1)
+    chat_model: str | None = None
+    extractor_model: str | None = None
+    summarizer_model: str | None = None
+    critic_model: str | None = None
+    api_key: str | None = None
+    clear_api_key: bool = False
+    timeout_seconds: float = Field(gt=0)
+    max_entities_per_extract: int = Field(ge=1, le=50)
 
 
 class WorldContextRead(BaseModel):

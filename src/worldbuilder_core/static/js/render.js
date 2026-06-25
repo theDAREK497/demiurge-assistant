@@ -15,6 +15,29 @@ export function renderAllWorldData() {
   renderProposals();
 }
 
+export function renderLlmConfig() {
+  const config = state.llmConfig;
+  if (!config) {
+    $("llmConfigStatus").textContent = t("llm.statusUnknown");
+    return;
+  }
+
+  $("llmBaseUrl").value = config.base_url || "";
+  $("llmDefaultModel").value = config.default_model || "";
+  $("llmChatModel").value = config.chat_model || "";
+  $("llmExtractorModel").value = config.extractor_model || "";
+  $("llmSummarizerModel").value = config.summarizer_model || "";
+  $("llmCriticModel").value = config.critic_model || "";
+  $("llmTimeout").value = config.timeout_seconds;
+  $("llmMaxExtract").value = config.max_entities_per_extract;
+  $("llmApiKey").value = "";
+  $("llmClearApiKey").checked = false;
+
+  const source = config.persisted ? t("llm.statusSaved") : t("llm.statusEnv");
+  const keyState = config.has_api_key ? t("llm.apiKeySaved") : t("llm.apiKeyEmpty");
+  $("llmConfigStatus").textContent = `${source} - ${keyState}`;
+}
+
 export function renderWorlds() {
   const list = $("worldList");
   if (!state.worlds.length) {

@@ -4,6 +4,7 @@ import httpx
 
 from worldbuilder_core.config import Settings, get_settings
 from worldbuilder_core.schemas import LLMChatRequest, LLMChatResponse, LLMMessage, LLMUsage
+from worldbuilder_core.services.llm_settings import LLMRuntimeSettings
 
 
 class LLMProviderError(Exception):
@@ -58,13 +59,21 @@ class OpenAICompatibleLLMClient:
         return headers
 
 
-def build_llm_client(settings: Settings | None = None) -> OpenAICompatibleLLMClient:
+def build_llm_client(
+    settings: Settings | LLMRuntimeSettings | None = None,
+    *,
+    default_model: str | None = None,
+) -> OpenAICompatibleLLMClient:
     settings = settings or get_settings()
+    base_url = settings.base_url if isinstance(settings, LLMRuntimeSettings) else settings.llm_base_url
+    api_key = settings.api_key if isinstance(settings, LLMRuntimeSettings) else settings.llm_api_key
+    model = settings.default_model if isinstance(settings, LLMRuntimeSettings) else settings.llm_model
+    timeout_seconds = settings.timeout_seconds if isinstance(settings, LLMRuntimeSettings) else settings.llm_timeout_seconds
     return OpenAICompatibleLLMClient(
-        base_url=settings.llm_base_url,
-        api_key=settings.llm_api_key,
-        default_model=settings.llm_model,
-        timeout_seconds=settings.llm_timeout_seconds,
+        base_url=base_url,
+        api_key=api_key,
+        default_model=default_model or model,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -95,4 +104,3 @@ def parse_openai_chat_response(data: dict[str, Any], *, fallback_model: str) -> 
         finish_reason=first_choice.get("finish_reason"),
         usage=usage,
     )
-

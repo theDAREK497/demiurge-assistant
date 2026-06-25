@@ -3,6 +3,7 @@ name = "worldbuilder-core"
 version = "0.1.0"
 description = "Modular LLM-wiki core for living fictional worlds."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",

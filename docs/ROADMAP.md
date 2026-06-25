@@ -31,12 +31,12 @@ Status: started.
 - [x] Add LLM config endpoint.
 - [x] Add LLM chat endpoint.
 - [x] Test provider request/response parsing without network calls.
-- [ ] Add persistent provider settings.
-- Add model roles:
-  - chat model;
-  - extractor model;
-  - summarizer model;
-  - critic/validator model.
+- [x] Add persistent provider settings.
+- [x] Add model roles:
+  - [x] chat model;
+  - [x] extractor model;
+  - [x] summarizer model;
+  - [x] critic/validator model.
 
 ## Milestone 4: Retrieval
 
@@ -70,6 +70,8 @@ Status: started.
 - [x] Light/dark theme switch.
 - [x] UI strings moved to language JSON files.
 - [x] Frontend split into small ES modules.
+- [x] Settings tab for persistent LLM provider configuration.
+- [x] Repair Russian localization encoding.
 - [x] World list and creation form.
 - [x] Wiki list and entity creation.
 - [x] Relationships and world rules.

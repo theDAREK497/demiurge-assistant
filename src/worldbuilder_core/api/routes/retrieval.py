@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Query, status
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.config import get_settings
 from worldbuilder_core.models import ViewerRole
 from worldbuilder_core.schemas import ExtractionProposalCreate, ExtractionProposalRead, WorldContextRead, WorldLLMChatRequest, WorldLLMChatResponse
 from worldbuilder_core.services.extraction import ExtractionParseError, extract_payload_with_llm
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
+from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
 from worldbuilder_core.services.proposals import ProposalValidationError, create_extraction_proposal
 from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context
 from worldbuilder_core.services.world_chat import build_world_llm_request
@@ -56,8 +56,9 @@ async def chat_with_world_context(
     except RetrievalWorldNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found") from exc
 
+    runtime_settings = get_llm_runtime_settings(session)
     llm_request = build_world_llm_request(context, payload)
-    llm_client = build_llm_client()
+    llm_client = build_llm_client(runtime_settings, default_model=runtime_settings.model_for("chat"))
     try:
         completion = await llm_client.chat(llm_request)
     except LLMProviderError as exc:
@@ -66,15 +67,14 @@ async def chat_with_world_context(
     proposal = None
     wiki_save_error = None
     if payload.save_to_wiki:
-        settings = get_settings()
-        max_extract_entities = payload.max_extract_entities or settings.max_entities_per_extract
+        max_extract_entities = payload.max_extract_entities or runtime_settings.max_entities_per_extract
         try:
             extraction_payload = await extract_payload_with_llm(
                 llm_client=llm_client,
                 source_text=completion.message.content,
                 context_text=context.context_text,
                 max_entities=max_extract_entities,
-                model=payload.model,
+                model=payload.model or runtime_settings.model_for("extractor"),
             )
             proposal = ExtractionProposalRead.model_validate(
                 create_extraction_proposal(

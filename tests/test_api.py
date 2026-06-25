@@ -105,10 +105,13 @@ def test_visual_app_is_served() -> None:
     assert app_response.status_code == 200
     assert "Worldbuilder Core" in app_response.text
     assert "/app/app.js" in app_response.text
+    assert 'data-tab="settings"' in app_response.text
+    assert 'id="llmSettingsForm"' in app_response.text
 
     ru_response = client.get("/app/i18n/ru.json")
     assert ru_response.status_code == 200
     assert ru_response.json()["tabs.wiki"] == "Вики"
+    assert ru_response.json()["tabs.settings"] == "Настройки"
 
     module_response = client.get("/app/js/main.js")
     assert module_response.status_code == 200
@@ -117,6 +120,53 @@ def test_visual_app_is_served() -> None:
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
     assert "setTheme" in theme_response.text
+
+
+def test_llm_config_can_be_persisted() -> None:
+    client = build_client()
+
+    initial_response = client.get("/api/llm/config")
+    assert initial_response.status_code == 200
+    assert initial_response.json()["persisted"] is False
+
+    update_response = client.put(
+        "/api/llm/config",
+        json={
+            "base_url": "http://127.0.0.1:1234/v1/",
+            "default_model": "local-default",
+            "chat_model": "local-chat",
+            "extractor_model": "local-extractor",
+            "summarizer_model": "",
+            "critic_model": None,
+            "api_key": "test-key",
+            "timeout_seconds": 45,
+            "max_entities_per_extract": 7,
+        },
+    )
+    assert update_response.status_code == 200
+    payload = update_response.json()
+    assert payload["base_url"] == "http://127.0.0.1:1234/v1"
+    assert payload["default_model"] == "local-default"
+    assert payload["chat_model"] == "local-chat"
+    assert payload["extractor_model"] == "local-extractor"
+    assert payload["has_api_key"] is True
+    assert payload["timeout_seconds"] == 45
+    assert payload["max_entities_per_extract"] == 7
+    assert payload["persisted"] is True
+
+    clear_response = client.put(
+        "/api/llm/config",
+        json={
+            "base_url": "http://127.0.0.1:1234/v1",
+            "default_model": "local-default",
+            "api_key": "",
+            "clear_api_key": True,
+            "timeout_seconds": 45,
+            "max_entities_per_extract": 7,
+        },
+    )
+    assert clear_response.status_code == 200
+    assert clear_response.json()["has_api_key"] is False
 
 
 def test_world_export_import_preserves_stable_ids() -> None:
@@ -458,7 +508,7 @@ def test_world_chat_can_save_completion_to_wiki_proposal(monkeypatch) -> None:
 
     import worldbuilder_core.api.routes.retrieval as retrieval_route
 
-    monkeypatch.setattr(retrieval_route, "build_llm_client", lambda: fake_client)
+    monkeypatch.setattr(retrieval_route, "build_llm_client", lambda *_, **__: fake_client)
 
     response = client.post(
         f"/api/worlds/{world_id}/chat",

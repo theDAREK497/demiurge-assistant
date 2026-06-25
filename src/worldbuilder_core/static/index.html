@@ -74,6 +74,7 @@
           <button class="tab" data-tab="chat" type="button" data-i18n="tabs.chat">Chat</button>
           <button class="tab" data-tab="proposals" type="button" data-i18n="tabs.proposals">Proposals</button>
           <button class="tab" data-tab="context" type="button" data-i18n="tabs.context">Context</button>
+          <button class="tab" data-tab="settings" type="button" data-i18n="tabs.settings">Settings</button>
           <button class="tab" data-tab="backup" type="button" data-i18n="tabs.backup">Backup</button>
         </nav>
 
@@ -254,6 +255,62 @@
             </label>
             <pre id="contextPreview" class="context-preview"></pre>
           </div>
+        </section>
+
+        <section id="tab-settings" class="tab-panel">
+          <form id="llmSettingsForm" class="panel stack settings-form">
+            <div class="panel-head">
+              <div>
+                <h3 data-i18n="llm.title">LLM provider</h3>
+                <p id="llmConfigStatus" class="muted"></p>
+              </div>
+              <button id="refreshLlmConfig" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div class="form-grid">
+              <label>
+                <span data-i18n="llm.baseUrl">Base URL</span>
+                <input id="llmBaseUrl" type="url" placeholder="http://127.0.0.1:1234/v1" required />
+              </label>
+              <label>
+                <span data-i18n="llm.defaultModel">Default model</span>
+                <input id="llmDefaultModel" type="text" placeholder="local-model" required />
+              </label>
+              <label>
+                <span data-i18n="llm.chatModel">Chat model</span>
+                <input id="llmChatModel" type="text" data-i18n-placeholder="llm.roleModelPlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="llm.extractorModel">Extractor model</span>
+                <input id="llmExtractorModel" type="text" data-i18n-placeholder="llm.roleModelPlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="llm.summarizerModel">Summarizer model</span>
+                <input id="llmSummarizerModel" type="text" data-i18n-placeholder="llm.futureRolePlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="llm.criticModel">Critic model</span>
+                <input id="llmCriticModel" type="text" data-i18n-placeholder="llm.futureRolePlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="llm.timeout">Timeout seconds</span>
+                <input id="llmTimeout" type="number" min="1" step="1" required />
+              </label>
+              <label>
+                <span data-i18n="llm.maxExtract">Max extracted entities</span>
+                <input id="llmMaxExtract" type="number" min="1" max="50" step="1" required />
+              </label>
+            </div>
+            <label>
+              <span data-i18n="llm.apiKey">API key</span>
+              <input id="llmApiKey" type="password" data-i18n-placeholder="llm.apiKeyPlaceholder" autocomplete="off" />
+            </label>
+            <label class="check">
+              <input id="llmClearApiKey" type="checkbox" />
+              <span data-i18n="llm.clearApiKey">Clear saved API key</span>
+            </label>
+            <div class="item-body muted" data-i18n="llm.lmStudioHint">For LM Studio, start the local OpenAI-compatible server and use http://127.0.0.1:1234/v1.</div>
+            <button type="submit" data-i18n="llm.save">Save LLM settings</button>
+          </form>
         </section>
 
         <section id="tab-backup" class="tab-panel">

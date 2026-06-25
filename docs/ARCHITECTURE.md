@@ -34,6 +34,9 @@ Current route modules:
 - `retrieval`.
 - `proposals`.
 
+Shared application settings are stored separately from world data in
+`app_settings`. This currently powers persistent LLM provider configuration.
+
 ## Domain Model
 
 ### World
@@ -114,10 +117,21 @@ The first OpenAI-compatible adapter is in place. It covers:
 Current API:
 
 - `GET /api/llm/config`;
+- `PUT /api/llm/config`;
 - `POST /api/llm/chat`.
 
 The adapter can be used directly, or through the world-aware chat endpoint that
 adds retrieved context before calling the model.
+
+Provider settings support model roles:
+
+- chat;
+- extractor;
+- summarizer;
+- critic/validator.
+
+Only chat and extractor are active now. Summarizer and critic settings are kept
+as an explicit contract for the next LLM pipelines.
 
 ### Retrieval
 

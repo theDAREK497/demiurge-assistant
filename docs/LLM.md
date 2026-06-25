@@ -15,6 +15,46 @@ $env:WORLDBUILDER_LLM_TIMEOUT_SECONDS = "120"
 
 For LM Studio, the API key can usually stay empty.
 
+Environment variables are defaults. If provider settings are saved through the
+API or the visual Settings tab, the database values take precedence.
+
+## Persistent Provider Settings
+
+Inspect current config:
+
+```http
+GET /api/llm/config
+```
+
+Save config:
+
+```http
+PUT /api/llm/config
+Content-Type: application/json
+
+{
+  "base_url": "http://127.0.0.1:1234/v1",
+  "default_model": "your-loaded-model",
+  "chat_model": "your-loaded-model",
+  "extractor_model": "your-loaded-model",
+  "summarizer_model": null,
+  "critic_model": null,
+  "api_key": null,
+  "clear_api_key": false,
+  "timeout_seconds": 120,
+  "max_entities_per_extract": 12
+}
+```
+
+Model role fields are optional. Empty role fields fall back to `default_model`.
+The current pipeline uses:
+
+- `chat_model` for normal chat and world-aware chat;
+- `extractor_model` for structured wiki extraction.
+
+`summarizer_model` and `critic_model` are stored now so the future summarizer
+and validator pipelines can use the same settings contract.
+
 ## API
 
 Inspect current config:

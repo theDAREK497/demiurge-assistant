@@ -155,3 +155,10 @@ class ExtractionProposal(TimestampMixin, Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     world: Mapped[World] = relationship(back_populates="proposals")
+
+
+class AppSetting(TimestampMixin, Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
