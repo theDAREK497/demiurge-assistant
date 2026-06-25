@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Worldbuilder Core</title>
+    <link rel="stylesheet" href="/app/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div>
+            <h1 data-i18n="app.title">Worldbuilder</h1>
+            <p data-i18n="app.subtitle">LLM-wiki visual MVP</p>
+          </div>
+          <span id="apiStatus" class="status-pill" data-i18n="status.checking">Checking</span>
+        </div>
+
+        <form id="worldForm" class="stack">
+          <label>
+            <span data-i18n="world.name">World name</span>
+            <input id="worldName" name="name" type="text" data-i18n-placeholder="world.namePlaceholder" required />
+          </label>
+          <label>
+            <span data-i18n="common.description">Description</span>
+            <textarea id="worldDescription" name="description" rows="3" data-i18n-placeholder="world.descriptionPlaceholder"></textarea>
+          </label>
+          <button type="submit" data-i18n="world.create">Create world</button>
+        </form>
+
+        <div class="sidebar-head">
+          <h2 data-i18n="world.listTitle">Worlds</h2>
+          <button id="refreshWorlds" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+        </div>
+        <div id="worldList" class="list empty"></div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow" data-i18n="world.selected">Selected world</p>
+            <h2 id="selectedWorldName">None</h2>
+            <p id="selectedWorldDescription" class="muted"></p>
+          </div>
+          <div class="top-controls">
+            <label>
+              <span data-i18n="settings.language">Language</span>
+              <select id="languageSelect">
+                <option value="ru">Русский</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <label>
+              <span data-i18n="settings.theme">Theme</span>
+              <select id="themeSelect">
+                <option value="light" data-i18n="theme.light">Light</option>
+                <option value="dark" data-i18n="theme.dark">Dark</option>
+              </select>
+            </label>
+            <label>
+              <span data-i18n="settings.viewerRole">Viewer role</span>
+              <select id="viewerRole">
+                <option value="master" data-i18n="role.master">Master</option>
+                <option value="player" data-i18n="role.player">Player</option>
+              </select>
+            </label>
+          </div>
+        </header>
+
+        <nav class="tabs" aria-label="Workspace tabs">
+          <button class="tab active" data-tab="wiki" type="button" data-i18n="tabs.wiki">Wiki</button>
+          <button class="tab" data-tab="rules" type="button" data-i18n="tabs.rules">Rules</button>
+          <button class="tab" data-tab="chat" type="button" data-i18n="tabs.chat">Chat</button>
+          <button class="tab" data-tab="proposals" type="button" data-i18n="tabs.proposals">Proposals</button>
+          <button class="tab" data-tab="context" type="button" data-i18n="tabs.context">Context</button>
+          <button class="tab" data-tab="backup" type="button" data-i18n="tabs.backup">Backup</button>
+        </nav>
+
+        <section id="tab-wiki" class="tab-panel active">
+          <div class="split">
+            <form id="entityForm" class="panel stack">
+              <h3 data-i18n="entity.createTitle">Create entity</h3>
+              <label>
+                <span data-i18n="entity.type">Type</span>
+                <select id="entityType">
+                  <option value="character" data-i18n="entityType.character">Character</option>
+                  <option value="location" data-i18n="entityType.location">Location</option>
+                  <option value="faction" data-i18n="entityType.faction">Faction</option>
+                  <option value="item" data-i18n="entityType.item">Item</option>
+                  <option value="event" data-i18n="entityType.event">Event</option>
+                  <option value="clue" data-i18n="entityType.clue">Clue</option>
+                  <option value="concept" data-i18n="entityType.concept">Concept</option>
+                </select>
+              </label>
+              <label>
+                <span data-i18n="common.name">Name</span>
+                <input id="entityName" type="text" required />
+              </label>
+              <label>
+                <span data-i18n="entity.summary">Summary</span>
+                <input id="entitySummary" type="text" />
+              </label>
+              <label>
+                <span data-i18n="common.tags">Tags</span>
+                <input id="entityTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
+              </label>
+              <label class="check">
+                <input id="entitySecret" type="checkbox" />
+                <span data-i18n="common.secret">Secret</span>
+              </label>
+              <button type="submit" data-i18n="entity.add">Add entity</button>
+            </form>
+
+            <div class="panel">
+              <div class="panel-head">
+                <h3 data-i18n="entity.listTitle">Entities</h3>
+                <div class="inline-actions">
+                  <input id="entitySearch" type="search" data-i18n-placeholder="common.search" />
+                  <button id="refreshEntities" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+                </div>
+              </div>
+              <div id="entityList" class="grid-list empty"></div>
+            </div>
+          </div>
+
+          <div class="split lower">
+            <form id="relationshipForm" class="panel stack">
+              <h3 data-i18n="relationship.createTitle">Create relationship</h3>
+              <label>
+                <span data-i18n="relationship.source">Source</span>
+                <select id="relationshipSource"></select>
+              </label>
+              <label>
+                <span data-i18n="relationship.target">Target</span>
+                <select id="relationshipTarget"></select>
+              </label>
+              <label>
+                <span data-i18n="relationship.type">Type</span>
+                <input id="relationshipType" type="text" placeholder="member_of" required />
+              </label>
+              <label>
+                <span data-i18n="relationship.label">Label</span>
+                <input id="relationshipLabel" type="text" placeholder="member of" />
+              </label>
+              <label class="check">
+                <input id="relationshipSecret" type="checkbox" />
+                <span data-i18n="common.secret">Secret</span>
+              </label>
+              <button type="submit" data-i18n="relationship.add">Add relationship</button>
+            </form>
+
+            <div class="panel">
+              <div class="panel-head">
+                <h3 data-i18n="relationship.listTitle">Relationships</h3>
+                <button id="refreshRelationships" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
+              <div id="relationshipList" class="grid-list empty"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-rules" class="tab-panel">
+          <div class="split">
+            <form id="ruleForm" class="panel stack">
+              <h3 data-i18n="rule.createTitle">Create world rule</h3>
+              <label>
+                <span data-i18n="rule.priority">Priority</span>
+                <input id="rulePriority" type="number" min="1" max="5" value="3" />
+              </label>
+              <label>
+                <span data-i18n="rule.condition">Condition</span>
+                <textarea id="ruleCondition" rows="3" required></textarea>
+              </label>
+              <label>
+                <span data-i18n="rule.effect">Effect</span>
+                <textarea id="ruleEffect" rows="3" required></textarea>
+              </label>
+              <label>
+                <span data-i18n="common.tags">Tags</span>
+                <input id="ruleTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
+              </label>
+              <label class="check">
+                <input id="ruleSecret" type="checkbox" />
+                <span data-i18n="common.secret">Secret</span>
+              </label>
+              <button type="submit" data-i18n="rule.add">Add rule</button>
+            </form>
+
+            <div class="panel">
+              <div class="panel-head">
+                <h3 data-i18n="rule.listTitle">World rules</h3>
+                <button id="refreshRules" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
+              <div id="ruleList" class="grid-list empty"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-chat" class="tab-panel">
+          <div class="panel chat-panel">
+            <div class="panel-head">
+              <h3 data-i18n="chat.title">World-aware chat</h3>
+              <div class="inline-actions">
+                <label class="check compact">
+                  <input id="saveToWiki" type="checkbox" />
+                  <span>save_to_wiki</span>
+                </label>
+                <button id="clearChat" class="ghost" type="button" data-i18n="common.clear">Clear</button>
+              </div>
+            </div>
+            <div id="chatLog" class="chat-log empty"></div>
+            <form id="chatForm" class="chat-form">
+              <textarea id="chatInput" rows="3" data-i18n-placeholder="chat.placeholder" required></textarea>
+              <button type="submit" data-i18n="chat.send">Send</button>
+            </form>
+          </div>
+        </section>
+
+        <section id="tab-proposals" class="tab-panel">
+          <div class="split">
+            <form id="manualProposalForm" class="panel stack">
+              <h3 data-i18n="proposal.manualTitle">Manual extraction proposal</h3>
+              <label>
+                <span data-i18n="proposal.sourceText">Source text</span>
+                <textarea id="proposalSourceText" rows="4" required></textarea>
+              </label>
+              <label>
+                <span data-i18n="proposal.payloadJson">Payload JSON</span>
+                <textarea id="proposalPayload" rows="10" spellcheck="false">{ "entities": [], "relationships": [], "world_rules": [], "notes": [] }</textarea>
+              </label>
+              <button type="submit" data-i18n="proposal.create">Create proposal</button>
+            </form>
+
+            <div class="panel">
+              <div class="panel-head">
+                <h3 data-i18n="proposal.listTitle">Proposals</h3>
+                <button id="refreshProposals" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
+              <div id="proposalList" class="grid-list empty"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-context" class="tab-panel">
+          <div class="panel stack">
+            <div class="panel-head">
+              <h3 data-i18n="context.title">RAG context preview</h3>
+              <button id="refreshContext" class="ghost" type="button" data-i18n="context.build">Build context</button>
+            </div>
+            <label>
+              <span data-i18n="context.query">Query</span>
+              <input id="contextQuery" type="search" data-i18n-placeholder="context.queryPlaceholder" />
+            </label>
+            <pre id="contextPreview" class="context-preview"></pre>
+          </div>
+        </section>
+
+        <section id="tab-backup" class="tab-panel">
+          <div class="split">
+            <div class="panel stack">
+              <div class="panel-head">
+                <h3 data-i18n="backup.export">Export</h3>
+                <button id="exportWorld" class="ghost" type="button" data-i18n="backup.exportSelected">Export selected world</button>
+              </div>
+              <textarea id="exportOutput" rows="18" spellcheck="false" data-i18n-placeholder="backup.exportPlaceholder"></textarea>
+            </div>
+
+            <form id="importForm" class="panel stack">
+              <h3 data-i18n="backup.import">Import</h3>
+              <label class="check">
+                <input id="replaceExisting" type="checkbox" />
+                <span>replace_existing</span>
+              </label>
+              <label>
+                <span data-i18n="backup.snapshotJson">Snapshot JSON</span>
+                <textarea id="importInput" rows="18" spellcheck="false"></textarea>
+              </label>
+              <button type="submit" data-i18n="backup.importSnapshot">Import snapshot</button>
+            </form>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+    <script src="/app/app.js" type="module"></script>
+  </body>
+</html>
