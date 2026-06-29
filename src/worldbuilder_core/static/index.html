@@ -73,6 +73,9 @@
           <button class="tab" data-tab="rules" type="button" data-i18n="tabs.rules">Rules</button>
           <button class="tab" data-tab="chat" type="button" data-i18n="tabs.chat">Chat</button>
           <button class="tab" data-tab="proposals" type="button" data-i18n="tabs.proposals">Proposals</button>
+          <button class="tab" data-tab="graph" data-module-tab="graph" type="button" data-i18n="tabs.graph">Graph</button>
+          <button class="tab" data-tab="timeline" data-module-tab="timeline" type="button" data-i18n="tabs.timeline">Timeline</button>
+          <button class="tab" data-tab="modules" data-module-tab="modules" type="button" data-i18n="tabs.modules">Modules</button>
           <button class="tab" data-tab="context" type="button" data-i18n="tabs.context">Context</button>
           <button class="tab" data-tab="settings" type="button" data-i18n="tabs.settings">Settings</button>
           <button class="tab" data-tab="backup" type="button" data-i18n="tabs.backup">Backup</button>
@@ -103,6 +106,22 @@
                 <input id="entitySummary" type="text" />
               </label>
               <label>
+                <span data-i18n="entity.description">Description</span>
+                <textarea id="entityDescription" rows="4"></textarea>
+              </label>
+              <label>
+                <span data-i18n="entity.imageUrl">Image URL or path</span>
+                <input id="entityImageUrl" type="text" data-i18n-placeholder="entity.imageUrlPlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="entity.imageFile">Upload image</span>
+                <input id="entityImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
+              </label>
+              <label>
+                <span data-i18n="entity.timelineDate">Timeline date or order</span>
+                <input id="entityTimelineDate" type="text" data-i18n-placeholder="entity.timelineDatePlaceholder" />
+              </label>
+              <label>
                 <span data-i18n="common.tags">Tags</span>
                 <input id="entityTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
               </label>
@@ -110,7 +129,10 @@
                 <input id="entitySecret" type="checkbox" />
                 <span data-i18n="common.secret">Secret</span>
               </label>
-              <button type="submit" data-i18n="entity.add">Add entity</button>
+              <div class="item-actions">
+                <button id="entitySubmit" type="submit" data-i18n="entity.add">Add entity</button>
+                <button id="cancelEntityEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+              </div>
             </form>
 
             <div class="panel">
@@ -205,11 +227,12 @@
               <div class="inline-actions">
                 <label class="check compact">
                   <input id="saveToWiki" type="checkbox" />
-                  <span>save_to_wiki</span>
+                  <span data-i18n="chat.autoDraft">Auto-create draft changes</span>
                 </label>
                 <button id="clearChat" class="ghost" type="button" data-i18n="common.clear">Clear</button>
               </div>
             </div>
+            <p class="muted" data-i18n="chat.saveHint">If you like an assistant answer, click Save to world under that message. You can review changes before applying them.</p>
             <div id="chatLog" class="chat-log empty"></div>
             <form id="chatForm" class="chat-form">
               <textarea id="chatInput" rows="3" data-i18n-placeholder="chat.placeholder" required></textarea>
@@ -239,6 +262,59 @@
                 <button id="refreshProposals" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
               <div id="proposalList" class="grid-list empty"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-graph" class="tab-panel">
+          <div class="panel stack">
+            <div class="panel-head">
+              <div>
+                <h3 data-i18n="graph.title">Relationship graph</h3>
+                <p class="muted" data-i18n="graph.hint">Shows visible wiki entities and relationships for the selected role.</p>
+              </div>
+              <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div id="graphView" class="graph-view empty"></div>
+          </div>
+        </section>
+
+        <section id="tab-timeline" class="tab-panel">
+          <div class="panel stack">
+            <div class="panel-head">
+              <div>
+                <h3 data-i18n="timeline.title">Timeline</h3>
+                <p class="muted" data-i18n="timeline.hint">Create Event entities and fill Timeline date to build a chronology.</p>
+              </div>
+              <button id="refreshTimeline" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div id="timelineList" class="timeline-list empty"></div>
+          </div>
+        </section>
+
+        <section id="tab-modules" class="tab-panel">
+          <div class="module-grid">
+            <div class="panel stack" data-module-panel="journal">
+              <div class="panel-head">
+                <h3 data-i18n="journal.title">Event journal</h3>
+                <span class="badge" data-i18n="entityType.event">Event</span>
+              </div>
+              <div id="journalList" class="grid-list empty"></div>
+            </div>
+            <div class="panel stack" data-module-panel="quests">
+              <div class="panel-head">
+                <h3 data-i18n="quest.title">Quest journal</h3>
+                <span class="badge">quest</span>
+              </div>
+              <div id="questList" class="grid-list empty"></div>
+            </div>
+            <div class="panel stack" data-module-panel="maps">
+              <div class="panel-head">
+                <h3 data-i18n="map.title">Maps and locations</h3>
+                <span class="badge" data-i18n="entityType.location">Location</span>
+              </div>
+              <p class="muted" data-i18n="map.hint">Add Location entities with image URLs for maps, regions, rooms, or pins.</p>
+              <div id="mapList" class="grid-list empty"></div>
             </div>
           </div>
         </section>
@@ -308,7 +384,54 @@
               <input id="llmClearApiKey" type="checkbox" />
               <span data-i18n="llm.clearApiKey">Clear saved API key</span>
             </label>
+            <div class="panel-lite">
+              <h3 data-i18n="modules.title">World sections</h3>
+              <p class="muted" data-i18n="modules.hint">Turn on only the sections you need for the current campaign.</p>
+              <div class="toggle-grid">
+                <label class="check">
+                  <input data-module-toggle="graph" type="checkbox" />
+                  <span data-i18n="tabs.graph">Graph</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="timeline" type="checkbox" />
+                  <span data-i18n="tabs.timeline">Timeline</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="journal" type="checkbox" />
+                  <span data-i18n="journal.title">Event journal</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="quests" type="checkbox" />
+                  <span data-i18n="quest.title">Quest journal</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="maps" type="checkbox" />
+                  <span data-i18n="map.title">Maps and locations</span>
+                </label>
+              </div>
+            </div>
             <div class="item-body muted" data-i18n="llm.lmStudioHint">For LM Studio, start the local OpenAI-compatible server and use http://127.0.0.1:1234/v1.</div>
+            <div class="item-body muted" data-i18n="network.hint">For LAN play, start with the Windows starter in LAN mode and give players http://YOUR_LOCAL_IP:PORT/app/.</div>
+            <div class="form-grid">
+              <label>
+                <span data-i18n="network.playerInvite">Player invite link</span>
+                <input id="playerInviteUrl" type="text" readonly />
+              </label>
+              <label>
+                <span data-i18n="network.masterLink">Master link</span>
+                <input id="masterInviteUrl" type="text" readonly />
+              </label>
+            </div>
+            <div class="panel-lite">
+              <div class="panel-head">
+                <div>
+                  <h3 data-i18n="llm.testTitle">LLM test</h3>
+                  <p class="muted" data-i18n="llm.testHint">Use this before manual testing to confirm LM Studio answers through the backend.</p>
+                </div>
+                <button id="testLlm" class="ghost" type="button" data-i18n="llm.testButton">Test LLM</button>
+              </div>
+              <pre id="llmTestOutput" class="test-output"></pre>
+            </div>
             <button type="submit" data-i18n="llm.save">Save LLM settings</button>
           </form>
         </section>
@@ -338,6 +461,24 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div id="roleGate" class="modal-backdrop hidden" aria-live="polite">
+      <section class="modal-card">
+        <p class="eyebrow" data-i18n="roleGate.eyebrow">First launch</p>
+        <h2 data-i18n="roleGate.title">How do you want to enter?</h2>
+        <p class="muted" data-i18n="roleGate.body">Master sees all secrets. Player sees only public information.</p>
+        <div class="role-choice-grid">
+          <button type="button" data-role-choice="master">
+            <strong data-i18n="role.master">Master</strong>
+            <span data-i18n="roleGate.masterHint">Full worldbuilder mode</span>
+          </button>
+          <button type="button" class="ghost" data-role-choice="player">
+            <strong data-i18n="role.player">Player</strong>
+            <span data-i18n="roleGate.playerHint">Safe public view</span>
+          </button>
+        </div>
+      </section>
     </div>
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>

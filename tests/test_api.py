@@ -1,3 +1,4 @@
+import base64
 from collections.abc import Generator
 
 from fastapi.testclient import TestClient
@@ -106,16 +107,30 @@ def test_visual_app_is_served() -> None:
     assert "Worldbuilder Core" in app_response.text
     assert "/app/app.js" in app_response.text
     assert 'data-tab="settings"' in app_response.text
+    assert 'data-tab="graph"' in app_response.text
+    assert 'data-tab="timeline"' in app_response.text
+    assert 'data-tab="modules"' in app_response.text
+    assert 'data-module-toggle="quests"' in app_response.text
+    assert 'data-i18n="chat.saveHint"' in app_response.text
     assert 'id="llmSettingsForm"' in app_response.text
+    assert 'id="roleGate"' in app_response.text
 
     ru_response = client.get("/app/i18n/ru.json")
     assert ru_response.status_code == 200
     assert ru_response.json()["tabs.wiki"] == "Вики"
     assert ru_response.json()["tabs.settings"] == "Настройки"
+    assert ru_response.json()["tabs.graph"] == "Граф"
+    assert ru_response.json()["chat.saveThis"] == "Сохранить в мир"
+    assert ru_response.json()["modules.title"] == "Разделы мира"
 
     module_response = client.get("/app/js/main.js")
     assert module_response.status_code == 200
     assert "export async function boot" in module_response.text
+    assert "worldbuilder.modules" in module_response.text
+
+    render_response = client.get("/app/js/render.js")
+    assert render_response.status_code == 200
+    assert "data-save-message" in render_response.text
 
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
@@ -167,6 +182,41 @@ def test_llm_config_can_be_persisted() -> None:
     )
     assert clear_response.status_code == 200
     assert clear_response.json()["has_api_key"] is False
+
+
+def test_image_asset_upload_and_serving() -> None:
+    client = build_client()
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+    upload_response = client.post(
+        "/api/assets",
+        json={
+            "filename": "../Portrait.png",
+            "content_type": "image/png",
+            "content_base64": base64.b64encode(image_bytes).decode("ascii"),
+        },
+    )
+    assert upload_response.status_code == 201
+    payload = upload_response.json()
+    assert payload["url"].startswith("/assets/portrait-")
+    assert payload["filename"].endswith(".png")
+    assert payload["size_bytes"] == len(image_bytes)
+
+    asset_response = client.get(payload["url"])
+    assert asset_response.status_code == 200
+    assert asset_response.content == image_bytes
+
+    unsupported_response = client.post(
+        "/api/assets",
+        json={
+            "filename": "note.txt",
+            "content_type": "text/plain",
+            "content_base64": base64.b64encode(b"hello").decode("ascii"),
+        },
+    )
+    assert unsupported_response.status_code == 415
 
 
 def test_world_export_import_preserves_stable_ids() -> None:
@@ -453,6 +503,72 @@ def test_extraction_proposal_apply_and_reject_flow() -> None:
         },
     )
     assert invalid_response.status_code == 422
+
+
+def test_extraction_proposal_can_apply_selected_items() -> None:
+    client = build_client()
+    world_response = client.post("/api/worlds", json={"name": "Selective Marches"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    proposal_response = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Keep only Mira for now.",
+            "payload": {
+                "entities": [
+                    {"client_id": "mira", "type": "character", "name": "Mira"},
+                    {"client_id": "gate", "type": "location", "name": "North Gate"},
+                ],
+                "relationships": [
+                    {
+                        "source_client_id": "mira",
+                        "target_client_id": "gate",
+                        "type": "guards",
+                    }
+                ],
+                "world_rules": [
+                    {
+                        "priority": 2,
+                        "condition": "A gate is named.",
+                        "effect": "Mention its watch rotation.",
+                    }
+                ],
+            },
+        },
+    )
+    assert proposal_response.status_code == 201
+    proposal_id = proposal_response.json()["id"]
+
+    selected_response = client.post(
+        f"/api/proposals/{proposal_id}/apply-selected",
+        json={
+            "entity_indices": [0],
+            "relationship_indices": [],
+            "world_rule_indices": [],
+        },
+    )
+    assert selected_response.status_code == 200
+    assert selected_response.json() == {
+        "proposal_id": proposal_id,
+        "created_entities": 1,
+        "updated_entities": 0,
+        "created_relationships": 0,
+        "created_world_rules": 0,
+    }
+
+    entities = client.get(f"/api/worlds/{world_id}/entities").json()
+    assert [entity["name"] for entity in entities] == ["Mira"]
+
+    assert client.get(f"/api/worlds/{world_id}/relationships").json() == []
+    assert client.get(f"/api/worlds/{world_id}/world-rules").json() == []
+    assert client.get(f"/api/proposals/{proposal_id}").json()["status"] == "applied"
+
+    second_apply = client.post(
+        f"/api/proposals/{proposal_id}/apply-selected",
+        json={"entity_indices": [1]},
+    )
+    assert second_apply.status_code == 409
 
 
 def test_world_chat_can_save_completion_to_wiki_proposal(monkeypatch) -> None:

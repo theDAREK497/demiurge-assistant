@@ -10,4 +10,4 @@ build/
 .env
 *.sqlite3
 *.db
-
+worldbuilder_uploads/

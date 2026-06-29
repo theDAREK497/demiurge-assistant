@@ -60,8 +60,9 @@ Status: started.
 - [x] Return extraction failures as non-fatal `wiki_save_error` for chat.
 - [x] Add one retry for malformed structured LLM output.
 - [x] Include proposals in JSON backup/export.
-- [ ] Add fine-grained proposal item review.
-- [ ] Add UI review panel.
+- [x] Add fine-grained proposal item review.
+- [x] Add UI review panel.
+- [x] Add click-to-save assistant message flow.
 
 ## Milestone 6: UI
 
@@ -79,16 +80,27 @@ Status: started.
 - [x] Proposal list with apply/reject.
 - [x] Context preview.
 - [x] Export/import panel.
-- [ ] React/Vite shell.
-- [ ] Rich entity card editing.
-- [ ] Fine-grained proposal review panel.
-- Relationship graph view.
+- [x] Friendly Windows `.bat` starter.
+- [x] First-entry Master/Player role choice.
+- [x] Richer wiki cards with image URL and timeline metadata.
+- [x] Relationship graph view.
+- [x] Timeline view.
+- [x] First journal/quest/map UI views over existing entities.
+- [x] React/Vite shell.
+- [x] Rich entity card editing.
+- [x] Fine-grained proposal review panel.
+- [x] File uploads for entity and map images.
+- [x] Network-play polish and player invite screen.
+- [x] Friendlier chat write-back UX.
+- [x] Toggleable UI sections/modules.
 
 ## Milestone 7: Worldbuilder Modules
 
-- Journal.
-- Timeline.
-- Quests.
+- [x] Journal: first UI view over Event entities.
+- [x] Timeline: first UI view over Event entities.
+- [x] Quests: first UI view over entities tagged `quest`.
 - Random tables.
-- Maps and pins.
+- [x] Maps: first UI view over Location entities with images.
+- [x] UI toggles for optional worldbuilder modules.
+- Maps and pins with upload/drawing/editing.
 - Detective board.

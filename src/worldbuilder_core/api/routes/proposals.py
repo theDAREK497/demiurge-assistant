@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import ExtractionProposal, ProposalStatus
-from worldbuilder_core.schemas import ExtractionFromTextRequest, ExtractionProposalCreate, ExtractionProposalRead, ProposalApplyResult
+from worldbuilder_core.schemas import ExtractionFromTextRequest, ExtractionProposalCreate, ExtractionProposalRead, ProposalApplyResult, ProposalItemSelection
 from worldbuilder_core.services.extraction import (
     ExtractionParseError,
     extract_payload_with_llm,
@@ -16,6 +16,7 @@ from worldbuilder_core.services.proposals import (
     ProposalValidationError,
     ProposalWorldNotFoundError,
     apply_extraction_proposal,
+    apply_selected_extraction_proposal,
     create_extraction_proposal,
     reject_extraction_proposal,
 )
@@ -99,6 +100,22 @@ def get_proposal(proposal_id: str, session: DbSession) -> ExtractionProposal:
 def apply_proposal(proposal_id: str, session: DbSession) -> ProposalApplyResult:
     try:
         return apply_extraction_proposal(session, proposal_id)
+    except ProposalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found") from exc
+    except ProposalInvalidStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProposalValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/proposals/{proposal_id}/apply-selected", response_model=ProposalApplyResult)
+def apply_selected_proposal(
+    proposal_id: str,
+    payload: ProposalItemSelection,
+    session: DbSession,
+) -> ProposalApplyResult:
+    try:
+        return apply_selected_extraction_proposal(session, proposal_id, payload)
     except ProposalNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found") from exc
     except ProposalInvalidStateError as exc:

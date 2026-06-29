@@ -15,10 +15,24 @@ The current milestone is a backend MVP:
 - OpenAI-compatible LLM adapter for LM Studio and similar providers;
 - persistent LLM provider settings with model roles;
 - lightweight RU/EN visual UI with light/dark themes;
+- image uploads for wiki cards and map/location views;
+- React/Vite shell for the next UI migration;
 - SQLite by default;
 - FastAPI HTTP API.
 
 ## Quick Start
+
+For a friendly Windows start, double-click:
+
+```text
+start_worldbuilder.bat
+```
+
+The starter asks for local/LAN mode, port, LM Studio base URL, and an optional
+model name. In LAN mode it binds to `0.0.0.0` and prints a player URL for your
+local network, assuming Windows Firewall and your router/network allow it.
+
+Manual start:
 
 ```powershell
 python -m venv .venv
@@ -32,6 +46,18 @@ Open:
 - Visual app: <http://127.0.0.1:8000/app/>
 - API docs: <http://127.0.0.1:8000/docs>
 - Health check: <http://127.0.0.1:8000/health>
+
+The React/Vite shell lives in [frontend](frontend/). The stable UI for manual
+testing is still `/app/`.
+
+For local network play, start with:
+
+```powershell
+uvicorn worldbuilder_core.main:app --host 0.0.0.0 --port 8000
+```
+
+Players then open `http://YOUR_LOCAL_IP:8000/app/` and choose Player on first
+entry.
 
 ## LM Studio
 

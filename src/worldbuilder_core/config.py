@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class Settings(BaseModel):
     database_url: str = "sqlite:///./worldbuilder.sqlite3"
+    upload_dir: str = "./worldbuilder_uploads"
     api_prefix: str = "/api"
     app_name: str = "Worldbuilder Core"
     llm_base_url: str = "http://127.0.0.1:1234/v1"
@@ -20,6 +21,7 @@ def get_settings() -> Settings:
     defaults = Settings()
     return Settings(
         database_url=getenv("WORLDBUILDER_DATABASE_URL", defaults.database_url),
+        upload_dir=getenv("WORLDBUILDER_UPLOAD_DIR", defaults.upload_dir),
         api_prefix=getenv("WORLDBUILDER_API_PREFIX", defaults.api_prefix),
         llm_base_url=getenv("WORLDBUILDER_LLM_BASE_URL", defaults.llm_base_url),
         llm_api_key=getenv("WORLDBUILDER_LLM_API_KEY") or None,

@@ -351,9 +351,27 @@ class ProposalApplyResult(BaseModel):
     created_world_rules: int = 0
 
 
+class ProposalItemSelection(BaseModel):
+    entity_indices: list[int] | None = None
+    relationship_indices: list[int] | None = None
+    world_rule_indices: list[int] | None = None
+
+
 class HealthRead(BaseModel):
     status: str = "ok"
 
 
 class RoleQuery(BaseModel):
     role: ViewerRole = ViewerRole.master
+
+
+class AssetUploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=240)
+    content_base64: str = Field(min_length=1)
+    content_type: str = Field(min_length=1, max_length=120)
+
+
+class AssetUploadResponse(BaseModel):
+    url: str
+    filename: str
+    size_bytes: int

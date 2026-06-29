@@ -1,3 +1,11 @@
+export const defaultModuleSettings = {
+  graph: true,
+  timeline: true,
+  journal: true,
+  quests: true,
+  maps: true,
+};
+
 export const state = {
   worlds: [],
   selectedWorldId: null,
@@ -6,7 +14,9 @@ export const state = {
   rules: [],
   proposals: [],
   llmConfig: null,
+  editingEntityId: null,
   chatMessages: [],
+  moduleSettings: { ...defaultModuleSettings },
 };
 
 export function selectedWorld() {

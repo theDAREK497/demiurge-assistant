@@ -10,7 +10,7 @@ from worldbuilder_core.models import (
     World,
     WorldRule,
 )
-from worldbuilder_core.schemas import ExtractionPayload, ExtractionProposalCreate, ProposalApplyResult
+from worldbuilder_core.schemas import ExtractionPayload, ExtractionProposalCreate, ProposalApplyResult, ProposalItemSelection
 
 
 class ProposalError(Exception):
@@ -55,6 +55,23 @@ def create_extraction_proposal(
 
 
 def apply_extraction_proposal(session: Session, proposal_id: str) -> ProposalApplyResult:
+    return _apply_extraction_proposal(session, proposal_id, selection=None)
+
+
+def apply_selected_extraction_proposal(
+    session: Session,
+    proposal_id: str,
+    selection: ProposalItemSelection,
+) -> ProposalApplyResult:
+    return _apply_extraction_proposal(session, proposal_id, selection=selection)
+
+
+def _apply_extraction_proposal(
+    session: Session,
+    proposal_id: str,
+    *,
+    selection: ProposalItemSelection | None,
+) -> ProposalApplyResult:
     proposal = session.get(ExtractionProposal, proposal_id)
     if proposal is None:
         raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
@@ -62,6 +79,8 @@ def apply_extraction_proposal(session: Session, proposal_id: str) -> ProposalApp
         raise ProposalInvalidStateError(f"Proposal {proposal_id!r} is {proposal.status.value}")
 
     payload = ExtractionPayload.model_validate(proposal.payload)
+    if selection is not None:
+        payload = _select_payload_items(payload, selection)
     try:
         validate_payload_references(session, proposal.world_id, payload)
         result = _apply_payload(session, proposal, payload)
@@ -168,6 +187,27 @@ def _apply_payload(
     return result
 
 
+def _select_payload_items(payload: ExtractionPayload, selection: ProposalItemSelection) -> ExtractionPayload:
+    return ExtractionPayload(
+        entities=_select_by_indices(payload.entities, selection.entity_indices),
+        relationships=_select_by_indices(payload.relationships, selection.relationship_indices),
+        world_rules=_select_by_indices(payload.world_rules, selection.world_rule_indices),
+        notes=payload.notes,
+    )
+
+
+def _select_by_indices(items: list, indices: list[int] | None) -> list:
+    if indices is None:
+        return list(items)
+
+    selected = []
+    for index in sorted(set(indices)):
+        if index < 0 or index >= len(items):
+            raise ProposalValidationError(f"Selection index {index} is out of range")
+        selected.append(items[index])
+    return selected
+
+
 def _merge_entity(entity: Entity, data: dict) -> None:
     for key in ("type", "name", "summary", "description", "is_secret", "status"):
         value = data.get(key)
@@ -208,4 +248,3 @@ def _ensure_entity_in_world(session: Session, world_id: str, entity_id: str) -> 
     if entity is None or entity.world_id != world_id:
         raise ProposalValidationError(f"Entity {entity_id!r} does not belong to world {world_id!r}")
     return entity
-
