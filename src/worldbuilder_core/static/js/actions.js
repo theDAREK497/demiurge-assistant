@@ -1,8 +1,19 @@
 import { api } from "./api.js";
 import { $, toast } from "./dom.js";
-import { t } from "./i18n.js";
+import { language, t } from "./i18n.js";
 import { selectedWorld, state } from "./state.js";
-import { activateTab, currentRole, renderAllWorldData, renderChat, renderEntityFormMode, renderLlmConfig, renderSelectedWorld, renderWorlds } from "./render.js";
+import {
+  activateTab,
+  closeEntityDrawer,
+  currentRole,
+  openEntityDrawer,
+  renderAllWorldData,
+  renderChat,
+  renderEntityFormMode,
+  renderLlmConfig,
+  renderSelectedWorld,
+  renderWorlds,
+} from "./render.js";
 
 export function splitTags(value) {
   return value
@@ -83,6 +94,7 @@ export async function loadWorlds() {
   }
   if (state.selectedWorldId && !state.worlds.some((world) => world.id === state.selectedWorldId)) {
     state.selectedWorldId = state.worlds[0]?.id || null;
+    state.selectedEntityId = null;
   }
   renderWorlds();
   renderSelectedWorld();
@@ -163,6 +175,7 @@ export async function createEntity(event) {
       body: JSON.stringify(payload),
     });
     resetEntityForm();
+    closeEntityDrawer();
     toast(t("entity.updated"));
     await loadWorldData();
     return;
@@ -173,8 +186,15 @@ export async function createEntity(event) {
     body: JSON.stringify(payload),
   });
   resetEntityForm();
+  closeEntityDrawer();
   toast(t("entity.created"));
   await loadWorldData();
+}
+
+export function startCreateEntity() {
+  resetEntityForm({ keepDrawerOpen: true });
+  openEntityDrawer();
+  $("entityName").focus();
 }
 
 export function editEntity(entityId) {
@@ -191,13 +211,17 @@ export function editEntity(entityId) {
   $("entityTags").value = (entity.tags || []).join(", ");
   $("entitySecret").checked = Boolean(entity.is_secret);
   renderEntityFormMode();
+  openEntityDrawer();
   $("entityName").focus();
 }
 
-export function resetEntityForm() {
+export function resetEntityForm(options = {}) {
   state.editingEntityId = null;
   $("entityForm").reset();
   renderEntityFormMode();
+  if (!options.keepDrawerOpen) {
+    closeEntityDrawer();
+  }
 }
 
 export async function uploadEntityImage() {
@@ -280,15 +304,18 @@ export async function sendChat(event) {
 
   $("chatInput").value = "";
   state.chatMessages.push({ role: "user", content });
+  state.chatBusy = true;
   renderChat();
 
   const submit = event.submitter || $("chatForm").querySelector("button");
   submit.disabled = true;
+  $("chatInput").disabled = true;
   try {
     const response = await api(`/worlds/${state.selectedWorldId}/chat`, {
       method: "POST",
       body: JSON.stringify({
         role: currentRole(),
+        output_language: language(),
         save_to_wiki: $("saveToWiki").checked,
         messages: state.chatMessages.map((message) => ({
           role: message.role,
@@ -309,7 +336,10 @@ export async function sendChat(event) {
   } catch (error) {
     toast(t("chat.failed", { message: error.message }), "error");
   } finally {
+    state.chatBusy = false;
     submit.disabled = false;
+    $("chatInput").disabled = false;
+    renderChat();
   }
 }
 
@@ -328,6 +358,7 @@ export async function saveAssistantMessageToWiki(messageIndex) {
       method: "POST",
       body: JSON.stringify({
         role: currentRole(),
+        output_language: language(),
         source_text: message.content,
       }),
     });

@@ -26,6 +26,10 @@ Current UI coverage:
 - switch light/dark theme;
 - create and select worlds;
 - create wiki entities;
+- browse wiki entities as an encyclopedia-style card grid;
+- open wiki cards in a full-screen reading view with image and relationship
+  space;
+- create and edit wiki cards through a right-side drawer;
 - create relationships;
 - create world rules;
 - switch Master/Player visibility;
@@ -40,6 +44,8 @@ Current UI coverage:
 - configure persistent LLM provider settings;
 - send world-aware chat messages;
 - save a liked assistant answer into draft wiki changes;
+- forward the selected UI language into world-aware chat and extraction so
+  generated rules and draft lore match the user's language;
 - review draft changes;
 - apply checked, apply all, or reject draft changes;
 - export and import world snapshots.

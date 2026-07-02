@@ -15,12 +15,13 @@ import {
   resetEntityForm,
   saveLlmConfig,
   sendChat,
+  startCreateEntity,
   testLlmConnection,
   uploadEntityImage,
 } from "./actions.js";
 import { $, toast, wrap } from "./dom.js";
 import { language, setLanguage, t } from "./i18n.js";
-import { activateTab, renderChat, renderEntityFormMode, renderInviteLinks, renderModuleVisibility } from "./render.js";
+import { activateTab, closeEntityReader, openSelectedEntityForEdit, renderChat, renderEntityFormMode, renderInviteLinks, renderModuleVisibility } from "./render.js";
 import { defaultModuleSettings, state } from "./state.js";
 import { setTheme, theme } from "./theme.js";
 
@@ -42,6 +43,10 @@ function bindEvents() {
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
   $("cancelEntityEdit").addEventListener("click", resetEntityForm);
+  $("openEntityDrawer").addEventListener("click", startCreateEntity);
+  $("closeEntityDrawer").addEventListener("click", resetEntityForm);
+  $("closeEntityReader").addEventListener("click", closeEntityReader);
+  $("readerEditEntity").addEventListener("click", openSelectedEntityForEdit);
   $("entityImageFile").addEventListener("change", wrap(uploadEntityImage));
 
   $("refreshWorlds").addEventListener("click", wrap(loadWorlds));

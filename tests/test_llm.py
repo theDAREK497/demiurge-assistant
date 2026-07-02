@@ -72,5 +72,6 @@ def test_world_chat_request_prepends_role_aware_context() -> None:
 
     assert llm_request.messages[0].role == "system"
     assert "viewer role is player" in llm_request.messages[0].content
+    assert "in Russian" in llm_request.messages[0].content
     assert "Mirror Gate" in llm_request.messages[0].content
     assert llm_request.messages[1].content == "What do I see?"

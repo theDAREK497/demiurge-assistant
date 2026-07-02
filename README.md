@@ -101,6 +101,7 @@ MIT. See [LICENSE](LICENSE).
 ## Project Notes
 
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- Active context for new branches/chats: [docs/CONTEXT.md](docs/CONTEXT.md)
 - LLM adapter: [docs/LLM.md](docs/LLM.md)
 - Retrieval/RAG: [docs/RAG.md](docs/RAG.md)
 - Visual MVP: [docs/UI.md](docs/UI.md)

@@ -114,14 +114,16 @@ def test_visual_app_is_served() -> None:
     assert 'data-i18n="chat.saveHint"' in app_response.text
     assert 'id="llmSettingsForm"' in app_response.text
     assert 'id="roleGate"' in app_response.text
+    assert 'id="entityDrawerBackdrop"' in app_response.text
+    assert 'id="entityReader"' in app_response.text
 
     ru_response = client.get("/app/i18n/ru.json")
     assert ru_response.status_code == 200
-    assert ru_response.json()["tabs.wiki"] == "Вики"
-    assert ru_response.json()["tabs.settings"] == "Настройки"
-    assert ru_response.json()["tabs.graph"] == "Граф"
-    assert ru_response.json()["chat.saveThis"] == "Сохранить в мир"
-    assert ru_response.json()["modules.title"] == "Разделы мира"
+    assert ru_response.json()["tabs.wiki"] == "Энциклопедия"
+    assert ru_response.json()["tabs.rules"] == "Законы мира"
+    assert ru_response.json()["tabs.proposals"] == "Черновики"
+    assert ru_response.json()["rule.condition"] == "Когда это важно"
+    assert ru_response.json()["entity.open"] == "Открыть"
 
     module_response = client.get("/app/js/main.js")
     assert module_response.status_code == 200
@@ -131,6 +133,10 @@ def test_visual_app_is_served() -> None:
     render_response = client.get("/app/js/render.js")
     assert render_response.status_code == 200
     assert "data-save-message" in render_response.text
+    assert "entityReviewChanges" in render_response.text
+    assert "entityReviewChangeDetails" in render_response.text
+    assert "proposal-change-summary" in render_response.text
+    assert "proposal-change-detail" in render_response.text
 
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
@@ -569,6 +575,68 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
         json={"entity_indices": [1]},
     )
     assert second_apply.status_code == 409
+
+
+def test_extraction_proposal_can_update_existing_entity_by_match_id() -> None:
+    client = build_client()
+    world_response = client.post("/api/worlds", json={"name": "Revision Basin"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    entity_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "character",
+            "name": "Mira",
+            "summary": "An old summary.",
+            "tags": ["scout"],
+            "status": "verified",
+        },
+    )
+    assert entity_response.status_code == 201
+    entity_id = entity_response.json()["id"]
+
+    proposal_response = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Mira is now the master cartographer of the basin.",
+            "payload": {
+                "entities": [
+                    {
+                        "match_entity_id": entity_id,
+                        "source_excerpt": "Mira is now the master cartographer of the basin.",
+                        "type": "character",
+                        "name": "Mira",
+                        "summary": "Master cartographer of the basin.",
+                        "tags": ["cartographer"],
+                        "status": "proposed",
+                    }
+                ],
+                "relationships": [],
+                "world_rules": [],
+                "notes": [],
+            },
+        },
+    )
+    assert proposal_response.status_code == 201
+    proposal_id = proposal_response.json()["id"]
+
+    apply_response = client.post(f"/api/proposals/{proposal_id}/apply")
+    assert apply_response.status_code == 200
+    assert apply_response.json() == {
+        "proposal_id": proposal_id,
+        "created_entities": 0,
+        "updated_entities": 1,
+        "created_relationships": 0,
+        "created_world_rules": 0,
+    }
+
+    entities = client.get(f"/api/worlds/{world_id}/entities").json()
+    assert len(entities) == 1
+    assert entities[0]["id"] == entity_id
+    assert entities[0]["summary"] == "Master cartographer of the basin."
+    assert set(entities[0]["tags"]) == {"scout", "cartographer"}
+    assert entities[0]["status"] == "proposed"
 
 
 def test_world_chat_can_save_completion_to_wiki_proposal(monkeypatch) -> None:

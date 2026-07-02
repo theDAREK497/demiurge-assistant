@@ -15,7 +15,9 @@ export const state = {
   proposals: [],
   llmConfig: null,
   editingEntityId: null,
+  selectedEntityId: null,
   chatMessages: [],
+  chatBusy: false,
   moduleSettings: { ...defaultModuleSettings },
 };
 

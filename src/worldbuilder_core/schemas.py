@@ -171,6 +171,7 @@ class WorldImportResult(BaseModel):
 
 
 LLMMessageRole = Literal["system", "user", "assistant"]
+OutputLanguage = Literal["ru", "en"]
 
 
 class LLMMessage(BaseModel):
@@ -237,6 +238,7 @@ class WorldContextRead(BaseModel):
 class WorldLLMChatRequest(BaseModel):
     messages: list[LLMMessage] = Field(min_length=1)
     role: ViewerRole = ViewerRole.master
+    output_language: OutputLanguage = "ru"
     query: str | None = None
     max_entities: int = Field(default=12, ge=1, le=50)
     max_rules: int = Field(default=8, ge=0, le=25)
@@ -258,6 +260,7 @@ class WorldLLMChatResponse(BaseModel):
 class ExtractedEntityDraft(BaseModel):
     client_id: str | None = Field(default=None, min_length=1, max_length=80)
     match_entity_id: str | None = None
+    source_excerpt: str | None = Field(default=None, max_length=240)
     type: EntityType
     name: str = Field(min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
@@ -274,6 +277,7 @@ class ExtractedRelationshipDraft(BaseModel):
     source_client_id: str | None = Field(default=None, min_length=1, max_length=80)
     target_entity_id: str | None = None
     target_client_id: str | None = Field(default=None, min_length=1, max_length=80)
+    source_excerpt: str | None = Field(default=None, max_length=240)
     type: str = Field(min_length=1, max_length=80)
     label: str | None = Field(default=None, max_length=200)
     description: str | None = None
@@ -293,6 +297,7 @@ class ExtractedRelationshipDraft(BaseModel):
 
 class ExtractedWorldRuleDraft(BaseModel):
     priority: int = Field(default=3, ge=1, le=5)
+    source_excerpt: str | None = Field(default=None, max_length=240)
     condition: str = Field(min_length=1)
     effect: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
@@ -323,6 +328,7 @@ class ExtractionProposalCreate(BaseModel):
 class ExtractionFromTextRequest(BaseModel):
     source_text: str = Field(min_length=1)
     role: ViewerRole = ViewerRole.master
+    output_language: OutputLanguage = "ru"
     query: str | None = None
     model: str | None = None
     max_entities: int | None = Field(default=None, ge=1, le=50)

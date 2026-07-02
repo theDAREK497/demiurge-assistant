@@ -82,69 +82,19 @@
         </nav>
 
         <section id="tab-wiki" class="tab-panel active">
-          <div class="split">
-            <form id="entityForm" class="panel stack">
-              <h3 data-i18n="entity.createTitle">Create entity</h3>
-              <label>
-                <span data-i18n="entity.type">Type</span>
-                <select id="entityType">
-                  <option value="character" data-i18n="entityType.character">Character</option>
-                  <option value="location" data-i18n="entityType.location">Location</option>
-                  <option value="faction" data-i18n="entityType.faction">Faction</option>
-                  <option value="item" data-i18n="entityType.item">Item</option>
-                  <option value="event" data-i18n="entityType.event">Event</option>
-                  <option value="clue" data-i18n="entityType.clue">Clue</option>
-                  <option value="concept" data-i18n="entityType.concept">Concept</option>
-                </select>
-              </label>
-              <label>
-                <span data-i18n="common.name">Name</span>
-                <input id="entityName" type="text" required />
-              </label>
-              <label>
-                <span data-i18n="entity.summary">Summary</span>
-                <input id="entitySummary" type="text" />
-              </label>
-              <label>
-                <span data-i18n="entity.description">Description</span>
-                <textarea id="entityDescription" rows="4"></textarea>
-              </label>
-              <label>
-                <span data-i18n="entity.imageUrl">Image URL or path</span>
-                <input id="entityImageUrl" type="text" data-i18n-placeholder="entity.imageUrlPlaceholder" />
-              </label>
-              <label>
-                <span data-i18n="entity.imageFile">Upload image</span>
-                <input id="entityImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
-              </label>
-              <label>
-                <span data-i18n="entity.timelineDate">Timeline date or order</span>
-                <input id="entityTimelineDate" type="text" data-i18n-placeholder="entity.timelineDatePlaceholder" />
-              </label>
-              <label>
-                <span data-i18n="common.tags">Tags</span>
-                <input id="entityTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
-              </label>
-              <label class="check">
-                <input id="entitySecret" type="checkbox" />
-                <span data-i18n="common.secret">Secret</span>
-              </label>
-              <div class="item-actions">
-                <button id="entitySubmit" type="submit" data-i18n="entity.add">Add entity</button>
-                <button id="cancelEntityEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
-              </div>
-            </form>
-
-            <div class="panel">
-              <div class="panel-head">
+          <div class="panel encyclopedia-panel">
+            <div class="panel-head">
+              <div>
                 <h3 data-i18n="entity.listTitle">Entities</h3>
-                <div class="inline-actions">
-                  <input id="entitySearch" type="search" data-i18n-placeholder="common.search" />
-                  <button id="refreshEntities" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
-                </div>
+                <p class="muted" data-i18n="entity.listHint">Browse and open world cards.</p>
               </div>
-              <div id="entityList" class="grid-list empty"></div>
+              <div class="inline-actions">
+                <input id="entitySearch" type="search" data-i18n-placeholder="common.search" />
+                <button id="refreshEntities" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+                <button id="openEntityDrawer" type="button" data-i18n="entity.newCard">New card</button>
+              </div>
             </div>
+            <div id="entityList" class="grid-list encyclopedia-list empty"></div>
           </div>
 
           <div class="split lower">
@@ -479,6 +429,77 @@
           </button>
         </div>
       </section>
+    </div>
+
+    <div id="entityDrawerBackdrop" class="drawer-backdrop hidden">
+      <aside class="drawer-panel" aria-label="Card editor">
+        <form id="entityForm" class="stack">
+          <div class="panel-head">
+            <h3 id="entityFormTitle" data-i18n="entity.createTitle">Create entity</h3>
+            <button id="closeEntityDrawer" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+          <label>
+            <span data-i18n="entity.type">Type</span>
+            <select id="entityType">
+              <option value="character" data-i18n="entityType.character">Character</option>
+              <option value="location" data-i18n="entityType.location">Location</option>
+              <option value="faction" data-i18n="entityType.faction">Faction</option>
+              <option value="item" data-i18n="entityType.item">Item</option>
+              <option value="event" data-i18n="entityType.event">Event</option>
+              <option value="clue" data-i18n="entityType.clue">Clue</option>
+              <option value="concept" data-i18n="entityType.concept">Concept</option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="common.name">Name</span>
+            <input id="entityName" type="text" required />
+          </label>
+          <label>
+            <span data-i18n="entity.summary">Summary</span>
+            <input id="entitySummary" type="text" />
+          </label>
+          <label>
+            <span data-i18n="entity.description">Description</span>
+            <textarea id="entityDescription" rows="7"></textarea>
+          </label>
+          <label>
+            <span data-i18n="entity.imageUrl">Image URL or path</span>
+            <input id="entityImageUrl" type="text" data-i18n-placeholder="entity.imageUrlPlaceholder" />
+          </label>
+          <label>
+            <span data-i18n="entity.imageFile">Upload image</span>
+            <input id="entityImageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" />
+          </label>
+          <label>
+            <span data-i18n="entity.timelineDate">Timeline date or order</span>
+            <input id="entityTimelineDate" type="text" data-i18n-placeholder="entity.timelineDatePlaceholder" />
+          </label>
+          <label>
+            <span data-i18n="common.tags">Tags</span>
+            <input id="entityTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
+          </label>
+          <label class="check">
+            <input id="entitySecret" type="checkbox" />
+            <span data-i18n="common.secret">Secret</span>
+          </label>
+          <div class="item-actions">
+            <button id="entitySubmit" type="submit" data-i18n="entity.add">Add entity</button>
+            <button id="cancelEntityEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <div id="entityReader" class="reader-backdrop hidden">
+      <article class="reader-panel">
+        <div class="reader-toolbar">
+          <button id="closeEntityReader" class="ghost" type="button" data-i18n="common.back">Back</button>
+          <div class="item-actions">
+            <button id="readerEditEntity" type="button" data-i18n="entity.edit">Edit</button>
+          </div>
+        </div>
+        <div id="entityReaderContent" class="reader-content"></div>
+      </article>
     </div>
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>

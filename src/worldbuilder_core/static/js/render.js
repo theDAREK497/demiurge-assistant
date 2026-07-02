@@ -29,6 +29,7 @@ export function renderAllWorldData() {
   renderTimeline();
   renderModules();
   renderModuleVisibility();
+  renderEntityReader();
 }
 
 export function renderModuleVisibility() {
@@ -68,6 +69,15 @@ export function renderInviteLinks() {
 export function renderEntityFormMode() {
   $("entitySubmit").textContent = state.editingEntityId ? t("entity.save") : t("entity.add");
   $("cancelEntityEdit").classList.toggle("hidden", !state.editingEntityId);
+  $("entityFormTitle").textContent = state.editingEntityId ? t("entity.editTitle") : t("entity.createTitle");
+}
+
+export function openEntityDrawer() {
+  $("entityDrawerBackdrop").classList.remove("hidden");
+}
+
+export function closeEntityDrawer() {
+  $("entityDrawerBackdrop").classList.add("hidden");
 }
 
 export function renderLlmConfig() {
@@ -150,7 +160,7 @@ export function renderEntities() {
   list.innerHTML = state.entities
     .map(
       (entity) => `
-        <article class="item entity-card">
+        <article class="item entity-card encyclopedia-card" data-open-entity="${entity.id}" role="button" tabindex="0">
           ${entity.attributes?.image_url ? `<img class="entity-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />` : ""}
           <div class="item-top">
             <div>
@@ -163,6 +173,7 @@ export function renderEntities() {
           ${entity.attributes?.timeline_date ? `<div class="item-meta">${t("entity.timelineDate")}: ${escapeHtml(entity.attributes.timeline_date)}</div>` : ""}
           ${entity.tags?.length ? `<div class="item-meta">${entity.tags.map(escapeHtml).join(", ")}</div>` : ""}
           <div class="item-actions">
+            <button class="ghost" data-open-entity-button="${entity.id}" type="button">${t("entity.open")}</button>
             <button class="ghost" data-edit-entity="${entity.id}" type="button">${t("entity.edit")}</button>
           </div>
         </article>
@@ -170,9 +181,98 @@ export function renderEntities() {
     )
     .join("");
 
-  list.querySelectorAll("[data-edit-entity]").forEach((button) => {
-    button.addEventListener("click", () => editEntity(button.dataset.editEntity));
+  list.querySelectorAll("[data-open-entity]").forEach((card) => {
+    card.addEventListener("click", () => openEntityReader(card.dataset.openEntity));
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openEntityReader(card.dataset.openEntity);
+      }
+    });
   });
+  list.querySelectorAll("[data-open-entity-button]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openEntityReader(button.dataset.openEntityButton);
+    });
+  });
+  list.querySelectorAll("[data-edit-entity]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editEntity(button.dataset.editEntity);
+    });
+  });
+}
+
+export function openEntityReader(entityId) {
+  state.selectedEntityId = entityId;
+  renderEntityReader();
+  $("entityReader").classList.remove("hidden");
+}
+
+export function closeEntityReader() {
+  state.selectedEntityId = null;
+  $("entityReader").classList.add("hidden");
+}
+
+export function openSelectedEntityForEdit() {
+  if (!state.selectedEntityId) return;
+  editEntity(state.selectedEntityId);
+}
+
+function renderEntityReader() {
+  const entity = state.entities.find((item) => item.id === state.selectedEntityId);
+  if (!entity) {
+    $("entityReaderContent").innerHTML = "";
+    $("entityReader").classList.add("hidden");
+    return;
+  }
+
+  const related = state.relationships.filter(
+    (relationship) => relationship.source_entity_id === entity.id || relationship.target_entity_id === entity.id,
+  );
+  const imageHtml = entity.attributes?.image_url
+    ? `<img class="reader-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
+    : `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
+
+  $("entityReaderContent").innerHTML = `
+    <div class="reader-media">${imageHtml}</div>
+    <div class="reader-main">
+      <div class="reader-title-row">
+        <div>
+          <p class="eyebrow">${escapeHtml(t(`entityType.${entity.type}`))}</p>
+          <h2>${escapeHtml(entity.name)}</h2>
+        </div>
+        <span class="badge">${entity.is_secret ? escapeHtml(t("common.secretValue")) : escapeHtml(t("common.public"))}</span>
+      </div>
+      ${entity.summary ? `<p class="reader-summary">${escapeHtml(entity.summary)}</p>` : ""}
+      <div class="reader-body">${escapeHtml(entity.description || entity.summary || t("common.noSummary"))}</div>
+      ${
+        entity.tags?.length
+          ? `<div class="reader-tags">${entity.tags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}</div>`
+          : ""
+      }
+      ${entity.attributes?.timeline_date ? `<div class="item-meta">${escapeHtml(t("entity.timelineDate"))}: ${escapeHtml(entity.attributes.timeline_date)}</div>` : ""}
+      <section class="reader-section">
+        <h3>${escapeHtml(t("relationship.listTitle"))}</h3>
+        ${
+          related.length
+            ? related
+                .map(
+                  (relationship) => `
+                    <div class="reader-link">
+                      <span>${escapeHtml(entityName(relationship.source_entity_id))}</span>
+                      <strong>${escapeHtml(relationship.label || relationship.type)}</strong>
+                      <span>${escapeHtml(entityName(relationship.target_entity_id))}</span>
+                    </div>
+                  `,
+                )
+                .join("")
+            : `<p class="muted">${escapeHtml(t("relationship.empty"))}</p>`
+        }
+      </section>
+    </div>
+  `;
 }
 
 export function renderGraph() {
@@ -443,17 +543,29 @@ function renderProposalReview(proposal) {
     {
       title: t("proposal.entities"),
       kind: "entity",
-      items: proposal.payload.entities.map((entity) => `${t(`entityType.${entity.type}`)}: ${entity.name}${entity.summary ? ` - ${entity.summary}` : ""}`),
+      items: proposal.payload.entities.map((entity) => ({
+        summary: `${t(`entityType.${entity.type}`)}: ${entity.name}${entity.summary ? ` - ${entity.summary}` : ""}`,
+        excerpt: entity.source_excerpt || "",
+        intent: entityReviewIntent(entity),
+        changes: entityReviewChanges(entity),
+        changeDetails: entityReviewChangeDetails(entity),
+      })),
     },
     {
       title: t("proposal.relationships"),
       kind: "relationship",
-      items: proposal.payload.relationships.map((relationship) => `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationship.label || relationship.type}`),
+      items: proposal.payload.relationships.map((relationship) => ({
+        summary: `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationship.label || relationship.type}`,
+        excerpt: relationship.source_excerpt || "",
+      })),
     },
     {
       title: t("proposal.rules"),
       kind: "rule",
-      items: proposal.payload.world_rules.map((rule) => `${t("rule.if")}: ${rule.condition} ${t("rule.then")}: ${rule.effect}`),
+      items: proposal.payload.world_rules.map((rule) => ({
+        summary: `${t("rule.if")}: ${rule.condition} ${t("rule.then")}: ${rule.effect}`,
+        excerpt: rule.source_excerpt || "",
+      })),
     },
   ];
   return `
@@ -468,7 +580,13 @@ function renderProposalReview(proposal) {
                     (item, index) => `
                       <label class="check proposal-check">
                         <input data-proposal-id="${proposal.id}" data-proposal-kind="${section.kind}" data-proposal-index="${index}" type="checkbox" checked ${disabled} />
-                        <span>${escapeHtml(item)}</span>
+                        <span>
+                          ${escapeHtml(item.summary)}
+                          ${item.intent ? `<small class="proposal-intent">${escapeHtml(item.intent)}</small>` : ""}
+                          ${item.changes?.length ? `<small class="proposal-change-summary">${escapeHtml(item.changes.join(", "))}</small>` : ""}
+                          ${item.changeDetails?.length ? item.changeDetails.map((detail) => `<small class="proposal-change-detail">${escapeHtml(detail)}</small>`).join("") : ""}
+                          ${item.excerpt ? `<small class="proposal-evidence">${escapeHtml(t("proposal.sourceText"))}: ${escapeHtml(item.excerpt)}</small>` : ""}
+                        </span>
                       </label>
                     `,
                   )
@@ -481,6 +599,180 @@ function renderProposalReview(proposal) {
   `;
 }
 
+function findMatchedProposalEntity(entity) {
+  return entity.match_entity_id
+    ? state.entities.find((item) => item.id === entity.match_entity_id)
+    : state.entities.find((item) => item.type === entity.type && item.name === entity.name);
+}
+
+function entityReviewIntent(entity) {
+  const matchedEntity = findMatchedProposalEntity(entity);
+
+  if (!matchedEntity) {
+    return t("entity.add");
+  }
+
+  return `${t("entity.edit")}: ${matchedEntity.name} (${matchedEntity.id.slice(0, 8)})`;
+}
+
+function entityReviewChanges(entity) {
+  const matchedEntity = findMatchedProposalEntity(entity);
+  if (!matchedEntity) {
+    return [];
+  }
+
+  const projectedEntity = projectEntityReviewResult(matchedEntity, entity);
+  const changes = [];
+  if (comparableValue(projectedEntity.type) !== comparableValue(matchedEntity.type)) changes.push(t("entity.type"));
+  if (comparableValue(projectedEntity.name) !== comparableValue(matchedEntity.name)) changes.push(t("common.name"));
+  if (comparableValue(projectedEntity.summary) !== comparableValue(matchedEntity.summary)) changes.push(t("entity.summary"));
+  if (comparableValue(projectedEntity.description) !== comparableValue(matchedEntity.description)) changes.push(t("common.description"));
+  if (!sameStringList(projectedEntity.aliases, matchedEntity.aliases)) changes.push("aliases");
+  if (!sameStringList(projectedEntity.tags, matchedEntity.tags)) changes.push(t("common.tags"));
+  if (Boolean(projectedEntity.is_secret) !== Boolean(matchedEntity.is_secret)) changes.push(t("common.secret"));
+  if (comparableValue(projectedEntity.status) !== comparableValue(matchedEntity.status)) changes.push("status");
+  changes.push(...attributeChangeLabels(projectedEntity.attributes || {}, matchedEntity.attributes || {}, entity.attributes || {}));
+
+  return Array.from(new Set(changes));
+}
+
+function entityReviewChangeDetails(entity) {
+  const matchedEntity = findMatchedProposalEntity(entity);
+  if (!matchedEntity) {
+    return [];
+  }
+
+  const projectedEntity = projectEntityReviewResult(matchedEntity, entity);
+  const details = [];
+
+  appendEntityChangeDetail(details, t("entity.type"), matchedEntity.type, projectedEntity.type, { formatter: formatEntityTypeValue });
+  appendEntityChangeDetail(details, t("common.name"), matchedEntity.name, projectedEntity.name);
+  appendEntityChangeDetail(details, t("entity.summary"), matchedEntity.summary, projectedEntity.summary);
+  appendEntityChangeDetail(details, t("common.description"), matchedEntity.description, projectedEntity.description);
+  appendEntityChangeDetail(details, "aliases", matchedEntity.aliases, projectedEntity.aliases, { formatter: formatListValue });
+  appendEntityChangeDetail(details, t("common.tags"), matchedEntity.tags, projectedEntity.tags, { formatter: formatListValue });
+  appendEntityChangeDetail(details, t("common.secret"), matchedEntity.is_secret, projectedEntity.is_secret, { formatter: formatSecretValue });
+  appendEntityChangeDetail(details, "status", matchedEntity.status, projectedEntity.status);
+
+  for (const key of Object.keys(entity.attributes || {}).sort()) {
+    appendEntityChangeDetail(details, attributeLabel(key), matchedEntity.attributes?.[key], projectedEntity.attributes?.[key]);
+  }
+
+  return details;
+}
+
+function projectEntityReviewResult(matchedEntity, entity) {
+  return {
+    type: entity.type,
+    name: entity.name,
+    summary: entity.summary ?? matchedEntity.summary,
+    description: entity.description ?? matchedEntity.description,
+    aliases: mergeStringLists(matchedEntity.aliases, entity.aliases),
+    tags: mergeStringLists(matchedEntity.tags, entity.tags),
+    is_secret: entity.is_secret,
+    status: entity.status,
+    attributes: {
+      ...(matchedEntity.attributes || {}),
+      ...(entity.attributes || {}),
+    },
+  };
+}
+
+function attributeChangeLabels(projectedAttributes, currentAttributes, draftAttributes) {
+  const keys = Object.keys(draftAttributes || {});
+  const labels = [];
+
+  for (const key of keys) {
+    if (comparableValue(projectedAttributes[key]) !== comparableValue(currentAttributes[key])) {
+      labels.push(attributeLabel(key));
+    }
+  }
+
+  return labels;
+}
+
+function attributeLabel(key) {
+  if (key === "image_url") return t("entity.imageUrl");
+  if (key === "timeline_date") return t("entity.timelineDate");
+  return key.replace(/[_-]+/g, " ").trim();
+}
+
+function sameStringList(left, right) {
+  return comparableValue(normalizeStringList(left)) === comparableValue(normalizeStringList(right));
+}
+
+function mergeStringLists(currentValues, incomingValues) {
+  return normalizeStringList([...(currentValues || []), ...(incomingValues || [])]);
+}
+
+function normalizeStringList(values) {
+  return Array.isArray(values)
+    ? Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
+    : [];
+}
+
+function appendEntityChangeDetail(details, label, currentValue, nextValue, options = {}) {
+  const formatter = options.formatter || formatDisplayValue;
+  if (comparableValue(currentValue) === comparableValue(nextValue)) {
+    return;
+  }
+  details.push(`${label}: ${formatter(currentValue)} -> ${formatter(nextValue)}`);
+}
+
+function formatEntityTypeValue(value) {
+  if (!value) {
+    return t("common.none");
+  }
+  return t(`entityType.${value}`);
+}
+
+function formatSecretValue(value) {
+  return value ? t("common.secretValue") : t("common.public");
+}
+
+function formatListValue(value) {
+  const items = normalizeStringList(value);
+  return items.length ? items.join(", ") : t("common.none");
+}
+
+function formatDisplayValue(value) {
+  if (Array.isArray(value)) {
+    return formatListValue(value);
+  }
+  if (value === null || value === undefined) {
+    return t("common.none");
+  }
+
+  const text = String(value).replace(/\s+/g, " ").trim();
+  if (!text) {
+    return t("common.none");
+  }
+  if (text.length <= 80) {
+    return text;
+  }
+  return `${text.slice(0, 77).trimEnd()}...`;
+}
+
+function comparableValue(value) {
+  if (Array.isArray(value)) {
+    return JSON.stringify(value.map((item) => comparableValue(item)));
+  }
+  if (value && typeof value === "object") {
+    return JSON.stringify(
+      Object.keys(value)
+        .sort()
+        .reduce((acc, key) => {
+          acc[key] = comparableValue(value[key]);
+          return acc;
+        }, {}),
+    );
+  }
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return String(value).trim();
+}
+
 export function renderChat() {
   const log = $("chatLog");
   if (!state.chatMessages.length) {
@@ -490,7 +782,7 @@ export function renderChat() {
   }
 
   log.className = "chat-log";
-  log.innerHTML = state.chatMessages
+  const messagesHtml = state.chatMessages
     .map(
       (message, index) => `
         <div class="message ${message.role}">
@@ -506,6 +798,15 @@ export function renderChat() {
       `,
     )
     .join("");
+  const loadingHtml = state.chatBusy
+    ? `<div class="message assistant loading">
+         <div class="message-content">
+           <span class="spinner" aria-hidden="true"></span>
+           ${escapeHtml(t("chat.loading"))}
+         </div>
+       </div>`
+    : "";
+  log.innerHTML = `${messagesHtml}${loadingHtml}`;
   log.querySelectorAll("[data-save-message]").forEach((button) => {
     button.addEventListener("click", async () => {
       button.disabled = true;

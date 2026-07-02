@@ -142,20 +142,20 @@ def _apply_payload(
         entity = None
         if draft.match_entity_id is not None:
             entity = _ensure_entity_in_world(session, proposal.world_id, draft.match_entity_id)
-            _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id"}))
+            _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id", "source_excerpt"}))
             result.updated_entities += 1
         else:
             entity = _find_entity_by_type_and_name(session, proposal.world_id, draft.type, draft.name)
             if entity is None:
                 entity = Entity(
                     world_id=proposal.world_id,
-                    **draft.model_dump(exclude={"client_id", "match_entity_id"}),
+                    **draft.model_dump(exclude={"client_id", "match_entity_id", "source_excerpt"}),
                 )
                 session.add(entity)
                 session.flush()
                 result.created_entities += 1
             else:
-                _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id"}))
+                _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id", "source_excerpt"}))
                 result.updated_entities += 1
 
         if draft.client_id:
@@ -180,7 +180,7 @@ def _apply_payload(
         result.created_relationships += 1
 
     for draft in payload.world_rules:
-        rule = WorldRule(world_id=proposal.world_id, **draft.model_dump())
+        rule = WorldRule(world_id=proposal.world_id, **draft.model_dump(exclude={"source_excerpt"}))
         session.add(rule)
         result.created_world_rules += 1
 

@@ -59,6 +59,7 @@ async def extract_proposal_from_text(
             source_text=payload.source_text,
             context_text=context.context_text,
             max_entities=max_entities,
+            output_language=payload.output_language,
             model=payload.model or runtime_settings.model_for("extractor"),
         )
     except LLMProviderError as exc:

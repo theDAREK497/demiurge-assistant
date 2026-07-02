@@ -74,6 +74,7 @@ async def chat_with_world_context(
                 source_text=completion.message.content,
                 context_text=context.context_text,
                 max_entities=max_extract_entities,
+                output_language=payload.output_language,
                 model=payload.model or runtime_settings.model_for("extractor"),
             )
             proposal = ExtractionProposalRead.model_validate(
