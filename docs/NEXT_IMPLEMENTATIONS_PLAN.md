@@ -39,10 +39,11 @@ Why now:
 
 Implementation slices:
 
-1. Add persistent map pin schema and CRUD endpoints.
-2. Render pins on uploaded map images in `/app/`.
-3. Support pin title, note, linked entity, and coordinates.
-4. Add basic edit/delete interactions.
+1. [x] Add persistent map pin schema and CRUD endpoints.
+2. [x] Render pins on uploaded map images in `/app/`.
+3. [x] Support pin title, note, linked entity, and coordinates.
+4. [x] Add basic edit/delete interactions.
+5. Add richer drawing/editing tools later if map usage becomes central.
 
 Expected result:
 
@@ -59,10 +60,12 @@ Why now:
 
 Implementation slices:
 
-1. Add random table schema and storage.
-2. Create CRUD API for tables and rows.
-3. Add UI for rolling results in `/app/`.
-4. Optionally allow AI to suggest entries as draft proposals.
+1. [x] Add random table schema and storage.
+2. [x] Create CRUD API for tables and rows.
+3. [x] Add UI for rolling results in `/app/`.
+4. [x] Allow AI to suggest entries as draft proposals for existing tables.
+5. Later: allow AI to suggest entirely new tables once table-level proposal
+   review is designed.
 
 Expected result:
 
@@ -78,10 +81,12 @@ Why later:
 
 Implementation slices:
 
-1. Define board node and connection model.
-2. Reuse existing entities as attachable references.
-3. Add freeform notes plus evidence links.
-4. Add board rendering and editing in the UI.
+1. [x] Define board node and connection model.
+2. [x] Reuse existing entities as attachable references.
+3. [x] Add freeform notes plus evidence links.
+4. [x] Add board rendering and editing in the UI.
+5. Improve layout, drag editing, and AI-suggested clues later if this module
+   becomes central.
 
 ## Priority 5: React Migration By Feature Parity
 
@@ -98,8 +103,7 @@ Implementation slices:
 
 ## Recommended Immediate Order
 
-1. Proposal quality and review clarity.
-2. Map pins and editable maps.
-3. Random tables.
-4. Detective board.
-5. React feature-by-feature migration.
+1. Richer map drawing/editor tools if map usage becomes central.
+2. Richer detective board layout/editing and AI-suggested clues.
+3. Proposal quality hardening for more malformed local model outputs.
+4. React feature-by-feature migration.

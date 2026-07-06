@@ -5,6 +5,8 @@ from worldbuilder_core.models import (
     Entity,
     ExtractionProposal,
     ProposalStatus,
+    RandomTable,
+    RandomTableRow,
     Relationship,
     VerificationStatus,
     World,
@@ -129,6 +131,9 @@ def validate_payload_references(session: Session, world_id: str, payload: Extrac
         elif relationship.target_client_id not in client_ids:
             raise ProposalValidationError(f"Unknown target_client_id {relationship.target_client_id!r}")
 
+    for row in payload.random_table_rows:
+        _ensure_random_table_in_world(session, world_id, row.table_id)
+
 
 def _apply_payload(
     session: Session,
@@ -184,6 +189,11 @@ def _apply_payload(
         session.add(rule)
         result.created_world_rules += 1
 
+    for draft in payload.random_table_rows:
+        row = RandomTableRow(**draft.model_dump(exclude={"source_excerpt"}))
+        session.add(row)
+        result.created_random_table_rows += 1
+
     return result
 
 
@@ -192,6 +202,7 @@ def _select_payload_items(payload: ExtractionPayload, selection: ProposalItemSel
         entities=_select_by_indices(payload.entities, selection.entity_indices),
         relationships=_select_by_indices(payload.relationships, selection.relationship_indices),
         world_rules=_select_by_indices(payload.world_rules, selection.world_rule_indices),
+        random_table_rows=_select_by_indices(payload.random_table_rows, selection.random_table_row_indices),
         notes=payload.notes,
     )
 
@@ -248,3 +259,10 @@ def _ensure_entity_in_world(session: Session, world_id: str, entity_id: str) -> 
     if entity is None or entity.world_id != world_id:
         raise ProposalValidationError(f"Entity {entity_id!r} does not belong to world {world_id!r}")
     return entity
+
+
+def _ensure_random_table_in_world(session: Session, world_id: str, table_id: str) -> RandomTable:
+    table = session.get(RandomTable, table_id)
+    if table is None or table.world_id != world_id:
+        raise ProposalValidationError(f"Random table {table_id!r} does not belong to world {world_id!r}")
+    return table

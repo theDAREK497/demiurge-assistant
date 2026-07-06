@@ -29,6 +29,9 @@ Current UI coverage:
 - browse wiki entities as an encyclopedia-style card grid;
 - open wiki cards in a full-screen reading view with image and relationship
   space;
+- use the full-screen reader as a journal-like view for wiki cards, map
+  locations, and detective board nodes, with direct transitions to linked
+  cards;
 - create and edit wiki cards through a right-side drawer;
 - create relationships;
 - create world rules;
@@ -39,6 +42,12 @@ Current UI coverage:
 - relationship graph view;
 - timeline view for Event entities;
 - event journal, quest journal, and maps/location module views;
+- focused Modules workspace with one active mini-section at a time instead of
+  one noisy all-modules grid;
+- detective board with evidence nodes and connection lines;
+- collapsible editors for maps, random tables, detective board, and advanced
+  manual proposal JSON;
+- quick action bars and compact content summaries in Maps and Detective board;
 - toggle optional world sections in Settings;
 - preview the AI memory/context;
 - configure persistent LLM provider settings;
@@ -47,6 +56,7 @@ Current UI coverage:
 - forward the selected UI language into world-aware chat and extraction so
   generated rules and draft lore match the user's language;
 - review draft changes;
+- review and apply AI-suggested rows for existing random tables;
 - apply checked, apply all, or reject draft changes;
 - export and import world snapshots.
 
@@ -146,18 +156,25 @@ The first module views reuse existing entities:
 - image-backed wiki cards use `entity.attributes.image_url`;
 - timeline sorting uses Event entities and `entity.attributes.timeline_date`;
 - quests are entities tagged `quest`;
-- maps and pins currently use Location entities with optional images.
+- maps use Location entities with optional images;
+- persistent map pins store title, note, linked card, normalized coordinates,
+  and secret/public visibility.
+- random tables store weighted rows and let the user roll visible results from
+  the Modules view. Draft proposals can add suggested rows to existing tables
+  after review.
+- detective board nodes can be freeform notes or linked to wiki cards, can
+  include evidence URLs, and can be connected with labeled lines.
 
 The visible module set is stored in `localStorage` as `worldbuilder.modules`.
-Users can turn Graph, Timeline, Event journal, Quest journal, and Maps on or off
-from Settings.
+Users can turn Graph, Timeline, Event journal, Quest journal, Maps, and Random
+tables, and Detective board on or off from Settings.
 
 Uploaded images are stored in `worldbuilder_uploads/` by default and served from
 `/assets/...`. The upload endpoint currently accepts PNG, JPEG, GIF, and WebP up
 to 5 MB.
 
-Drawing maps, persistent pins, and a richer dedicated map editor are still
-future backend/UI work.
+Drawing maps and a richer dedicated map editor are still future backend/UI
+work.
 
 ## Theme
 

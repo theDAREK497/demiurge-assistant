@@ -69,11 +69,25 @@ The `/app/` UI already supports:
 - settings for LLM provider and model names;
 - rich wiki cards with image URL/upload and timeline metadata;
 - encyclopedia-style card grid;
-- full-screen wiki card reading view;
+- full-screen journal-style reading view for wiki cards, map locations, and
+  detective board nodes;
 - drawer-based card create/edit flow;
 - graph view;
 - timeline view;
 - journal / quest / maps module views;
+- focused Modules workspace that shows one mini-section at a time;
+- persistent map pins with title, note, linked card, normalized coordinates,
+  Master/Player filtering, and export/import support;
+- random tables with weighted rows, roll results, Master/Player filtering, and
+  export/import support;
+- AI-suggested random table rows through the normal draft proposal review/apply
+  flow;
+- detective board with freeform/entity-linked evidence nodes, connections,
+  evidence URLs, Master/Player filtering, and export/import support;
+- collapsible editor sections in module-heavy screens so content stays primary
+  and advanced/manual tools stay secondary;
+- quick actions and content summaries in maps and detective board so creation
+  tools stay close to the module without dominating the screen;
 - module toggles in Settings;
 - AI chat with draft-save flow;
 - explicit UI-language forwarding to chat/extraction so local models produce
@@ -123,10 +137,9 @@ Recent chat UX improvements:
 
 Roadmap items still intentionally open:
 
-- random tables;
-- map editor / pins / drawing over maps;
+- richer map editor and drawing over maps;
 - hex-based world map generator/editor;
-- detective board;
+- richer detective board layout/editing and AI-suggested clues;
 - continued polish of non-technical, friendly UX;
 - richer React migration if and when `/app/` stops being enough.
 

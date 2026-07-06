@@ -1,7 +1,29 @@
 import { $, escapeHtml } from "./dom.js";
 import { selectedWorld, state } from "./state.js";
 import { t } from "./i18n.js";
-import { applyProposal, applySelectedProposal, editEntity, rejectProposal, loadWorldData, saveAssistantMessageToWiki } from "./actions.js";
+import {
+  applyProposal,
+  applySelectedProposal,
+  deleteDetectiveConnection,
+  deleteDetectiveNode,
+  deleteMapPin,
+  deleteRandomTable,
+  deleteRandomTableRow,
+  editDetectiveConnection,
+  editDetectiveNode,
+  editEntity,
+  editMapPin,
+  editRandomTable,
+  editRandomTableRow,
+  openMapPinEditor,
+  persistDetectiveNodePosition,
+  rejectProposal,
+  loadWorldData,
+  rollRandomTable,
+  saveAssistantMessageToWiki,
+  setDetectiveNodeDraft,
+  setMapPinDraft,
+} from "./actions.js";
 
 export function activateTab(tabName) {
   const requestedTab = document.querySelector(`.tab[data-tab="${tabName}"]:not(.hidden)`);
@@ -15,6 +37,13 @@ export function activateTab(tabName) {
   $(`tab-${tab.dataset.tab}`)?.classList.add("active");
 }
 
+export function activateModuleView(moduleName) {
+  const button = document.querySelector(`[data-module-nav="${moduleName}"]:not(.hidden)`);
+  if (!button) return;
+  state.activeModuleView = moduleName;
+  renderModuleVisibility();
+}
+
 export function currentRole() {
   return $("viewerRole").value;
 }
@@ -22,6 +51,9 @@ export function currentRole() {
 export function renderAllWorldData() {
   renderEntities();
   renderRelationshipOptions();
+  renderMapPinOptions();
+  renderRandomTableOptions();
+  renderDetectiveOptions();
   renderRelationships();
   renderRules();
   renderProposals();
@@ -34,7 +66,9 @@ export function renderAllWorldData() {
 
 export function renderModuleVisibility() {
   const settings = state.moduleSettings;
-  const modulePanelVisible = ["journal", "quests", "maps"].some((key) => settings[key] !== false);
+  const modulePanelVisible = ["journal", "quests", "maps", "randomTables", "detectiveBoard"].some(
+    (key) => settings[key] !== false,
+  );
 
   document.querySelectorAll("[data-module-toggle]").forEach((input) => {
     input.checked = settings[input.dataset.moduleToggle] !== false;
@@ -48,8 +82,27 @@ export function renderModuleVisibility() {
   });
 
   document.querySelectorAll("[data-module-panel]").forEach((panel) => {
-    panel.classList.toggle("hidden", settings[panel.dataset.modulePanel] === false);
+    const moduleName = panel.dataset.modulePanel;
+    panel.classList.toggle("hidden", settings[moduleName] === false || moduleName !== state.activeModuleView);
   });
+
+  document.querySelectorAll("[data-module-nav]").forEach((button) => {
+    const moduleName = button.dataset.moduleNav;
+    const isVisible = settings[moduleName] !== false;
+    button.classList.toggle("hidden", !isVisible);
+    button.classList.toggle("active", moduleName === state.activeModuleView);
+  });
+
+  const activeModuleAvailable = settings[state.activeModuleView] !== false;
+  if (!activeModuleAvailable) {
+    const firstVisibleModule = ["journal", "quests", "maps", "randomTables", "detectiveBoard"].find(
+      (moduleName) => settings[moduleName] !== false,
+    );
+    if (firstVisibleModule) {
+      state.activeModuleView = firstVisibleModule;
+      renderModuleVisibility();
+    }
+  }
 
   const activeTab = document.querySelector(".tab.active");
   if (activeTab?.classList.contains("hidden")) {
@@ -70,6 +123,33 @@ export function renderEntityFormMode() {
   $("entitySubmit").textContent = state.editingEntityId ? t("entity.save") : t("entity.add");
   $("cancelEntityEdit").classList.toggle("hidden", !state.editingEntityId);
   $("entityFormTitle").textContent = state.editingEntityId ? t("entity.editTitle") : t("entity.createTitle");
+}
+
+export function renderMapPinFormMode() {
+  $("mapPinSubmit").textContent = state.editingMapPinId ? t("map.pinSave") : t("map.pinAdd");
+  $("cancelMapPinEdit").classList.toggle("hidden", !state.editingMapPinId);
+}
+
+export function renderRandomTableFormMode() {
+  $("randomTableSubmit").textContent = state.editingRandomTableId ? t("randomTable.save") : t("randomTable.add");
+  $("cancelRandomTableEdit").classList.toggle("hidden", !state.editingRandomTableId);
+}
+
+export function renderRandomTableRowFormMode() {
+  $("randomTableRowSubmit").textContent = state.editingRandomTableRowId ? t("randomTable.rowSave") : t("randomTable.rowAdd");
+  $("cancelRandomTableRowEdit").classList.toggle("hidden", !state.editingRandomTableRowId);
+}
+
+export function renderDetectiveNodeFormMode() {
+  $("detectiveNodeSubmit").textContent = state.editingDetectiveNodeId ? t("detective.nodeSave") : t("detective.nodeAdd");
+  $("cancelDetectiveNodeEdit").classList.toggle("hidden", !state.editingDetectiveNodeId);
+}
+
+export function renderDetectiveConnectionFormMode() {
+  $("detectiveConnectionSubmit").textContent = state.editingDetectiveConnectionId
+    ? t("detective.connectionSave")
+    : t("detective.connectionAdd");
+  $("cancelDetectiveConnectionEdit").classList.toggle("hidden", !state.editingDetectiveConnectionId);
 }
 
 export function openEntityDrawer() {
@@ -205,22 +285,37 @@ export function renderEntities() {
 }
 
 export function openEntityReader(entityId) {
-  state.selectedEntityId = entityId;
-  renderEntityReader();
-  $("entityReader").classList.remove("hidden");
+  openReader("entity", entityId, entityId);
 }
 
 export function closeEntityReader() {
   state.selectedEntityId = null;
+  state.selectedReaderType = null;
+  state.selectedReaderSourceId = null;
   $("entityReader").classList.add("hidden");
 }
 
 export function openSelectedEntityForEdit() {
+  if (state.selectedReaderType === "detectiveNode" && state.selectedReaderSourceId) {
+    editDetectiveNode(state.selectedReaderSourceId);
+    return;
+  }
   if (!state.selectedEntityId) return;
   editEntity(state.selectedEntityId);
 }
 
 function renderEntityReader() {
+  const readerType = state.selectedReaderType || "entity";
+  const editButton = $("readerEditEntity");
+
+  if (readerType === "detectiveNode") {
+    if (editButton) {
+      editButton.textContent = t("entity.edit");
+    }
+    renderDetectiveNodeReader();
+    return;
+  }
+
   const entity = state.entities.find((item) => item.id === state.selectedEntityId);
   if (!entity) {
     $("entityReaderContent").innerHTML = "";
@@ -228,6 +323,53 @@ function renderEntityReader() {
     return;
   }
 
+  if (editButton) {
+    editButton.textContent = t("entity.edit");
+  }
+
+  const extraSections = [];
+  if (readerType === "map") {
+    extraSections.push(renderMapReaderPinsSection(entity.id));
+  }
+
+  $("entityReaderContent").innerHTML = renderEntityReaderLayout(entity, {
+    extraSections,
+  });
+  bindEntityReaderActions();
+}
+
+function openReader(type, sourceId, entityId = null) {
+  state.selectedReaderType = type;
+  state.selectedReaderSourceId = sourceId;
+  state.selectedEntityId = entityId;
+  renderEntityReader();
+  $("entityReader").classList.remove("hidden");
+}
+
+function openMapReader(entityId) {
+  openReader("map", entityId, entityId);
+}
+
+function openDetectiveNodeReader(nodeId) {
+  const node = state.detectiveNodes.find((item) => item.id === nodeId);
+  openReader("detectiveNode", nodeId, node?.entity_id || null);
+}
+
+function renderReaderHeader({ title, eyebrow, summary, badge, imageHtml }) {
+  return `
+    <header class="reader-hero">
+      <div class="reader-hero-media">${imageHtml}</div>
+      <div class="reader-hero-copy">
+        <p class="eyebrow">${escapeHtml(eyebrow)}</p>
+        <h2>${escapeHtml(title)}</h2>
+        ${summary ? `<p class="reader-summary">${escapeHtml(summary)}</p>` : ""}
+        <span class="badge">${escapeHtml(badge)}</span>
+      </div>
+    </header>
+  `;
+}
+
+function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
   const related = state.relationships.filter(
     (relationship) => relationship.source_entity_id === entity.id || relationship.target_entity_id === entity.id,
   );
@@ -235,44 +377,199 @@ function renderEntityReader() {
     ? `<img class="reader-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
     : `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
 
-  $("entityReaderContent").innerHTML = `
-    <div class="reader-media">${imageHtml}</div>
-    <div class="reader-main">
-      <div class="reader-title-row">
-        <div>
-          <p class="eyebrow">${escapeHtml(t(`entityType.${entity.type}`))}</p>
-          <h2>${escapeHtml(entity.name)}</h2>
-        </div>
-        <span class="badge">${entity.is_secret ? escapeHtml(t("common.secretValue")) : escapeHtml(t("common.public"))}</span>
-      </div>
-      ${entity.summary ? `<p class="reader-summary">${escapeHtml(entity.summary)}</p>` : ""}
-      <div class="reader-body">${escapeHtml(entity.description || entity.summary || t("common.noSummary"))}</div>
-      ${
-        entity.tags?.length
-          ? `<div class="reader-tags">${entity.tags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}</div>`
-          : ""
-      }
-      ${entity.attributes?.timeline_date ? `<div class="item-meta">${escapeHtml(t("entity.timelineDate"))}: ${escapeHtml(entity.attributes.timeline_date)}</div>` : ""}
-      <section class="reader-section">
-        <h3>${escapeHtml(t("relationship.listTitle"))}</h3>
+  return `
+    ${renderReaderHeader({
+      title: entity.name,
+      eyebrow: t(`entityType.${entity.type}`),
+      summary: entity.summary,
+      badge: entity.is_secret ? t("common.secretValue") : t("common.public"),
+      imageHtml,
+    })}
+    <div class="reader-reading-layout">
+      <article class="reader-article">
+        <div class="reader-body">${escapeHtml(entity.description || entity.summary || t("common.noSummary"))}</div>
         ${
-          related.length
-            ? related
-                .map(
-                  (relationship) => `
-                    <div class="reader-link">
-                      <span>${escapeHtml(entityName(relationship.source_entity_id))}</span>
-                      <strong>${escapeHtml(relationship.label || relationship.type)}</strong>
-                      <span>${escapeHtml(entityName(relationship.target_entity_id))}</span>
-                    </div>
-                  `,
-                )
-                .join("")
-            : `<p class="muted">${escapeHtml(t("relationship.empty"))}</p>`
+          entity.tags?.length
+            ? `<div class="reader-tags">${entity.tags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}</div>`
+            : ""
         }
-      </section>
+        ${
+          entity.attributes?.timeline_date
+            ? `<div class="item-meta">${escapeHtml(t("entity.timelineDate"))}: ${escapeHtml(entity.attributes.timeline_date)}</div>`
+            : ""
+        }
+      </article>
+      <aside class="reader-aside">
+        ${extraSections.join("")}
+        <section class="reader-section">
+          <h3>${escapeHtml(t("relationship.listTitle"))}</h3>
+          ${related.length ? renderReaderRelationshipCards(entity.id, related) : `<p class="muted">${escapeHtml(t("relationship.empty"))}</p>`}
+        </section>
+      </aside>
     </div>
   `;
+}
+
+function renderReaderRelationshipCards(entityId, relationships) {
+  return `
+    <div class="reader-card-list">
+      ${relationships
+        .map((relationship) => {
+          const otherEntityId =
+            relationship.source_entity_id === entityId ? relationship.target_entity_id : relationship.source_entity_id;
+          return `
+            <article class="reader-subcard">
+              <div class="reader-card-head">
+                <strong>${escapeHtml(entityName(otherEntityId))}</strong>
+                <span class="badge">${escapeHtml(relationship.label || relationship.type)}</span>
+              </div>
+              <div class="reader-inline-actions">
+                <span class="item-meta">${escapeHtml(entityName(relationship.source_entity_id))} -> ${escapeHtml(entityName(relationship.target_entity_id))}</span>
+                <button class="ghost" data-reader-open-entity="${otherEntityId}" type="button">${escapeHtml(t("entity.open"))}</button>
+              </div>
+            </article>
+          `;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderMapReaderPinsSection(entityId) {
+  const pins = state.mapPins.filter((pin) => pin.map_entity_id === entityId);
+  return `
+    <section class="reader-section">
+      <h3>${escapeHtml(t("map.pins"))}</h3>
+      ${
+        pins.length
+          ? `<div class="reader-card-list">
+              ${pins
+                .map(
+                  (pin) => `
+                    <article class="reader-subcard">
+                      <div class="reader-card-head">
+                        <strong>${escapeHtml(pin.title)}</strong>
+                        <span class="badge">${pin.is_secret ? escapeHtml(t("common.secretValue")) : escapeHtml(t("common.public"))}</span>
+                      </div>
+                      ${pin.note ? `<div class="reader-card-body">${escapeHtml(pin.note)}</div>` : ""}
+                      ${
+                        pin.linked_entity_id
+                          ? `<div class="reader-inline-actions">
+                              <span class="item-meta">${escapeHtml(entityName(pin.linked_entity_id))}</span>
+                              <button class="ghost" data-reader-open-entity="${pin.linked_entity_id}" type="button">${escapeHtml(t("entity.open"))}</button>
+                            </div>`
+                          : ""
+                      }
+                    </article>
+                  `,
+                )
+                .join("")}
+            </div>`
+          : `<p class="muted">${escapeHtml(t("map.noPins"))}</p>`
+      }
+    </section>
+  `;
+}
+
+function renderDetectiveNodeReader() {
+  const node = state.detectiveNodes.find((item) => item.id === state.selectedReaderSourceId);
+  if (!node) {
+    $("entityReaderContent").innerHTML = "";
+    $("entityReader").classList.add("hidden");
+    return;
+  }
+
+  const linkedEntity = node.entity_id ? state.entities.find((item) => item.id === node.entity_id) : null;
+  const nodeConnections = state.detectiveConnections.filter(
+    (connection) => connection.source_node_id === node.id || connection.target_node_id === node.id,
+  );
+  const imageHtml = linkedEntity?.attributes?.image_url
+    ? `<img class="reader-image" src="${escapeHtml(linkedEntity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
+    : `<div class="reader-image placeholder">${escapeHtml(linkedEntity ? linkedEntity.name : t("detective.badge"))}</div>`;
+
+  $("entityReaderContent").innerHTML = `
+    ${renderReaderHeader({
+      title: node.title,
+      eyebrow: linkedEntity ? t(`entityType.${linkedEntity.type}`) : t("detective.freeNote"),
+      summary: linkedEntity?.summary || node.note || "",
+      badge: node.is_secret ? t("common.secretValue") : t("common.public"),
+      imageHtml,
+    })}
+    <div class="reader-reading-layout">
+      <article class="reader-article">
+        <div class="reader-body">${escapeHtml(node.note || linkedEntity?.description || linkedEntity?.summary || t("common.noSummary"))}</div>
+      </article>
+      <aside class="reader-aside">
+        ${
+          linkedEntity
+            ? `<section class="reader-section">
+                <h3>${escapeHtml(t("detective.linkedCard"))}</h3>
+                <article class="reader-subcard">
+                  <div class="reader-card-head">
+                    <strong>${escapeHtml(linkedEntity.name)}</strong>
+                    <span class="badge">${escapeHtml(t(`entityType.${linkedEntity.type}`))}</span>
+                  </div>
+                  ${linkedEntity.summary ? `<div class="reader-card-body">${escapeHtml(linkedEntity.summary)}</div>` : ""}
+                  <div class="reader-inline-actions">
+                    <button class="ghost" data-reader-open-entity="${linkedEntity.id}" type="button">${escapeHtml(t("entity.open"))}</button>
+                  </div>
+                </article>
+              </section>`
+            : ""
+        }
+        ${
+          node.evidence_url
+            ? `<section class="reader-section">
+                <h3>${escapeHtml(t("detective.evidence"))}</h3>
+                <a class="reader-evidence-link" href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(node.evidence_url)}</a>
+              </section>`
+            : ""
+        }
+        <section class="reader-section">
+          <h3>${escapeHtml(t("detective.connectionsLabel"))}</h3>
+          ${
+            nodeConnections.length
+              ? `<div class="reader-card-list">
+                  ${nodeConnections
+                    .map((connection) => {
+                      const otherNodeId =
+                        connection.source_node_id === node.id ? connection.target_node_id : connection.source_node_id;
+                      return `
+                        <article class="reader-subcard">
+                          <div class="reader-card-head">
+                            <strong>${escapeHtml(detectiveNodeTitle(otherNodeId))}</strong>
+                            <span class="badge">${escapeHtml(connection.label || t("detective.connection"))}</span>
+                          </div>
+                          ${connection.note ? `<div class="reader-card-body">${escapeHtml(connection.note)}</div>` : ""}
+                          <div class="reader-inline-actions">
+                            <span class="item-meta">${escapeHtml(detectiveNodeTitle(connection.source_node_id))} -> ${escapeHtml(detectiveNodeTitle(connection.target_node_id))}</span>
+                            <button class="ghost" data-reader-open-detective-node="${otherNodeId}" type="button">${escapeHtml(t("entity.open"))}</button>
+                          </div>
+                        </article>
+                      `;
+                    })
+                    .join("")}
+                </div>`
+              : `<p class="muted">${escapeHtml(t("detective.noConnections"))}</p>`
+          }
+        </section>
+      </aside>
+    </div>
+  `;
+  bindEntityReaderActions();
+}
+
+function bindEntityReaderActions() {
+  $("entityReaderContent")
+    .querySelectorAll("[data-reader-open-entity]")
+    .forEach((button) => {
+      button.addEventListener("click", () => openEntityReader(button.dataset.readerOpenEntity));
+    });
+  $("entityReaderContent")
+    .querySelectorAll("[data-reader-open-detective-node]")
+    .forEach((button) => {
+      button.addEventListener("click", () => openDetectiveNodeReader(button.dataset.readerOpenDetectiveNode));
+    });
 }
 
 export function renderGraph() {
@@ -375,6 +672,8 @@ export function renderModules() {
   renderJournal();
   renderQuests();
   renderMaps();
+  renderRandomTables();
+  renderDetectiveBoard();
 }
 
 function renderJournal() {
@@ -393,11 +692,344 @@ function renderQuests() {
 
 function renderMaps() {
   const list = $("mapList");
+  const summary = $("mapSummary");
   if (!list) return;
   const locations = state.entities.filter((entity) => entity.type === "location");
-  renderEntityMiniList(list, locations, t("map.empty"));
+  if (summary) {
+    summary.textContent = `${locations.length} ${t("map.locationsLabel")} - ${state.mapPins.length} ${t("map.pins")}`;
+  }
+  if (summary) {
+    summary.textContent = `${locations.length} ${t("map.locationsLabel")} · ${state.mapPins.length} ${t("map.pins")}`;
+  }
+  if (summary) {
+    summary.textContent = `${locations.length} ${t("map.locationsLabel")} - ${state.mapPins.length} ${t("map.pins")}`;
+  }
+  if (!locations.length) {
+    list.className = "grid-list empty";
+    list.textContent = t("map.empty");
+    return;
+  }
+
+  list.className = "grid-list map-list";
+  list.innerHTML = locations
+    .map((location) => {
+      const pins = state.mapPins.filter((pin) => pin.map_entity_id === location.id);
+      return `
+        <article class="item entity-card map-card">
+          <div class="map-image-wrap" data-map-image="${location.id}">
+            ${
+              location.attributes?.image_url
+                ? `<img class="entity-image map-image" src="${escapeHtml(location.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />`
+                : `<div class="map-placeholder">${escapeHtml(t("map.noImage"))}</div>`
+            }
+            <div class="map-card-banner">
+              <div>
+                <div class="map-card-title">${escapeHtml(location.name)}</div>
+                <div class="map-card-subtitle">${escapeHtml(location.summary || location.description || t("common.noSummary"))}</div>
+              </div>
+              <span class="badge">${pins.length} ${escapeHtml(t("map.pins"))}</span>
+            </div>
+            ${pins
+              .map(
+                (pin) => `
+                  <button class="map-pin ${pin.is_secret ? "secret" : ""}" data-edit-map-pin="${pin.id}" style="left: ${pin.x * 100}%; top: ${pin.y * 100}%;" type="button" title="${escapeHtml(pin.title)}">
+                    <span>${escapeHtml(pin.title.slice(0, 2).toUpperCase())}</span>
+                  </button>
+                `,
+              )
+              .join("")}
+          </div>
+          <div class="map-card-actions">
+            <button class="ghost" data-open-map-reader="${location.id}" type="button">${t("entity.open")}</button>
+            <button class="ghost" data-prepare-map-pin="${location.id}" type="button">${t("map.pinAdd")}</button>
+          </div>
+          ${
+            pins.length
+              ? `<div class="pin-list">${pins
+                  .map(
+                    (pin) => `
+                      <div class="pin-row">
+                        <span>${escapeHtml(pin.title)}${pin.linked_entity_id ? ` - ${escapeHtml(entityName(pin.linked_entity_id))}` : ""}</span>
+                        <span class="item-actions">
+                          <button class="ghost" data-edit-map-pin="${pin.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                          <button class="ghost danger" data-delete-map-pin="${pin.id}" type="button">${escapeHtml(t("map.pinDelete"))}</button>
+                        </span>
+                      </div>
+                    `,
+                  )
+                  .join("")}</div>`
+              : `<div class="item-meta">${escapeHtml(t("map.noPins"))}</div>`
+          }
+        </article>
+      `;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-map-image]").forEach((container) => {
+    container.addEventListener("click", (event) => {
+      if (event.target.closest("[data-edit-map-pin]")) return;
+      const rect = container.getBoundingClientRect();
+      setMapPinDraft(
+        container.dataset.mapImage,
+        (event.clientX - rect.left) / Math.max(rect.width, 1),
+        (event.clientY - rect.top) / Math.max(rect.height, 1),
+      );
+    });
+  });
+  list.querySelectorAll("[data-open-map-reader]").forEach((button) => {
+    button.addEventListener("click", () => openMapReader(button.dataset.openMapReader));
+  });
+  list.querySelectorAll("[data-prepare-map-pin]").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("mapPinMapEntity").value = button.dataset.prepareMapPin;
+      openMapPinEditor();
+    });
+  });
+  list.querySelectorAll("[data-edit-map-pin]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editMapPin(button.dataset.editMapPin);
+    });
+  });
+  list.querySelectorAll("[data-delete-map-pin]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteMapPin(button.dataset.deleteMapPin);
+    });
+  });
 }
 
+function renderRandomTables() {
+  const list = $("randomTableList");
+  if (!list) return;
+  if (!state.randomTables.length) {
+    list.className = "grid-list empty";
+    list.textContent = t("randomTable.empty");
+    return;
+  }
+
+  list.className = "grid-list random-table-list";
+  list.innerHTML = state.randomTables
+    .map((table) => {
+      const roll = state.randomTableRolls[table.id];
+      return `
+        <article class="item random-table-card">
+          <div class="item-top">
+            <div>
+              <div class="item-title">${escapeHtml(table.name)}</div>
+              <div class="item-meta">${table.rows.length} ${escapeHtml(t("randomTable.rows"))} - ${table.is_secret ? escapeHtml(t("common.secretValue")) : escapeHtml(t("common.public"))}</div>
+            </div>
+            <div class="item-actions">
+              <button data-roll-random-table="${table.id}" type="button" ${table.rows.length ? "" : "disabled"}>${escapeHtml(t("randomTable.roll"))}</button>
+              <button class="ghost" data-edit-random-table="${table.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+              <button class="ghost danger" data-delete-random-table="${table.id}" type="button">${escapeHtml(t("randomTable.delete"))}</button>
+            </div>
+          </div>
+          ${table.description ? `<div class="item-body">${escapeHtml(table.description)}</div>` : ""}
+          ${
+            roll
+              ? `<div class="roll-result">
+                  <div class="item-meta">${escapeHtml(t("randomTable.lastRoll"))}</div>
+                  <strong>${escapeHtml(roll.label || t("randomTable.result"))}</strong>
+                  <div>${escapeHtml(roll.result)}</div>
+                </div>`
+              : ""
+          }
+          ${
+            table.rows.length
+              ? `<div class="random-row-list">
+                  ${table.rows
+                    .map(
+                      (row) => `
+                        <div class="random-row">
+                          <div>
+                            <strong>${escapeHtml(row.label || t("randomTable.result"))}</strong>
+                            <span class="item-meta">${escapeHtml(t("randomTable.weight"))}: ${row.weight}${row.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</span>
+                            <div>${escapeHtml(row.result)}</div>
+                          </div>
+                          <span class="item-actions">
+                            <button class="ghost" data-edit-random-row="${table.id}:${row.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                            <button class="ghost danger" data-delete-random-row="${row.id}" type="button">${escapeHtml(t("randomTable.rowDelete"))}</button>
+                          </span>
+                        </div>
+                      `,
+                    )
+                    .join("")}
+                </div>`
+              : `<div class="item-meta">${escapeHtml(t("randomTable.noRows"))}</div>`
+          }
+        </article>
+      `;
+    })
+    .join("");
+
+  list.querySelectorAll("[data-roll-random-table]").forEach((button) => {
+    button.addEventListener("click", () => rollRandomTable(button.dataset.rollRandomTable));
+  });
+  list.querySelectorAll("[data-edit-random-table]").forEach((button) => {
+    button.addEventListener("click", () => editRandomTable(button.dataset.editRandomTable));
+  });
+  list.querySelectorAll("[data-delete-random-table]").forEach((button) => {
+    button.addEventListener("click", () => deleteRandomTable(button.dataset.deleteRandomTable));
+  });
+  list.querySelectorAll("[data-edit-random-row]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const [tableId, rowId] = button.dataset.editRandomRow.split(":");
+      editRandomTableRow(tableId, rowId);
+    });
+  });
+  list.querySelectorAll("[data-delete-random-row]").forEach((button) => {
+    button.addEventListener("click", () => deleteRandomTableRow(button.dataset.deleteRandomRow));
+  });
+}
+
+function setDetectiveBoardNodePosition(nodeElement, x, y) {
+  nodeElement.style.left = `${x * 100}%`;
+  nodeElement.style.top = `${y * 100}%`;
+  nodeElement.dataset.nodeX = String(x);
+  nodeElement.dataset.nodeY = String(y);
+}
+
+function updateDetectiveBoardConnections(board, nodeId) {
+  board.querySelectorAll(`[data-source-node="${nodeId}"], [data-target-node="${nodeId}"]`).forEach((element) => {
+    const sourceElement = board.querySelector(`[data-detective-node="${element.dataset.sourceNode}"]`);
+    const targetElement = board.querySelector(`[data-detective-node="${element.dataset.targetNode}"]`);
+    if (!sourceElement || !targetElement) return;
+
+    const sourceX = Number(sourceElement.dataset.nodeX || 0);
+    const sourceY = Number(sourceElement.dataset.nodeY || 0);
+    const targetX = Number(targetElement.dataset.nodeX || 0);
+    const targetY = Number(targetElement.dataset.nodeY || 0);
+
+    if (element.tagName.toLowerCase() === "line") {
+      element.setAttribute("x1", String(sourceX * 100));
+      element.setAttribute("y1", String(sourceY * 100));
+      element.setAttribute("x2", String(targetX * 100));
+      element.setAttribute("y2", String(targetY * 100));
+      return;
+    }
+
+    element.setAttribute("x", String(((sourceX + targetX) / 2) * 100));
+    element.setAttribute("y", String(((sourceY + targetY) / 2) * 100));
+  });
+}
+
+function clampBoardCoordinate(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+/*
+function renderDetectiveBoardLegacy() {
+  const board = $("detectiveBoardView");
+  const connectionList = $("detectiveConnectionList");
+  const summary = $("detectiveSummary");
+  if (!board || !connectionList) return;
+  if (summary) {
+    summary.textContent = `${state.detectiveNodes.length} ${t("detective.nodesLabel")} · ${state.detectiveConnections.length} ${t("detective.connectionsLabel")}`;
+  }
+  board.onclick = (event) => {
+    if (event.target.closest(".detective-node")) return;
+    const rect = board.getBoundingClientRect();
+    setDetectiveNodeDraft(
+      (event.clientX - rect.left) / Math.max(rect.width, 1),
+      (event.clientY - rect.top) / Math.max(rect.height, 1),
+    );
+  };
+
+  if (!state.detectiveNodes.length) {
+    board.className = "detective-board empty";
+    board.textContent = t("detective.empty");
+  } else {
+    board.className = "detective-board";
+    const nodeById = new Map(state.detectiveNodes.map((node) => [node.id, node]));
+    const visibleConnections = state.detectiveConnections
+      .map((connection) => ({
+        connection,
+        source: nodeById.get(connection.source_node_id),
+        target: nodeById.get(connection.target_node_id),
+      }))
+      .filter((item) => item.source && item.target);
+
+    board.innerHTML = `
+      <svg class="detective-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        ${visibleConnections
+          .map(
+            ({ connection, source, target }) => `
+              <line x1="${source.x * 100}" y1="${source.y * 100}" x2="${target.x * 100}" y2="${target.y * 100}" />
+              ${
+                connection.label
+                  ? `<text x="${((source.x + target.x) / 2) * 100}" y="${((source.y + target.y) / 2) * 100}">${escapeHtml(connection.label)}</text>`
+                  : ""
+              }
+            `,
+          )
+          .join("")}
+      </svg>
+      ${state.detectiveNodes
+        .map(
+          (node) => `
+            <article class="detective-node ${node.is_secret ? "secret" : ""}" style="left: ${node.x * 100}%; top: ${node.y * 100}%;">
+              <div class="item-title">${escapeHtml(node.title)}</div>
+              <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
+              ${node.note ? `<div class="item-body">${escapeHtml(node.note)}</div>` : ""}
+              ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
+              <div class="item-actions">
+                <button class="ghost" data-open-detective-node="${node.id}" type="button">${escapeHtml(t("entity.open"))}</button>
+                <button class="ghost" data-edit-detective-node="${node.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                <button class="ghost danger" data-delete-detective-node="${node.id}" type="button">${escapeHtml(t("detective.nodeDelete"))}</button>
+              </div>
+            </article>
+          `,
+        )
+        .join("")}
+    `;
+  }
+
+  board.querySelectorAll("[data-edit-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => editDetectiveNode(button.dataset.editDetectiveNode));
+  });
+  board.querySelectorAll("[data-open-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => openDetectiveNodeReader(button.dataset.openDetectiveNode));
+  });
+  board.querySelectorAll("[data-delete-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => deleteDetectiveNode(button.dataset.deleteDetectiveNode));
+  });
+
+  if (!state.detectiveConnections.length) {
+    connectionList.className = "grid-list empty";
+    connectionList.textContent = t("detective.noConnections");
+    return;
+  }
+
+  connectionList.className = "grid-list detective-connection-list";
+  connectionList.innerHTML = state.detectiveConnections
+    .map(
+      (connection) => `
+        <article class="item detective-connection-card">
+          <div class="item-top">
+            <div>
+              <div class="item-title">${escapeHtml(detectiveNodeTitle(connection.source_node_id))} → ${escapeHtml(detectiveNodeTitle(connection.target_node_id))}</div>
+              <div class="item-meta">${escapeHtml(connection.label || t("detective.connection"))}${connection.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
+            </div>
+            <div class="item-actions">
+              <button class="ghost" data-edit-detective-connection="${connection.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+              <button class="ghost danger" data-delete-detective-connection="${connection.id}" type="button">${escapeHtml(t("detective.connectionDelete"))}</button>
+            </div>
+          </div>
+          ${connection.note ? `<div class="item-body">${escapeHtml(connection.note)}</div>` : ""}
+        </article>
+      `,
+    )
+    .join("");
+  connectionList.querySelectorAll("[data-edit-detective-connection]").forEach((button) => {
+    button.addEventListener("click", () => editDetectiveConnection(button.dataset.editDetectiveConnection));
+  });
+  connectionList.querySelectorAll("[data-delete-detective-connection]").forEach((button) => {
+    button.addEventListener("click", () => deleteDetectiveConnection(button.dataset.deleteDetectiveConnection));
+  });
+}
+
+*/
 function renderEntityMiniList(list, entities, emptyText) {
   if (!entities.length) {
     list.className = "grid-list empty";
@@ -437,8 +1069,244 @@ export function renderRelationshipOptions() {
   $("relationshipTarget").innerHTML = options;
 }
 
+export function renderMapPinOptions() {
+  const mapOptions = state.entities
+    .filter((entity) => entity.type === "location")
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)}</option>`)
+    .join("");
+  const linkedOptions = state.entities
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(t(`entityType.${entity.type}`))})</option>`)
+    .join("");
+  $("mapPinMapEntity").innerHTML = mapOptions;
+  $("mapPinLinkedEntity").innerHTML = `<option value="">${escapeHtml(t("common.none"))}</option>${linkedOptions}`;
+}
+
+export function renderRandomTableOptions() {
+  const options = state.randomTables
+    .map((table) => `<option value="${table.id}">${escapeHtml(table.name)}</option>`)
+    .join("");
+  $("randomTableRowTable").innerHTML = options;
+}
+
+export function renderDetectiveOptions() {
+  const entityOptions = state.entities
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(t(`entityType.${entity.type}`))})</option>`)
+    .join("");
+  const nodeOptions = state.detectiveNodes
+    .map((node) => `<option value="${node.id}">${escapeHtml(node.title)}</option>`)
+    .join("");
+  $("detectiveNodeEntity").innerHTML = `<option value="">${escapeHtml(t("detective.freeNote"))}</option>${entityOptions}`;
+  $("detectiveConnectionSource").innerHTML = nodeOptions;
+  $("detectiveConnectionTarget").innerHTML = nodeOptions;
+}
+
 export function entityName(id) {
   return state.entities.find((entity) => entity.id === id)?.name || id.slice(0, 8);
+}
+
+function renderDetectiveBoard() {
+  const board = $("detectiveBoardView");
+  const connectionList = $("detectiveConnectionList");
+  const summary = $("detectiveSummary");
+  if (!board || !connectionList) return;
+  if (summary) {
+    summary.textContent = `${state.detectiveNodes.length} ${t("detective.nodesLabel")} - ${state.detectiveConnections.length} ${t("detective.connectionsLabel")}`;
+  }
+
+  let suppressBoardClick = false;
+  let dragState = null;
+
+  board.onclick = (event) => {
+    if (suppressBoardClick) {
+      suppressBoardClick = false;
+      return;
+    }
+    if (event.target.closest(".detective-node")) return;
+    const rect = board.getBoundingClientRect();
+    setDetectiveNodeDraft(
+      (event.clientX - rect.left) / Math.max(rect.width, 1),
+      (event.clientY - rect.top) / Math.max(rect.height, 1),
+    );
+  };
+
+  if (!state.detectiveNodes.length) {
+    board.className = "detective-board empty";
+    board.textContent = t("detective.empty");
+  } else {
+    board.className = "detective-board";
+    const nodeById = new Map(state.detectiveNodes.map((node) => [node.id, node]));
+    const visibleConnections = state.detectiveConnections
+      .map((connection) => ({
+        connection,
+        source: nodeById.get(connection.source_node_id),
+        target: nodeById.get(connection.target_node_id),
+      }))
+      .filter((item) => item.source && item.target);
+
+    board.innerHTML = `
+      <svg class="detective-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+        ${visibleConnections
+          .map(
+            ({ connection, source, target }) => `
+              <line data-source-node="${source.id}" data-target-node="${target.id}" x1="${source.x * 100}" y1="${source.y * 100}" x2="${target.x * 100}" y2="${target.y * 100}" />
+              ${
+                connection.label
+                  ? `<text data-source-node="${source.id}" data-target-node="${target.id}" x="${((source.x + target.x) / 2) * 100}" y="${((source.y + target.y) / 2) * 100}">${escapeHtml(connection.label)}</text>`
+                  : ""
+              }
+            `,
+          )
+          .join("")}
+      </svg>
+      ${state.detectiveNodes
+        .map(
+          (node) => `
+            <article class="detective-node ${node.is_secret ? "secret" : ""}" data-detective-node="${node.id}" data-node-x="${node.x}" data-node-y="${node.y}" style="left: ${node.x * 100}%; top: ${node.y * 100}%;">
+              <div class="item-title">${escapeHtml(node.title)}</div>
+              <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
+              ${node.note ? `<div class="item-body">${escapeHtml(node.note)}</div>` : ""}
+              ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
+              <div class="item-actions">
+                <button class="ghost" data-edit-detective-node="${node.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                <button class="ghost danger" data-delete-detective-node="${node.id}" type="button">${escapeHtml(t("detective.nodeDelete"))}</button>
+              </div>
+            </article>
+          `,
+        )
+        .join("")}
+    `;
+  }
+
+  board.querySelectorAll("[data-edit-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => editDetectiveNode(button.dataset.editDetectiveNode));
+  });
+  board.querySelectorAll("[data-delete-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => deleteDetectiveNode(button.dataset.deleteDetectiveNode));
+  });
+  board.querySelectorAll("[data-detective-node]").forEach((nodeElement) => {
+    nodeElement.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      if (event.target.closest("button, a")) return;
+
+      const boardRect = board.getBoundingClientRect();
+      const nodeRect = nodeElement.getBoundingClientRect();
+      dragState = {
+        pointerId: event.pointerId,
+        nodeId: nodeElement.dataset.detectiveNode,
+        nodeElement,
+        boardRect,
+        offsetX: event.clientX - (nodeRect.left + nodeRect.width / 2),
+        offsetY: event.clientY - (nodeRect.top + nodeRect.height / 2),
+        x: Number(nodeElement.dataset.nodeX || 0.5),
+        y: Number(nodeElement.dataset.nodeY || 0.5),
+        moved: false,
+      };
+      suppressBoardClick = false;
+      nodeElement.classList.add("dragging");
+      board.classList.add("dragging");
+      nodeElement.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    nodeElement.addEventListener("pointermove", (event) => {
+      if (!dragState || dragState.pointerId !== event.pointerId || dragState.nodeElement !== nodeElement) return;
+
+      const nextX = clampBoardCoordinate(
+        (event.clientX - dragState.boardRect.left - dragState.offsetX) / Math.max(dragState.boardRect.width, 1),
+      );
+      const nextY = clampBoardCoordinate(
+        (event.clientY - dragState.boardRect.top - dragState.offsetY) / Math.max(dragState.boardRect.height, 1),
+      );
+
+      dragState.x = nextX;
+      dragState.y = nextY;
+      dragState.moved = true;
+      setDetectiveBoardNodePosition(nodeElement, nextX, nextY);
+      updateDetectiveBoardConnections(board, dragState.nodeId);
+
+      if (state.editingDetectiveNodeId === dragState.nodeId) {
+        $("detectiveNodeX").value = Math.round(nextX * 1000) / 10;
+        $("detectiveNodeY").value = Math.round(nextY * 1000) / 10;
+      }
+
+      event.preventDefault();
+    });
+
+    const finishDrag = async (event) => {
+      if (!dragState || dragState.pointerId !== event.pointerId || dragState.nodeElement !== nodeElement) return;
+
+      const currentDrag = dragState;
+      dragState = null;
+      currentDrag.nodeElement.classList.remove("dragging");
+      board.classList.remove("dragging");
+      if (currentDrag.nodeElement.hasPointerCapture?.(event.pointerId)) {
+        currentDrag.nodeElement.releasePointerCapture(event.pointerId);
+      }
+      if (!currentDrag.moved) return;
+
+      suppressBoardClick = true;
+      window.setTimeout(() => {
+        suppressBoardClick = false;
+      }, 0);
+
+      try {
+        await persistDetectiveNodePosition(currentDrag.nodeId, currentDrag.x, currentDrag.y);
+      } catch {
+        renderAllWorldData();
+      }
+    };
+
+    nodeElement.addEventListener("pointerup", (event) => {
+      void finishDrag(event);
+    });
+    nodeElement.addEventListener("pointercancel", (event) => {
+      void finishDrag(event);
+    });
+    nodeElement.addEventListener("lostpointercapture", (event) => {
+      void finishDrag(event);
+    });
+  });
+
+  if (!state.detectiveConnections.length) {
+    connectionList.className = "grid-list empty";
+    connectionList.textContent = t("detective.noConnections");
+    return;
+  }
+
+  connectionList.className = "grid-list detective-connection-list";
+  connectionList.innerHTML = state.detectiveConnections
+    .map(
+      (connection) => `
+        <article class="item detective-connection-card">
+          <div class="item-top">
+            <div>
+              <div class="item-title">${escapeHtml(detectiveNodeTitle(connection.source_node_id))} -> ${escapeHtml(detectiveNodeTitle(connection.target_node_id))}</div>
+              <div class="item-meta">${escapeHtml(connection.label || t("detective.connection"))}${connection.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
+            </div>
+            <div class="item-actions">
+              <button class="ghost" data-edit-detective-connection="${connection.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+              <button class="ghost danger" data-delete-detective-connection="${connection.id}" type="button">${escapeHtml(t("detective.connectionDelete"))}</button>
+            </div>
+          </div>
+          ${connection.note ? `<div class="item-body">${escapeHtml(connection.note)}</div>` : ""}
+        </article>
+      `,
+    )
+    .join("");
+  connectionList.querySelectorAll("[data-edit-detective-connection]").forEach((button) => {
+    button.addEventListener("click", () => editDetectiveConnection(button.dataset.editDetectiveConnection));
+  });
+  connectionList.querySelectorAll("[data-delete-detective-connection]").forEach((button) => {
+    button.addEventListener("click", () => deleteDetectiveConnection(button.dataset.deleteDetectiveConnection));
+  });
+}
+
+function detectiveNodeTitle(id) {
+  return state.detectiveNodes.find((node) => node.id === id)?.title || id.slice(0, 8);
+}
+
+function randomTableName(id) {
+  return state.randomTables.find((table) => table.id === id)?.name || id.slice(0, 8);
 }
 
 export function renderRelationships() {
@@ -503,6 +1371,7 @@ export function renderProposals() {
         `${proposal.payload.entities.length} ${t("proposal.entities")}`,
         `${proposal.payload.relationships.length} ${t("proposal.relationships")}`,
         `${proposal.payload.world_rules.length} ${t("proposal.rules")}`,
+        `${(proposal.payload.random_table_rows || []).length} ${t("proposal.randomRows")}`,
       ].join(" - ");
       return `
         <article class="item">
@@ -565,6 +1434,18 @@ function renderProposalReview(proposal) {
       items: proposal.payload.world_rules.map((rule) => ({
         summary: `${t("rule.if")}: ${rule.condition} ${t("rule.then")}: ${rule.effect}`,
         excerpt: rule.source_excerpt || "",
+      })),
+    },
+    {
+      title: t("proposal.randomRows"),
+      kind: "random-table-row",
+      items: (proposal.payload.random_table_rows || []).map((row) => ({
+        summary: `${randomTableName(row.table_id)}: ${row.label ? `${row.label} - ` : ""}${row.result}`,
+        excerpt: row.source_excerpt || "",
+        changes: [
+          `${t("randomTable.weight")}: ${row.weight}`,
+          row.is_secret ? t("common.secretValue") : t("common.public"),
+        ],
       })),
     },
   ];

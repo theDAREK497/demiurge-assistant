@@ -193,18 +193,20 @@
 
         <section id="tab-proposals" class="tab-panel">
           <div class="split">
-            <form id="manualProposalForm" class="panel stack">
-              <h3 data-i18n="proposal.manualTitle">Manual extraction proposal</h3>
-              <label>
-                <span data-i18n="proposal.sourceText">Source text</span>
-                <textarea id="proposalSourceText" rows="4" required></textarea>
-              </label>
-              <label>
-                <span data-i18n="proposal.payloadJson">Payload JSON</span>
-                <textarea id="proposalPayload" rows="10" spellcheck="false">{ "entities": [], "relationships": [], "world_rules": [], "notes": [] }</textarea>
-              </label>
-              <button type="submit" data-i18n="proposal.create">Create proposal</button>
-            </form>
+            <details id="manualProposalEditor" class="panel editor-disclosure">
+              <summary data-i18n="proposal.manualTitle">Manual extraction proposal</summary>
+              <form id="manualProposalForm" class="stack disclosure-body">
+                <label>
+                  <span data-i18n="proposal.sourceText">Source text</span>
+                  <textarea id="proposalSourceText" rows="4" required></textarea>
+                </label>
+                <label>
+                  <span data-i18n="proposal.payloadJson">Payload JSON</span>
+                  <textarea id="proposalPayload" rows="10" spellcheck="false">{ "entities": [], "relationships": [], "world_rules": [], "random_table_rows": [], "notes": [] }</textarea>
+                </label>
+                <button type="submit" data-i18n="proposal.create">Create proposal</button>
+              </form>
+            </details>
 
             <div class="panel">
               <div class="panel-head">
@@ -243,7 +245,30 @@
         </section>
 
         <section id="tab-modules" class="tab-panel">
-          <div class="module-grid">
+          <div class="module-workspace">
+            <nav class="module-rail" aria-label="World sections">
+              <button class="module-rail-item active" type="button" data-module-nav="journal">
+                <strong data-i18n="journal.title">Event journal</strong>
+                <span data-i18n="entityType.event">Event</span>
+              </button>
+              <button class="module-rail-item" type="button" data-module-nav="quests">
+                <strong data-i18n="quest.title">Quest journal</strong>
+                <span>quest</span>
+              </button>
+              <button class="module-rail-item" type="button" data-module-nav="maps">
+                <strong data-i18n="map.title">Maps and locations</strong>
+                <span data-i18n="entityType.location">Location</span>
+              </button>
+              <button class="module-rail-item" type="button" data-module-nav="randomTables">
+                <strong data-i18n="randomTable.title">Random tables</strong>
+                <span data-i18n="randomTable.badge">Rolls</span>
+              </button>
+              <button class="module-rail-item" type="button" data-module-nav="detectiveBoard">
+                <strong data-i18n="detective.title">Detective board</strong>
+                <span data-i18n="detective.badge">Clues</span>
+              </button>
+            </nav>
+            <div class="module-stage">
             <div class="panel stack" data-module-panel="journal">
               <div class="panel-head">
                 <h3 data-i18n="journal.title">Event journal</h3>
@@ -264,7 +289,202 @@
                 <span class="badge" data-i18n="entityType.location">Location</span>
               </div>
               <p class="muted" data-i18n="map.hint">Add Location entities with image URLs for maps, regions, rooms, or pins.</p>
+              <div class="module-toolbar">
+                <div id="mapSummary" class="module-summary muted"></div>
+                <div class="inline-actions">
+                  <button id="openMapPinEditor" class="ghost" type="button" data-i18n="map.pinAdd">Add pin</button>
+                  <button id="openMapLocationCreator" type="button" data-i18n="map.locationAdd">New location</button>
+                </div>
+              </div>
+              <details id="mapPinEditor" class="panel-lite editor-disclosure">
+                <summary data-i18n="map.pinFormTitle">Add map pin</summary>
+                <form id="mapPinForm" class="stack disclosure-body">
+                  <div class="form-grid">
+                    <label>
+                      <span data-i18n="map.mapCard">Map card</span>
+                      <select id="mapPinMapEntity"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="map.linkedCard">Linked card</span>
+                      <select id="mapPinLinkedEntity"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="common.name">Name</span>
+                      <input id="mapPinTitle" type="text" required />
+                    </label>
+                    <label>
+                      <span data-i18n="map.pinNote">Note</span>
+                      <input id="mapPinNote" type="text" />
+                    </label>
+                    <label>
+                      <span data-i18n="map.pinX">X %</span>
+                      <input id="mapPinX" type="number" min="0" max="100" step="0.1" value="50" required />
+                    </label>
+                    <label>
+                      <span data-i18n="map.pinY">Y %</span>
+                      <input id="mapPinY" type="number" min="0" max="100" step="0.1" value="50" required />
+                    </label>
+                  </div>
+                  <label class="check">
+                    <input id="mapPinSecret" type="checkbox" />
+                    <span data-i18n="common.secret">Secret</span>
+                  </label>
+                  <div class="item-actions">
+                    <button id="mapPinSubmit" type="submit" data-i18n="map.pinAdd">Add pin</button>
+                    <button id="cancelMapPinEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+                  </div>
+                  <p class="muted" data-i18n="map.clickHint">Click an image to fill pin coordinates.</p>
+                </form>
+              </details>
               <div id="mapList" class="grid-list empty"></div>
+            </div>
+            <div class="panel stack" data-module-panel="randomTables">
+              <div class="panel-head">
+                <h3 data-i18n="randomTable.title">Random tables</h3>
+                <span class="badge" data-i18n="randomTable.badge">Rolls</span>
+              </div>
+              <p class="muted" data-i18n="randomTable.hint">Create quick roll tables for encounters, rumors, treasure, or session prompts.</p>
+              <details id="randomTableEditor" class="panel-lite editor-disclosure">
+                <summary data-i18n="randomTable.formTitle">Create random table</summary>
+                <form id="randomTableForm" class="stack disclosure-body">
+                  <label>
+                    <span data-i18n="common.name">Name</span>
+                    <input id="randomTableName" type="text" required />
+                  </label>
+                  <label>
+                    <span data-i18n="common.description">Description</span>
+                    <textarea id="randomTableDescription" rows="2"></textarea>
+                  </label>
+                  <label class="check">
+                    <input id="randomTableSecret" type="checkbox" />
+                    <span data-i18n="common.secret">Secret</span>
+                  </label>
+                  <div class="item-actions">
+                    <button id="randomTableSubmit" type="submit" data-i18n="randomTable.add">Add table</button>
+                    <button id="cancelRandomTableEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+                  </div>
+                </form>
+              </details>
+              <details id="randomTableRowEditor" class="panel-lite editor-disclosure">
+                <summary data-i18n="randomTable.rowFormTitle">Add table row</summary>
+                <form id="randomTableRowForm" class="stack disclosure-body">
+                  <div class="form-grid">
+                    <label>
+                      <span data-i18n="randomTable.table">Table</span>
+                      <select id="randomTableRowTable"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="randomTable.rowLabel">Label</span>
+                      <input id="randomTableRowLabel" type="text" />
+                    </label>
+                    <label>
+                      <span data-i18n="randomTable.weight">Weight</span>
+                      <input id="randomTableRowWeight" type="number" min="1" max="1000" value="1" required />
+                    </label>
+                    <label class="check inline-check">
+                      <input id="randomTableRowSecret" type="checkbox" />
+                      <span data-i18n="common.secret">Secret</span>
+                    </label>
+                  </div>
+                  <label>
+                    <span data-i18n="randomTable.result">Result</span>
+                    <textarea id="randomTableRowResult" rows="3" required></textarea>
+                  </label>
+                  <div class="item-actions">
+                    <button id="randomTableRowSubmit" type="submit" data-i18n="randomTable.rowAdd">Add row</button>
+                    <button id="cancelRandomTableRowEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+                  </div>
+                </form>
+              </details>
+              <div id="randomTableList" class="grid-list empty"></div>
+            </div>
+            <div class="panel stack" data-module-panel="detectiveBoard">
+              <div class="panel-head">
+                <h3 data-i18n="detective.title">Detective board</h3>
+                <span class="badge" data-i18n="detective.badge">Clues</span>
+              </div>
+              <p class="muted" data-i18n="detective.hint">Connect clues, suspects, places, and free notes without exposing secrets to players.</p>
+              <div class="module-toolbar">
+                <div id="detectiveSummary" class="module-summary muted"></div>
+                <div class="inline-actions">
+                  <button id="openDetectiveNodeEditor" class="ghost" type="button" data-i18n="detective.nodeAdd">Add node</button>
+                  <button id="openDetectiveConnectionEditor" type="button" data-i18n="detective.connectionAdd">Add connection</button>
+                </div>
+              </div>
+              <details id="detectiveNodeEditor" class="panel-lite editor-disclosure">
+                <summary data-i18n="detective.nodeFormTitle">Add board node</summary>
+                <form id="detectiveNodeForm" class="stack disclosure-body">
+                  <div class="form-grid">
+                    <label>
+                      <span data-i18n="detective.linkedCard">Linked card</span>
+                      <select id="detectiveNodeEntity"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="common.name">Name</span>
+                      <input id="detectiveNodeTitle" type="text" required />
+                    </label>
+                    <label>
+                      <span data-i18n="detective.nodeX">X %</span>
+                      <input id="detectiveNodeX" type="number" min="0" max="100" step="0.1" value="50" required />
+                    </label>
+                    <label>
+                      <span data-i18n="detective.nodeY">Y %</span>
+                      <input id="detectiveNodeY" type="number" min="0" max="100" step="0.1" value="50" required />
+                    </label>
+                  </div>
+                  <label>
+                    <span data-i18n="detective.note">Note</span>
+                    <textarea id="detectiveNodeNote" rows="3"></textarea>
+                  </label>
+                  <label>
+                    <span data-i18n="detective.evidenceUrl">Evidence URL</span>
+                    <input id="detectiveNodeEvidenceUrl" type="text" />
+                  </label>
+                  <label class="check">
+                    <input id="detectiveNodeSecret" type="checkbox" />
+                    <span data-i18n="common.secret">Secret</span>
+                  </label>
+                  <div class="item-actions">
+                    <button id="detectiveNodeSubmit" type="submit" data-i18n="detective.nodeAdd">Add node</button>
+                    <button id="cancelDetectiveNodeEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+                  </div>
+                  <p class="muted" data-i18n="detective.clickHint">Click the board background to fill node coordinates.</p>
+                </form>
+              </details>
+              <details id="detectiveConnectionEditor" class="panel-lite editor-disclosure">
+                <summary data-i18n="detective.connectionFormTitle">Add board connection</summary>
+                <form id="detectiveConnectionForm" class="stack disclosure-body">
+                  <div class="form-grid">
+                    <label>
+                      <span data-i18n="relationship.source">Source</span>
+                      <select id="detectiveConnectionSource"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="relationship.target">Target</span>
+                      <select id="detectiveConnectionTarget"></select>
+                    </label>
+                    <label>
+                      <span data-i18n="relationship.label">Label</span>
+                      <input id="detectiveConnectionLabel" type="text" />
+                    </label>
+                    <label class="check inline-check">
+                      <input id="detectiveConnectionSecret" type="checkbox" />
+                      <span data-i18n="common.secret">Secret</span>
+                    </label>
+                  </div>
+                  <label>
+                    <span data-i18n="detective.note">Note</span>
+                    <textarea id="detectiveConnectionNote" rows="2"></textarea>
+                  </label>
+                  <div class="item-actions">
+                    <button id="detectiveConnectionSubmit" type="submit" data-i18n="detective.connectionAdd">Add connection</button>
+                    <button id="cancelDetectiveConnectionEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+                  </div>
+                </form>
+              </details>
+              <div id="detectiveBoardView" class="detective-board empty"></div>
+              <div id="detectiveConnectionList" class="grid-list empty"></div>
+            </div>
             </div>
           </div>
         </section>
@@ -357,6 +577,14 @@
                 <label class="check">
                   <input data-module-toggle="maps" type="checkbox" />
                   <span data-i18n="map.title">Maps and locations</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="randomTables" type="checkbox" />
+                  <span data-i18n="randomTable.title">Random tables</span>
+                </label>
+                <label class="check">
+                  <input data-module-toggle="detectiveBoard" type="checkbox" />
+                  <span data-i18n="detective.title">Detective board</span>
                 </label>
               </div>
             </div>

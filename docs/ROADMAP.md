@@ -99,8 +99,11 @@ Status: started.
 - [x] Journal: first UI view over Event entities.
 - [x] Timeline: first UI view over Event entities.
 - [x] Quests: first UI view over entities tagged `quest`.
-- Random tables.
+- [x] Random tables with weighted rows and roll UI.
 - [x] Maps: first UI view over Location entities with images.
+- [x] Persistent map pins with linked entities and visibility filtering.
 - [x] UI toggles for optional worldbuilder modules.
-- Maps and pins with upload/drawing/editing.
-- Detective board.
+- [x] Detective board with evidence nodes, connections, and visibility filtering.
+- [x] AI-suggested random table rows through draft proposals.
+- Map drawing and richer map editing tools.
+- Richer detective board layout/editing and AI-suggested clues.

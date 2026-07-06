@@ -6,7 +6,20 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from worldbuilder_core.api.routes import assets, entities, import_export, llm, proposals, relationships, retrieval, world_rules, worlds
+from worldbuilder_core.api.routes import (
+    assets,
+    detective_board,
+    entities,
+    import_export,
+    llm,
+    map_pins,
+    proposals,
+    random_tables,
+    relationships,
+    retrieval,
+    world_rules,
+    worlds,
+)
 from worldbuilder_core.config import get_settings
 from worldbuilder_core.db import create_db_and_tables
 from worldbuilder_core.schemas import HealthRead
@@ -37,6 +50,9 @@ def create_app(*, create_tables_on_startup: bool = True) -> FastAPI:
     app.include_router(entities.router, prefix=settings.api_prefix)
     app.include_router(relationships.router, prefix=settings.api_prefix)
     app.include_router(world_rules.router, prefix=settings.api_prefix)
+    app.include_router(map_pins.router, prefix=settings.api_prefix)
+    app.include_router(random_tables.router, prefix=settings.api_prefix)
+    app.include_router(detective_board.router, prefix=settings.api_prefix)
     app.include_router(import_export.router, prefix=settings.api_prefix)
     app.include_router(llm.router, prefix=settings.api_prefix)
     app.include_router(retrieval.router, prefix=settings.api_prefix)

@@ -1,8 +1,16 @@
 from sqlalchemy import Select, or_, select
 from sqlalchemy.orm import Session
 
-from worldbuilder_core.models import Entity, Relationship, ViewerRole, World, WorldRule
-from worldbuilder_core.schemas import EntityRead, RelationshipRead, WorldContextRead, WorldRead, WorldRuleRead
+from worldbuilder_core.models import Entity, RandomTable, RandomTableRow, Relationship, ViewerRole, World, WorldRule
+from worldbuilder_core.schemas import (
+    EntityRead,
+    RandomTableRead,
+    RandomTableRowRead,
+    RelationshipRead,
+    WorldContextRead,
+    WorldRead,
+    WorldRuleRead,
+)
 
 
 class RetrievalError(Exception):
@@ -22,6 +30,7 @@ def build_world_context(
     max_entities: int = 12,
     max_rules: int = 8,
     max_relationships: int = 24,
+    max_random_tables: int = 12,
 ) -> WorldContextRead:
     world = session.get(World, world_id)
     if world is None:
@@ -36,6 +45,8 @@ def build_world_context(
         entity_ids=[entity.id for entity in entities],
         max_relationships=max_relationships,
     )
+    random_tables = _select_random_tables(session, world_id, role=role, max_random_tables=max_random_tables)
+    random_table_reads = [_random_table_read(table, role=role) for table in random_tables]
 
     return WorldContextRead(
         world=WorldRead.model_validate(world),
@@ -44,7 +55,14 @@ def build_world_context(
         entities=[EntityRead.model_validate(entity) for entity in entities],
         relationships=[RelationshipRead.model_validate(relationship) for relationship in relationships],
         world_rules=[WorldRuleRead.model_validate(rule) for rule in rules],
-        context_text=render_context_text(world, rules=rules, entities=entities, relationships=relationships),
+        random_tables=random_table_reads,
+        context_text=render_context_text(
+            world,
+            rules=rules,
+            entities=entities,
+            relationships=relationships,
+            random_tables=random_table_reads,
+        ),
     )
 
 
@@ -111,12 +129,44 @@ def _select_relationships(
     return relationships
 
 
+def _select_random_tables(
+    session: Session,
+    world_id: str,
+    *,
+    role: ViewerRole,
+    max_random_tables: int,
+) -> list[RandomTable]:
+    stmt: Select[tuple[RandomTable]] = (
+        select(RandomTable)
+        .where(RandomTable.world_id == world_id)
+        .order_by(RandomTable.updated_at.desc(), RandomTable.name.asc())
+        .limit(max_random_tables)
+    )
+    if role == ViewerRole.player:
+        stmt = stmt.where(RandomTable.is_secret.is_(False))
+    return list(session.scalars(stmt))
+
+
+def _random_table_read(table: RandomTable, *, role: ViewerRole) -> RandomTableRead:
+    payload = RandomTableRead.model_validate(table)
+    payload.rows = [RandomTableRowRead.model_validate(row) for row in _visible_rows(table, role)]
+    return payload
+
+
+def _visible_rows(table: RandomTable, role: ViewerRole) -> list[RandomTableRow]:
+    rows = sorted(table.rows, key=lambda row: (row.created_at, row.id))
+    if role == ViewerRole.player:
+        return [row for row in rows if not row.is_secret]
+    return rows
+
+
 def render_context_text(
     world: World,
     *,
     rules: list[WorldRule],
     entities: list[Entity],
     relationships: list[Relationship],
+    random_tables: list[RandomTableRead],
 ) -> str:
     lines = [f"World: {world.name}"]
     if world.description:
@@ -144,5 +194,15 @@ def render_context_text(
             label = relationship.label or relationship.type
             lines.append(f"- {source} --{label}--> {target}")
 
-    return "\n".join(lines)
+    if random_tables:
+        lines.append("")
+        lines.append("Random tables:")
+        for table in random_tables:
+            detail = table.description or "No description."
+            lines.append(f"- {table.name} [{table.id}] - {detail}")
+            for row in table.rows[:8]:
+                label = f"{row.label}: " if row.label else ""
+                secret = " (secret)" if row.is_secret else ""
+                lines.append(f"  - {label}{row.result} [weight {row.weight}]{secret}")
 
+    return "\n".join(lines)

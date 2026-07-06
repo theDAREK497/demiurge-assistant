@@ -107,6 +107,33 @@ def test_parse_extraction_payload_normalizes_llm_styled_output() -> None:
     assert payload.notes == ["Industrial island."]
 
 
+def test_parse_extraction_payload_normalizes_random_table_rows() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "random_table_entries": [
+            {
+              "random_table_id": "table-1",
+              "title": "Moon rumor",
+              "entry": "A moonlit courier offers a sealed contract.",
+              "weight": "3",
+              "is_secret": true
+            }
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert len(payload.random_table_rows) == 1
+    row = payload.random_table_rows[0]
+    assert row.table_id == "table-1"
+    assert row.label == "Moon rumor"
+    assert row.result == "A moonlit courier offers a sealed contract."
+    assert row.weight == 3
+    assert row.is_secret is True
+
+
 def test_build_extraction_request_contains_context_and_limit() -> None:
     request = build_extraction_request(
         source_text="Mira founded the Brass Guild.",
@@ -116,6 +143,7 @@ def test_build_extraction_request_contains_context_and_limit() -> None:
 
     assert request.temperature == 0
     assert "at most 12 entities" in request.messages[0].content
+    assert "random_table_rows" in request.messages[0].content
     assert "in Russian" in request.messages[0].content
     assert "World: Asterion" in request.messages[1].content
     assert "Mira founded the Brass Guild." in request.messages[1].content
@@ -145,6 +173,9 @@ def test_annotate_payload_with_source_excerpts_matches_relevant_sentences() -> N
           ],
           "world_rules": [
             {"condition": "When the river floods", "effect": "all bridges close"}
+          ],
+          "random_table_rows": [
+            {"table_id": "table-1", "label": "Bridge rumor", "result": "A ferryman knows a dry route through the old culverts."}
           ]
         }
         """,
@@ -155,10 +186,12 @@ def test_annotate_payload_with_source_excerpts_matches_relevant_sentences() -> N
         payload,
         (
             "Mira founded the Brass Guild in the lower ward. "
-            "When the river floods, all bridges close until dawn."
+            "When the river floods, all bridges close until dawn. "
+            "A ferryman knows a dry route through the old culverts."
         ),
     )
 
     assert annotated.entities[0].source_excerpt == "Mira founded the Brass Guild in the lower ward."
     assert annotated.relationships[0].source_excerpt == "Mira founded the Brass Guild in the lower ward."
     assert annotated.world_rules[0].source_excerpt == "When the river floods, all bridges close until dawn."
+    assert annotated.random_table_rows[0].source_excerpt == "A ferryman knows a dry route through the old culverts."

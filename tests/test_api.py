@@ -95,6 +95,302 @@ def test_world_entity_relationship_and_rule_flow() -> None:
     assert rule_response.json()["priority"] == 5
 
 
+def test_map_pins_respect_visibility_and_round_trip_in_exports() -> None:
+    client = build_client()
+
+    world_response = client.post("/api/worlds", json={"name": "Pinned Coast"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    map_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "location",
+            "name": "Harbor Map",
+            "attributes": {"image_url": "/assets/harbor.png"},
+        },
+    )
+    assert map_response.status_code == 201
+    map_id = map_response.json()["id"]
+
+    public_entity_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Old Lighthouse"},
+    )
+    assert public_entity_response.status_code == 201
+    public_entity_id = public_entity_response.json()["id"]
+
+    secret_entity_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "faction", "name": "Hidden Admiralty", "is_secret": True},
+    )
+    assert secret_entity_response.status_code == 201
+    secret_entity_id = secret_entity_response.json()["id"]
+
+    visible_pin_response = client.post(
+        f"/api/worlds/{world_id}/map-pins",
+        json={
+            "map_entity_id": map_id,
+            "linked_entity_id": public_entity_id,
+            "title": "Lighthouse",
+            "note": "Visible from the docks.",
+            "x": 0.25,
+            "y": 0.6,
+        },
+    )
+    assert visible_pin_response.status_code == 201
+    visible_pin_id = visible_pin_response.json()["id"]
+
+    secret_pin_response = client.post(
+        f"/api/worlds/{world_id}/map-pins",
+        json={"map_entity_id": map_id, "title": "Smuggler cache", "x": 0.5, "y": 0.5, "is_secret": True},
+    )
+    assert secret_pin_response.status_code == 201
+    secret_pin_id = secret_pin_response.json()["id"]
+
+    linked_secret_pin_response = client.post(
+        f"/api/worlds/{world_id}/map-pins",
+        json={
+            "map_entity_id": map_id,
+            "linked_entity_id": secret_entity_id,
+            "title": "Admiralty dock",
+            "x": 0.8,
+            "y": 0.2,
+        },
+    )
+    assert linked_secret_pin_response.status_code == 201
+
+    master_pins = client.get(f"/api/worlds/{world_id}/map-pins")
+    assert master_pins.status_code == 200
+    assert [pin["title"] for pin in master_pins.json()] == ["Lighthouse", "Smuggler cache", "Admiralty dock"]
+
+    player_pins = client.get(f"/api/worlds/{world_id}/map-pins?role=player")
+    assert player_pins.status_code == 200
+    assert [pin["title"] for pin in player_pins.json()] == ["Lighthouse"]
+
+    hidden_pin = client.get(f"/api/map-pins/{secret_pin_id}?role=player")
+    assert hidden_pin.status_code == 404
+
+    update_response = client.patch(f"/api/map-pins/{visible_pin_id}", json={"x": 0.3, "title": "North Lighthouse"})
+    assert update_response.status_code == 200
+    assert update_response.json()["x"] == 0.3
+    assert update_response.json()["title"] == "North Lighthouse"
+
+    exported_world = client.get(f"/api/worlds/{world_id}/export")
+    assert exported_world.status_code == 200
+    snapshot = exported_world.json()
+    assert len(snapshot["map_pins"]) == 3
+
+    imported_client = build_client()
+    import_response = imported_client.post("/api/worlds/import", json=snapshot)
+    assert import_response.status_code == 201
+    assert import_response.json()["imported_map_pins"] == 3
+
+    imported_pins = imported_client.get(f"/api/worlds/{world_id}/map-pins")
+    assert imported_pins.status_code == 200
+    assert [pin["title"] for pin in imported_pins.json()] == ["North Lighthouse", "Smuggler cache", "Admiralty dock"]
+
+
+def test_random_tables_crud_roll_visibility_and_export_import() -> None:
+    client = build_client()
+
+    world_response = client.post("/api/worlds", json={"name": "Dice Vale"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    table_response = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Road encounters", "description": "Things found on the old road."},
+    )
+    assert table_response.status_code == 201
+    table_id = table_response.json()["id"]
+
+    public_row_response = client.post(
+        f"/api/random-tables/{table_id}/rows",
+        json={"label": "Merchant", "result": "A tired merchant asks for directions.", "weight": 2},
+    )
+    assert public_row_response.status_code == 201
+    public_row_id = public_row_response.json()["id"]
+
+    secret_row_response = client.post(
+        f"/api/random-tables/{table_id}/rows",
+        json={"label": "Assassin", "result": "A hidden assassin follows the party.", "is_secret": True},
+    )
+    assert secret_row_response.status_code == 201
+    secret_row_id = secret_row_response.json()["id"]
+
+    secret_table_response = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "GM secrets", "is_secret": True},
+    )
+    assert secret_table_response.status_code == 201
+
+    master_tables = client.get(f"/api/worlds/{world_id}/random-tables")
+    assert master_tables.status_code == 200
+    assert [table["name"] for table in master_tables.json()] == ["GM secrets", "Road encounters"]
+    road_table = next(table for table in master_tables.json() if table["id"] == table_id)
+    assert [row["label"] for row in road_table["rows"]] == ["Merchant", "Assassin"]
+
+    player_tables = client.get(f"/api/worlds/{world_id}/random-tables?role=player")
+    assert player_tables.status_code == 200
+    assert [table["name"] for table in player_tables.json()] == ["Road encounters"]
+    assert [row["label"] for row in player_tables.json()[0]["rows"]] == ["Merchant"]
+
+    player_roll = client.post(f"/api/random-tables/{table_id}/roll?role=player")
+    assert player_roll.status_code == 200
+    assert player_roll.json()["row"]["id"] == public_row_id
+
+    update_table_response = client.patch(f"/api/random-tables/{table_id}", json={"name": "Road signs"})
+    assert update_table_response.status_code == 200
+    assert update_table_response.json()["name"] == "Road signs"
+
+    update_row_response = client.patch(f"/api/random-table-rows/{public_row_id}", json={"weight": 3})
+    assert update_row_response.status_code == 200
+    assert update_row_response.json()["weight"] == 3
+
+    exported_world = client.get(f"/api/worlds/{world_id}/export")
+    assert exported_world.status_code == 200
+    snapshot = exported_world.json()
+    assert len(snapshot["random_tables"]) == 2
+    assert len(snapshot["random_table_rows"]) == 2
+
+    imported_client = build_client()
+    import_response = imported_client.post("/api/worlds/import", json=snapshot)
+    assert import_response.status_code == 201
+    assert import_response.json()["imported_random_tables"] == 2
+    assert import_response.json()["imported_random_table_rows"] == 2
+
+    imported_tables = imported_client.get(f"/api/worlds/{world_id}/random-tables")
+    assert imported_tables.status_code == 200
+    assert [table["name"] for table in imported_tables.json()] == ["GM secrets", "Road signs"]
+
+    delete_secret_row = imported_client.delete(f"/api/random-table-rows/{secret_row_id}")
+    assert delete_secret_row.status_code == 204
+
+
+def test_detective_board_crud_visibility_and_export_import() -> None:
+    client = build_client()
+
+    world_response = client.post("/api/worlds", json={"name": "Casebook"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    public_entity_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Inspector Vale"},
+    )
+    assert public_entity_response.status_code == 201
+    public_entity_id = public_entity_response.json()["id"]
+
+    secret_entity_response = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "faction", "name": "Glass Hand", "is_secret": True},
+    )
+    assert secret_entity_response.status_code == 201
+    secret_entity_id = secret_entity_response.json()["id"]
+
+    inspector_node = client.post(
+        f"/api/worlds/{world_id}/detective-board/nodes",
+        json={
+            "entity_id": public_entity_id,
+            "title": "Inspector",
+            "note": "Owns the casebook.",
+            "evidence_url": "https://example.invalid/case",
+            "x": 0.25,
+            "y": 0.4,
+        },
+    )
+    assert inspector_node.status_code == 201
+    inspector_node_id = inspector_node.json()["id"]
+
+    clue_node = client.post(
+        f"/api/worlds/{world_id}/detective-board/nodes",
+        json={"title": "Blue wax seal", "x": 0.65, "y": 0.45},
+    )
+    assert clue_node.status_code == 201
+    clue_node_id = clue_node.json()["id"]
+
+    secret_node = client.post(
+        f"/api/worlds/{world_id}/detective-board/nodes",
+        json={"title": "Hidden patron", "x": 0.5, "y": 0.8, "is_secret": True},
+    )
+    assert secret_node.status_code == 201
+    secret_node_id = secret_node.json()["id"]
+
+    linked_secret_node = client.post(
+        f"/api/worlds/{world_id}/detective-board/nodes",
+        json={"entity_id": secret_entity_id, "title": "Glass Hand", "x": 0.8, "y": 0.2},
+    )
+    assert linked_secret_node.status_code == 201
+
+    visible_connection = client.post(
+        f"/api/worlds/{world_id}/detective-board/connections",
+        json={
+            "source_node_id": inspector_node_id,
+            "target_node_id": clue_node_id,
+            "label": "found",
+            "note": "Found near the archive.",
+        },
+    )
+    assert visible_connection.status_code == 201
+    visible_connection_id = visible_connection.json()["id"]
+
+    secret_connection = client.post(
+        f"/api/worlds/{world_id}/detective-board/connections",
+        json={
+            "source_node_id": inspector_node_id,
+            "target_node_id": secret_node_id,
+            "label": "suspects",
+            "is_secret": True,
+        },
+    )
+    assert secret_connection.status_code == 201
+
+    master_board = client.get(f"/api/worlds/{world_id}/detective-board")
+    assert master_board.status_code == 200
+    assert [node["title"] for node in master_board.json()["nodes"]] == [
+        "Inspector",
+        "Blue wax seal",
+        "Hidden patron",
+        "Glass Hand",
+    ]
+    assert [connection["label"] for connection in master_board.json()["connections"]] == ["found", "suspects"]
+
+    player_board = client.get(f"/api/worlds/{world_id}/detective-board?role=player")
+    assert player_board.status_code == 200
+    assert [node["title"] for node in player_board.json()["nodes"]] == ["Inspector", "Blue wax seal"]
+    assert [connection["label"] for connection in player_board.json()["connections"]] == ["found"]
+
+    update_node = client.patch(f"/api/detective-board/nodes/{clue_node_id}", json={"title": "Blue seal"})
+    assert update_node.status_code == 200
+    assert update_node.json()["title"] == "Blue seal"
+
+    update_connection = client.patch(f"/api/detective-board/connections/{visible_connection_id}", json={"label": "confirms"})
+    assert update_connection.status_code == 200
+    assert update_connection.json()["label"] == "confirms"
+
+    exported_world = client.get(f"/api/worlds/{world_id}/export")
+    assert exported_world.status_code == 200
+    snapshot = exported_world.json()
+    assert len(snapshot["detective_board_nodes"]) == 4
+    assert len(snapshot["detective_board_connections"]) == 2
+
+    imported_client = build_client()
+    import_response = imported_client.post("/api/worlds/import", json=snapshot)
+    assert import_response.status_code == 201
+    assert import_response.json()["imported_detective_board_nodes"] == 4
+    assert import_response.json()["imported_detective_board_connections"] == 2
+
+    imported_board = imported_client.get(f"/api/worlds/{world_id}/detective-board")
+    assert imported_board.status_code == 200
+    assert [node["title"] for node in imported_board.json()["nodes"]] == [
+        "Inspector",
+        "Blue seal",
+        "Hidden patron",
+        "Glass Hand",
+    ]
+
+
 def test_visual_app_is_served() -> None:
     client = build_client()
 
@@ -116,6 +412,11 @@ def test_visual_app_is_served() -> None:
     assert 'id="roleGate"' in app_response.text
     assert 'id="entityDrawerBackdrop"' in app_response.text
     assert 'id="entityReader"' in app_response.text
+    assert 'id="mapPinForm"' in app_response.text
+    assert 'id="randomTableForm"' in app_response.text
+    assert 'data-module-toggle="randomTables"' in app_response.text
+    assert 'id="detectiveNodeForm"' in app_response.text
+    assert 'data-module-toggle="detectiveBoard"' in app_response.text
 
     ru_response = client.get("/app/i18n/ru.json")
     assert ru_response.status_code == 200
@@ -134,6 +435,9 @@ def test_visual_app_is_served() -> None:
     assert render_response.status_code == 200
     assert "data-save-message" in render_response.text
     assert "entityReviewChanges" in render_response.text
+    assert "data-map-image" in render_response.text
+    assert "data-roll-random-table" in render_response.text
+    assert "detectiveBoardView" in render_response.text
     assert "entityReviewChangeDetails" in render_response.text
     assert "proposal-change-summary" in render_response.text
     assert "proposal-change-detail" in render_response.text
@@ -291,11 +595,16 @@ def test_world_export_import_preserves_stable_ids() -> None:
     assert import_response.status_code == 201
     assert import_response.json() == {
         "world_id": world_id,
-        "imported_entities": 2,
-        "imported_relationships": 1,
-        "imported_world_rules": 1,
-        "imported_proposals": 0,
-    }
+            "imported_entities": 2,
+            "imported_relationships": 1,
+            "imported_world_rules": 1,
+            "imported_map_pins": 0,
+            "imported_random_tables": 0,
+            "imported_random_table_rows": 0,
+            "imported_detective_board_nodes": 0,
+            "imported_detective_board_connections": 0,
+            "imported_proposals": 0,
+        }
 
     imported_world = target_client.get(f"/api/worlds/{world_id}")
     assert imported_world.status_code == 200
@@ -371,11 +680,31 @@ def test_world_context_respects_player_visibility() -> None:
     )
     assert secret_rule.status_code == 201
 
+    public_table = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Gate rumors"},
+    )
+    assert public_table.status_code == 201
+    public_table_id = public_table.json()["id"]
+    public_row = client.post(
+        f"/api/random-tables/{public_table_id}/rows",
+        json={"label": "Bell", "result": "A mirror bell rings at dusk."},
+    )
+    assert public_row.status_code == 201
+
+    secret_table = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Choir secrets", "is_secret": True},
+    )
+    assert secret_table.status_code == 201
+
     master_context = client.get(f"/api/worlds/{world_id}/context?role=master")
     assert master_context.status_code == 200
     assert "Silver Choir" in master_context.json()["context_text"]
+    assert "Choir secrets" in master_context.json()["context_text"]
     assert len(master_context.json()["relationships"]) == 1
     assert len(master_context.json()["world_rules"]) == 2
+    assert [table["name"] for table in master_context.json()["random_tables"]] == ["Choir secrets", "Gate rumors"]
 
     player_context = client.get(f"/api/worlds/{world_id}/context?role=player")
     assert player_context.status_code == 200
@@ -383,7 +712,9 @@ def test_world_context_respects_player_visibility() -> None:
     assert [entity["name"] for entity in player_payload["entities"]] == ["Mirror Gate"]
     assert player_payload["relationships"] == []
     assert len(player_payload["world_rules"]) == 1
+    assert [table["name"] for table in player_payload["random_tables"]] == ["Gate rumors"]
     assert "Silver Choir" not in player_payload["context_text"]
+    assert "Choir secrets" not in player_payload["context_text"]
 
 
 def test_extraction_proposal_apply_and_reject_flow() -> None:
@@ -447,6 +778,7 @@ def test_extraction_proposal_apply_and_reject_flow() -> None:
         "updated_entities": 0,
         "created_relationships": 1,
         "created_world_rules": 1,
+        "created_random_table_rows": 0,
     }
 
     applied_proposal = client.get(f"/api/proposals/{proposal_id}")
@@ -552,6 +884,7 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
             "entity_indices": [0],
             "relationship_indices": [],
             "world_rule_indices": [],
+            "random_table_row_indices": [],
         },
     )
     assert selected_response.status_code == 200
@@ -561,6 +894,7 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
         "updated_entities": 0,
         "created_relationships": 0,
         "created_world_rules": 0,
+        "created_random_table_rows": 0,
     }
 
     entities = client.get(f"/api/worlds/{world_id}/entities").json()
@@ -575,6 +909,86 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
         json={"entity_indices": [1]},
     )
     assert second_apply.status_code == 409
+
+
+def test_extraction_proposal_can_apply_random_table_rows() -> None:
+    client = build_client()
+    world_response = client.post("/api/worlds", json={"name": "Oracle Dice"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    table_response = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Moon market rumors"},
+    )
+    assert table_response.status_code == 201
+    table_id = table_response.json()["id"]
+
+    proposal_response = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Add rumors about the moon market: a bell tolls under the river and a masked buyer wants glass.",
+            "payload": {
+                "random_table_rows": [
+                    {
+                        "table_id": table_id,
+                        "label": "River bell",
+                        "result": "A bell tolls under the river when the moon market opens.",
+                        "weight": 2,
+                    },
+                    {
+                        "table_id": table_id,
+                        "label": "Masked buyer",
+                        "result": "A masked buyer pays double for unbroken glass.",
+                        "is_secret": True,
+                    },
+                ]
+            },
+        },
+    )
+    assert proposal_response.status_code == 201
+    proposal_id = proposal_response.json()["id"]
+    assert proposal_response.json()["payload"]["random_table_rows"][0]["source_excerpt"] is None
+
+    selected_response = client.post(
+        f"/api/proposals/{proposal_id}/apply-selected",
+        json={
+            "entity_indices": [],
+            "relationship_indices": [],
+            "world_rule_indices": [],
+            "random_table_row_indices": [1],
+        },
+    )
+    assert selected_response.status_code == 200
+    assert selected_response.json() == {
+        "proposal_id": proposal_id,
+        "created_entities": 0,
+        "updated_entities": 0,
+        "created_relationships": 0,
+        "created_world_rules": 0,
+        "created_random_table_rows": 1,
+    }
+
+    tables = client.get(f"/api/worlds/{world_id}/random-tables").json()
+    assert len(tables) == 1
+    assert [row["label"] for row in tables[0]["rows"]] == ["Masked buyer"]
+    assert tables[0]["rows"][0]["is_secret"] is True
+
+    invalid_response = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Bad table.",
+            "payload": {
+                "random_table_rows": [
+                    {
+                        "table_id": "missing-table",
+                        "result": "This should not validate.",
+                    }
+                ]
+            },
+        },
+    )
+    assert invalid_response.status_code == 422
 
 
 def test_extraction_proposal_can_update_existing_entity_by_match_id() -> None:
@@ -629,6 +1043,7 @@ def test_extraction_proposal_can_update_existing_entity_by_match_id() -> None:
         "updated_entities": 1,
         "created_relationships": 0,
         "created_world_rules": 0,
+        "created_random_table_rows": 0,
     }
 
     entities = client.get(f"/api/worlds/{world_id}/entities").json()

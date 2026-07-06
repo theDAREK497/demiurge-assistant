@@ -98,13 +98,15 @@ def build_extraction_request(
                 content=(
                     "You extract structured wiki updates for Worldbuilder Core. "
                     "Return only valid JSON matching this shape: "
-                    '{"entities":[],"relationships":[],"world_rules":[],"notes":[]}. '
+                    '{"entities":[],"relationships":[],"world_rules":[],"random_table_rows":[],"notes":[]}. '
                     "Entity types must be one of: character, location, faction, item, event, clue, concept. "
                     "Never invent stable UUIDs. Use client_id for new entities, and use match_entity_id only "
                     "when the context gives an existing entity UUID. "
                     "Relationships must use source_client_id or source_entity_id, and target_client_id or "
                     "target_entity_id, plus type. "
                     "World rules must use condition and effect strings. "
+                    "Random table rows must use table_id only from the context, plus result, optional label, "
+                    "weight, and is_secret. "
                     f"Write all names, summaries, descriptions, world rule conditions/effects, and notes in {language_name}. "
                     f"Extract at most {max_entities} entities. "
                     "Use status 'unknown' when uncertain, otherwise use 'proposed'."
@@ -135,7 +137,9 @@ def build_repair_request(
                     "Correct field names to the required schema and return corrected JSON only. "
                     "Use client_id instead of id for new entities. "
                     "Use source_client_id/target_client_id or source_entity_id/target_entity_id for relationships. "
-                    "Use condition/effect for world rules."
+                    "Use condition/effect for world rules. "
+                    "Use random_table_rows for proposed random table entries, and use only table_id values "
+                    "that appeared in the provided context."
                 ),
             ),
         ],
@@ -184,11 +188,15 @@ def _normalize_extraction_payload(raw: object) -> dict:
     entities = _normalize_entities(raw.get("entities"), entity_aliases)
     relationships = _normalize_relationships(raw.get("relationships"), entity_aliases)
     world_rules = _normalize_world_rules(raw.get("world_rules"))
+    random_table_rows = _normalize_random_table_rows(
+        raw.get("random_table_rows") or raw.get("random_table_entries") or raw.get("table_rows")
+    )
     notes = _normalize_notes(raw.get("notes"))
     return {
         "entities": entities,
         "relationships": relationships,
         "world_rules": world_rules,
+        "random_table_rows": random_table_rows,
         "notes": notes,
     }
 
@@ -345,6 +353,43 @@ def _normalize_world_rules(raw_world_rules: object) -> list[dict]:
     return rules
 
 
+def _normalize_random_table_rows(raw_rows: object) -> list[dict]:
+    rows: list[dict] = []
+
+    for raw_row in _as_list(raw_rows):
+        if not isinstance(raw_row, dict):
+            continue
+
+        table_id = _clean_string(
+            raw_row.get("table_id")
+            or raw_row.get("random_table_id")
+            or raw_row.get("table")
+            or raw_row.get("target_table_id")
+        )
+        result = _clean_string(
+            raw_row.get("result")
+            or raw_row.get("text")
+            or raw_row.get("entry")
+            or raw_row.get("outcome")
+            or raw_row.get("description")
+        )
+        if not table_id or not result:
+            continue
+
+        rows.append(
+            {
+                "table_id": table_id,
+                "source_excerpt": _clean_string(raw_row.get("source_excerpt")),
+                "label": _clean_string(raw_row.get("label") or raw_row.get("name") or raw_row.get("title")),
+                "result": result,
+                "weight": _normalize_weight(raw_row.get("weight")),
+                "is_secret": bool(raw_row.get("is_secret", False)),
+            }
+        )
+
+    return rows
+
+
 def _normalize_notes(raw_notes: object) -> list[str]:
     notes: list[str] = []
     for raw_note in _as_list(raw_notes):
@@ -401,7 +446,25 @@ def annotate_payload_with_source_excerpts(payload: ExtractionPayload, source_tex
         for rule in payload.world_rules
     ]
 
-    return payload.model_copy(update={"entities": entities, "relationships": relationships, "world_rules": rules})
+    random_table_rows = [
+        row.model_copy(
+            update={
+                "source_excerpt": row.source_excerpt
+                or _find_best_excerpt(sentences, [row.label or "", row.result])
+                or fallback_excerpt,
+            }
+        )
+        for row in payload.random_table_rows
+    ]
+
+    return payload.model_copy(
+        update={
+            "entities": entities,
+            "relationships": relationships,
+            "world_rules": rules,
+            "random_table_rows": random_table_rows,
+        }
+    )
 
 
 def _normalize_entity_type(raw_type: object) -> str:
@@ -424,6 +487,14 @@ def _normalize_priority(raw_priority: object) -> int:
     except (TypeError, ValueError):
         return 3
     return max(1, min(priority, 5))
+
+
+def _normalize_weight(raw_weight: object) -> int:
+    try:
+        weight = int(raw_weight)
+    except (TypeError, ValueError):
+        return 1
+    return max(1, min(weight, 1000))
 
 
 def _normalize_confidence(raw_confidence: object) -> float:

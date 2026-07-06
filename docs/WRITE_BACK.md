@@ -43,6 +43,15 @@ Content-Type: application/json
         "target_client_id": "rust-garden",
         "type": "founded"
       }
+    ],
+    "random_table_rows": [
+      {
+        "table_id": "existing-random-table-uuid",
+        "label": "Market rumor",
+        "result": "A masked buyer pays double for unbroken glass.",
+        "weight": 1,
+        "is_secret": false
+      }
     ]
   }
 }
@@ -112,11 +121,14 @@ fails, the completion is still returned with `wiki_save_error`.
 
 ```http
 POST /api/proposals/{proposal_id}/apply
+POST /api/proposals/{proposal_id}/apply-selected
 POST /api/proposals/{proposal_id}/reject
 ```
 
 Applying a proposal writes extracted entities, relationships, and rules into the
-wiki. Applying the same proposal twice is blocked.
+wiki. It can also add reviewed rows to existing random tables. Applying the same
+proposal twice is blocked. The UI supports applying all draft items or only the
+checked items.
 
 ## Statuses
 
@@ -133,5 +145,5 @@ Wiki item status:
 - `unknown`;
 - `rejected`.
 
-The current MVP applies a whole proposal at once. Fine-grained per-item review is
-planned for the UI milestone.
+Fine-grained review is available for supported proposal item types. New proposal
+item families should be added to the review UI before they become writable.

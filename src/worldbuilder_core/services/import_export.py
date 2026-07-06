@@ -4,11 +4,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from worldbuilder_core import __version__
-from worldbuilder_core.models import Entity, ExtractionProposal, Relationship, World, WorldRule
+from worldbuilder_core.models import (
+    DetectiveBoardConnection,
+    DetectiveBoardNode,
+    Entity,
+    ExtractionProposal,
+    MapPin,
+    RandomTable,
+    RandomTableRow,
+    Relationship,
+    World,
+    WorldRule,
+)
 from worldbuilder_core.schemas import (
+    DetectiveBoardConnectionSnapshot,
+    DetectiveBoardNodeSnapshot,
     EntitySnapshot,
     ExtractionProposalSnapshot,
     ExportMetadata,
+    MapPinSnapshot,
+    RandomTableRowSnapshot,
+    RandomTableSnapshot,
     RelationshipSnapshot,
     WorldExport,
     WorldImportResult,
@@ -62,6 +78,44 @@ def export_world(session: Session, world_id: str) -> WorldExport:
             .order_by(ExtractionProposal.created_at.asc(), ExtractionProposal.id.asc())
         )
     )
+    map_pins = list(
+        session.scalars(
+            select(MapPin).where(MapPin.world_id == world_id).order_by(MapPin.created_at.asc(), MapPin.id.asc())
+        )
+    )
+    random_tables = list(
+        session.scalars(
+            select(RandomTable)
+            .where(RandomTable.world_id == world_id)
+            .order_by(RandomTable.created_at.asc(), RandomTable.id.asc())
+        )
+    )
+    table_ids = [table.id for table in random_tables]
+    random_table_rows = (
+        list(
+            session.scalars(
+                select(RandomTableRow)
+                .where(RandomTableRow.table_id.in_(table_ids))
+                .order_by(RandomTableRow.created_at.asc(), RandomTableRow.id.asc())
+            )
+        )
+        if table_ids
+        else []
+    )
+    detective_nodes = list(
+        session.scalars(
+            select(DetectiveBoardNode)
+            .where(DetectiveBoardNode.world_id == world_id)
+            .order_by(DetectiveBoardNode.created_at.asc(), DetectiveBoardNode.id.asc())
+        )
+    )
+    detective_connections = list(
+        session.scalars(
+            select(DetectiveBoardConnection)
+            .where(DetectiveBoardConnection.world_id == world_id)
+            .order_by(DetectiveBoardConnection.created_at.asc(), DetectiveBoardConnection.id.asc())
+        )
+    )
 
     return WorldExport(
         metadata=ExportMetadata(
@@ -73,6 +127,13 @@ def export_world(session: Session, world_id: str) -> WorldExport:
         entities=[EntitySnapshot.model_validate(entity) for entity in entities],
         relationships=[RelationshipSnapshot.model_validate(relationship) for relationship in relationships],
         world_rules=[WorldRuleSnapshot.model_validate(rule) for rule in rules],
+        map_pins=[MapPinSnapshot.model_validate(pin) for pin in map_pins],
+        random_tables=[RandomTableSnapshot.model_validate(table) for table in random_tables],
+        random_table_rows=[RandomTableRowSnapshot.model_validate(row) for row in random_table_rows],
+        detective_board_nodes=[DetectiveBoardNodeSnapshot.model_validate(node) for node in detective_nodes],
+        detective_board_connections=[
+            DetectiveBoardConnectionSnapshot.model_validate(connection) for connection in detective_connections
+        ],
         proposals=[ExtractionProposalSnapshot.model_validate(proposal) for proposal in proposals],
     )
 
@@ -101,6 +162,24 @@ def import_world(session: Session, snapshot: WorldExport, *, replace_existing: b
     for rule_data in snapshot.world_rules:
         session.add(WorldRule(**rule_data.model_dump()))
 
+    for pin_data in snapshot.map_pins:
+        session.add(MapPin(**pin_data.model_dump()))
+
+    for table_data in snapshot.random_tables:
+        data = table_data.model_dump(exclude={"rows"})
+        session.add(RandomTable(**data))
+    session.flush()
+
+    for row_data in snapshot.random_table_rows:
+        session.add(RandomTableRow(**row_data.model_dump()))
+
+    for node_data in snapshot.detective_board_nodes:
+        session.add(DetectiveBoardNode(**node_data.model_dump()))
+    session.flush()
+
+    for connection_data in snapshot.detective_board_connections:
+        session.add(DetectiveBoardConnection(**connection_data.model_dump()))
+
     for proposal_data in snapshot.proposals:
         data = proposal_data.model_dump()
         data["payload"] = proposal_data.payload.model_dump(mode="json")
@@ -113,6 +192,11 @@ def import_world(session: Session, snapshot: WorldExport, *, replace_existing: b
         imported_entities=len(snapshot.entities),
         imported_relationships=len(snapshot.relationships),
         imported_world_rules=len(snapshot.world_rules),
+        imported_map_pins=len(snapshot.map_pins),
+        imported_random_tables=len(snapshot.random_tables),
+        imported_random_table_rows=len(snapshot.random_table_rows),
+        imported_detective_board_nodes=len(snapshot.detective_board_nodes),
+        imported_detective_board_connections=len(snapshot.detective_board_connections),
         imported_proposals=len(snapshot.proposals),
     )
 
@@ -127,11 +211,21 @@ def validate_snapshot(snapshot: WorldExport) -> None:
     entity_ids = [entity.id for entity in snapshot.entities]
     relationship_ids = [relationship.id for relationship in snapshot.relationships]
     rule_ids = [rule.id for rule in snapshot.world_rules]
+    map_pin_ids = [pin.id for pin in snapshot.map_pins]
+    random_table_ids = [table.id for table in snapshot.random_tables]
+    random_table_row_ids = [row.id for row in snapshot.random_table_rows]
+    detective_node_ids = [node.id for node in snapshot.detective_board_nodes]
+    detective_connection_ids = [connection.id for connection in snapshot.detective_board_connections]
     proposal_ids = [proposal.id for proposal in snapshot.proposals]
 
     _ensure_unique(entity_ids, "entity ids")
     _ensure_unique(relationship_ids, "relationship ids")
     _ensure_unique(rule_ids, "world rule ids")
+    _ensure_unique(map_pin_ids, "map pin ids")
+    _ensure_unique(random_table_ids, "random table ids")
+    _ensure_unique(random_table_row_ids, "random table row ids")
+    _ensure_unique(detective_node_ids, "detective board node ids")
+    _ensure_unique(detective_connection_ids, "detective board connection ids")
     _ensure_unique(proposal_ids, "proposal ids")
 
     entity_id_set = set(entity_ids)
@@ -150,6 +244,38 @@ def validate_snapshot(snapshot: WorldExport) -> None:
     for rule in snapshot.world_rules:
         if rule.world_id != world_id:
             raise InvalidSnapshotError(f"World rule {rule.id!r} belongs to another world")
+
+    for pin in snapshot.map_pins:
+        if pin.world_id != world_id:
+            raise InvalidSnapshotError(f"Map pin {pin.id!r} belongs to another world")
+        if pin.map_entity_id not in entity_id_set:
+            raise InvalidSnapshotError(f"Map pin {pin.id!r} has missing map entity")
+        if pin.linked_entity_id and pin.linked_entity_id not in entity_id_set:
+            raise InvalidSnapshotError(f"Map pin {pin.id!r} has missing linked entity")
+
+    random_table_id_set = set(random_table_ids)
+    for table in snapshot.random_tables:
+        if table.world_id != world_id:
+            raise InvalidSnapshotError(f"Random table {table.id!r} belongs to another world")
+
+    for row in snapshot.random_table_rows:
+        if row.table_id not in random_table_id_set:
+            raise InvalidSnapshotError(f"Random table row {row.id!r} has missing table")
+
+    detective_node_id_set = set(detective_node_ids)
+    for node in snapshot.detective_board_nodes:
+        if node.world_id != world_id:
+            raise InvalidSnapshotError(f"Detective board node {node.id!r} belongs to another world")
+        if node.entity_id and node.entity_id not in entity_id_set:
+            raise InvalidSnapshotError(f"Detective board node {node.id!r} has missing entity")
+
+    for connection in snapshot.detective_board_connections:
+        if connection.world_id != world_id:
+            raise InvalidSnapshotError(f"Detective board connection {connection.id!r} belongs to another world")
+        if connection.source_node_id not in detective_node_id_set:
+            raise InvalidSnapshotError(f"Detective board connection {connection.id!r} has missing source node")
+        if connection.target_node_id not in detective_node_id_set:
+            raise InvalidSnapshotError(f"Detective board connection {connection.id!r} has missing target node")
 
     for proposal in snapshot.proposals:
         if proposal.world_id != world_id:

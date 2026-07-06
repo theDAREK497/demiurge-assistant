@@ -66,6 +66,13 @@ class World(TimestampMixin, Base):
     entities: Mapped[list["Entity"]] = relationship(back_populates="world", cascade="all, delete-orphan")
     relationships: Mapped[list["Relationship"]] = relationship(back_populates="world", cascade="all, delete-orphan")
     rules: Mapped[list["WorldRule"]] = relationship(back_populates="world", cascade="all, delete-orphan")
+    map_pins: Mapped[list["MapPin"]] = relationship(back_populates="world", cascade="all, delete-orphan")
+    random_tables: Mapped[list["RandomTable"]] = relationship(back_populates="world", cascade="all, delete-orphan")
+    detective_nodes: Mapped[list["DetectiveBoardNode"]] = relationship(back_populates="world", cascade="all, delete-orphan")
+    detective_connections: Mapped[list["DetectiveBoardConnection"]] = relationship(
+        back_populates="world",
+        cascade="all, delete-orphan",
+    )
     proposals: Mapped[list["ExtractionProposal"]] = relationship(back_populates="world", cascade="all, delete-orphan")
 
 
@@ -137,6 +144,87 @@ class WorldRule(TimestampMixin, Base):
     )
 
     world: Mapped[World] = relationship(back_populates="rules")
+
+
+class MapPin(TimestampMixin, Base):
+    __tablename__ = "map_pins"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    map_entity_id: Mapped[str] = mapped_column(ForeignKey("entities.id", ondelete="CASCADE"), index=True, nullable=False)
+    linked_entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"), index=True, nullable=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    x: Mapped[float] = mapped_column(Float, nullable=False)
+    y: Mapped[float] = mapped_column(Float, nullable=False)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="map_pins")
+    map_entity: Mapped[Entity] = relationship(foreign_keys=[map_entity_id])
+    linked_entity: Mapped[Entity | None] = relationship(foreign_keys=[linked_entity_id])
+
+
+class RandomTable(TimestampMixin, Base):
+    __tablename__ = "random_tables"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="random_tables")
+    rows: Mapped[list["RandomTableRow"]] = relationship(
+        back_populates="table",
+        cascade="all, delete-orphan",
+        order_by="RandomTableRow.created_at",
+    )
+
+
+class RandomTableRow(TimestampMixin, Base):
+    __tablename__ = "random_table_rows"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    table_id: Mapped[str] = mapped_column(ForeignKey("random_tables.id", ondelete="CASCADE"), index=True, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    weight: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    table: Mapped[RandomTable] = relationship(back_populates="rows")
+
+
+class DetectiveBoardNode(TimestampMixin, Base):
+    __tablename__ = "detective_board_nodes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    entity_id: Mapped[str | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"), index=True, nullable=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    x: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    y: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="detective_nodes")
+    entity: Mapped[Entity | None] = relationship(foreign_keys=[entity_id])
+
+
+class DetectiveBoardConnection(TimestampMixin, Base):
+    __tablename__ = "detective_board_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    source_node_id: Mapped[str] = mapped_column(ForeignKey("detective_board_nodes.id", ondelete="CASCADE"), index=True, nullable=False)
+    target_node_id: Mapped[str] = mapped_column(ForeignKey("detective_board_nodes.id", ondelete="CASCADE"), index=True, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="detective_connections")
+    source_node: Mapped[DetectiveBoardNode] = relationship(foreign_keys=[source_node_id])
+    target_node: Mapped[DetectiveBoardNode] = relationship(foreign_keys=[target_node_id])
 
 
 class ExtractionProposal(TimestampMixin, Base):

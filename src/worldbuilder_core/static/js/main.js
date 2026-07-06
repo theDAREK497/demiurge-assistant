@@ -2,6 +2,7 @@ import {
   buildContext,
   createEntity,
   createManualProposal,
+  saveMapPin,
   createRelationship,
   createRule,
   createWorld,
@@ -11,17 +12,39 @@ import {
   loadLlmConfig,
   loadWorldData,
   loadWorlds,
+  openDetectiveConnectionEditor,
+  openDetectiveNodeEditor,
+  openMapPinEditor,
   rerenderLocalizedState,
+  resetDetectiveConnectionForm,
+  resetDetectiveNodeForm,
   resetEntityForm,
+  resetMapPinForm,
+  resetRandomTableForm,
+  resetRandomTableRowForm,
+  saveDetectiveConnection,
+  saveDetectiveNode,
+  saveRandomTable,
+  saveRandomTableRow,
   saveLlmConfig,
   sendChat,
   startCreateEntity,
+  startCreateEntityWithType,
   testLlmConnection,
   uploadEntityImage,
 } from "./actions.js";
 import { $, toast, wrap } from "./dom.js";
 import { language, setLanguage, t } from "./i18n.js";
-import { activateTab, closeEntityReader, openSelectedEntityForEdit, renderChat, renderEntityFormMode, renderInviteLinks, renderModuleVisibility } from "./render.js";
+import {
+  activateModuleView,
+  activateTab,
+  closeEntityReader,
+  openSelectedEntityForEdit,
+  renderChat,
+  renderEntityFormMode,
+  renderInviteLinks,
+  renderModuleVisibility,
+} from "./render.js";
 import { defaultModuleSettings, state } from "./state.js";
 import { setTheme, theme } from "./theme.js";
 
@@ -38,6 +61,11 @@ function bindEvents() {
   $("entityForm").addEventListener("submit", wrap(createEntity));
   $("relationshipForm").addEventListener("submit", wrap(createRelationship));
   $("ruleForm").addEventListener("submit", wrap(createRule));
+  $("mapPinForm").addEventListener("submit", wrap(saveMapPin));
+  $("randomTableForm").addEventListener("submit", wrap(saveRandomTable));
+  $("randomTableRowForm").addEventListener("submit", wrap(saveRandomTableRow));
+  $("detectiveNodeForm").addEventListener("submit", wrap(saveDetectiveNode));
+  $("detectiveConnectionForm").addEventListener("submit", wrap(saveDetectiveConnection));
   $("chatForm").addEventListener("submit", sendChat);
   $("manualProposalForm").addEventListener("submit", wrap(createManualProposal));
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
@@ -47,6 +75,15 @@ function bindEvents() {
   $("closeEntityDrawer").addEventListener("click", resetEntityForm);
   $("closeEntityReader").addEventListener("click", closeEntityReader);
   $("readerEditEntity").addEventListener("click", openSelectedEntityForEdit);
+  $("cancelMapPinEdit").addEventListener("click", resetMapPinForm);
+  $("cancelRandomTableEdit").addEventListener("click", resetRandomTableForm);
+  $("cancelRandomTableRowEdit").addEventListener("click", resetRandomTableRowForm);
+  $("cancelDetectiveNodeEdit").addEventListener("click", resetDetectiveNodeForm);
+  $("cancelDetectiveConnectionEdit").addEventListener("click", resetDetectiveConnectionForm);
+  $("openMapPinEditor").addEventListener("click", openMapPinEditor);
+  $("openMapLocationCreator").addEventListener("click", () => startCreateEntityWithType("location"));
+  $("openDetectiveNodeEditor").addEventListener("click", openDetectiveNodeEditor);
+  $("openDetectiveConnectionEditor").addEventListener("click", openDetectiveConnectionEditor);
   $("entityImageFile").addEventListener("change", wrap(uploadEntityImage));
 
   $("refreshWorlds").addEventListener("click", wrap(loadWorlds));
@@ -85,6 +122,9 @@ function bindEvents() {
       localStorage.setItem("worldbuilder.modules", JSON.stringify(state.moduleSettings));
       renderModuleVisibility();
     });
+  });
+  document.querySelectorAll("[data-module-nav]").forEach((button) => {
+    button.addEventListener("click", () => activateModuleView(button.dataset.moduleNav));
   });
   $("clearChat").addEventListener("click", () => {
     state.chatMessages = [];
@@ -133,6 +173,9 @@ function bootModuleSettings() {
 export async function boot() {
   try {
     await setLanguage(language());
+    if ($("languageSelect")?.options?.[0]) {
+      $("languageSelect").options[0].textContent = "Русский";
+    }
     setTheme(theme());
     bindTabs();
     bindEvents();
@@ -141,6 +184,11 @@ export async function boot() {
     renderInviteLinks();
     $("contextPreview").textContent = t("context.empty");
     renderEntityFormMode();
+    resetMapPinForm();
+    resetRandomTableForm();
+    resetRandomTableRowForm();
+    resetDetectiveNodeForm();
+    resetDetectiveConnectionForm();
     renderModuleVisibility();
     renderChat();
     await loadHealth();

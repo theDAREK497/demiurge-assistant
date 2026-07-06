@@ -147,6 +147,174 @@ class WorldRuleSnapshot(WorldRuleRead):
     pass
 
 
+class MapPinBase(BaseModel):
+    map_entity_id: str
+    linked_entity_id: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    note: str | None = None
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    is_secret: bool = False
+
+
+class MapPinCreate(MapPinBase):
+    pass
+
+
+class MapPinUpdate(BaseModel):
+    map_entity_id: str | None = None
+    linked_entity_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    note: str | None = None
+    x: float | None = Field(default=None, ge=0.0, le=1.0)
+    y: float | None = Field(default=None, ge=0.0, le=1.0)
+    is_secret: bool | None = None
+
+
+class MapPinRead(MapPinBase, ORMModel):
+    id: str
+    world_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MapPinSnapshot(MapPinRead):
+    pass
+
+
+class RandomTableRowBase(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    result: str = Field(min_length=1)
+    weight: int = Field(default=1, ge=1, le=1000)
+    is_secret: bool = False
+
+
+class RandomTableRowCreate(RandomTableRowBase):
+    pass
+
+
+class RandomTableRowUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    result: str | None = Field(default=None, min_length=1)
+    weight: int | None = Field(default=None, ge=1, le=1000)
+    is_secret: bool | None = None
+
+
+class RandomTableRowRead(RandomTableRowBase, ORMModel):
+    id: str
+    table_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class RandomTableRowSnapshot(RandomTableRowRead):
+    pass
+
+
+class RandomTableBase(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    is_secret: bool = False
+
+
+class RandomTableCreate(RandomTableBase):
+    pass
+
+
+class RandomTableUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    is_secret: bool | None = None
+
+
+class RandomTableRead(RandomTableBase, ORMModel):
+    id: str
+    world_id: str
+    rows: list[RandomTableRowRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class RandomTableSnapshot(RandomTableRead):
+    pass
+
+
+class RandomTableRollRead(BaseModel):
+    table_id: str
+    row: RandomTableRowRead
+
+
+class DetectiveBoardNodeBase(BaseModel):
+    entity_id: str | None = None
+    title: str = Field(min_length=1, max_length=200)
+    note: str | None = None
+    evidence_url: str | None = None
+    x: float = Field(default=0.5, ge=0.0, le=1.0)
+    y: float = Field(default=0.5, ge=0.0, le=1.0)
+    is_secret: bool = False
+
+
+class DetectiveBoardNodeCreate(DetectiveBoardNodeBase):
+    pass
+
+
+class DetectiveBoardNodeUpdate(BaseModel):
+    entity_id: str | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    note: str | None = None
+    evidence_url: str | None = None
+    x: float | None = Field(default=None, ge=0.0, le=1.0)
+    y: float | None = Field(default=None, ge=0.0, le=1.0)
+    is_secret: bool | None = None
+
+
+class DetectiveBoardNodeRead(DetectiveBoardNodeBase, ORMModel):
+    id: str
+    world_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DetectiveBoardNodeSnapshot(DetectiveBoardNodeRead):
+    pass
+
+
+class DetectiveBoardConnectionBase(BaseModel):
+    source_node_id: str
+    target_node_id: str
+    label: str | None = Field(default=None, max_length=200)
+    note: str | None = None
+    is_secret: bool = False
+
+
+class DetectiveBoardConnectionCreate(DetectiveBoardConnectionBase):
+    pass
+
+
+class DetectiveBoardConnectionUpdate(BaseModel):
+    source_node_id: str | None = None
+    target_node_id: str | None = None
+    label: str | None = Field(default=None, max_length=200)
+    note: str | None = None
+    is_secret: bool | None = None
+
+
+class DetectiveBoardConnectionRead(DetectiveBoardConnectionBase, ORMModel):
+    id: str
+    world_id: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DetectiveBoardConnectionSnapshot(DetectiveBoardConnectionRead):
+    pass
+
+
+class DetectiveBoardRead(BaseModel):
+    nodes: list[DetectiveBoardNodeRead] = Field(default_factory=list)
+    connections: list[DetectiveBoardConnectionRead] = Field(default_factory=list)
+
+
 class ExportMetadata(BaseModel):
     schema_version: str
     app_version: str
@@ -159,6 +327,11 @@ class WorldExport(BaseModel):
     entities: list[EntitySnapshot] = Field(default_factory=list)
     relationships: list[RelationshipSnapshot] = Field(default_factory=list)
     world_rules: list[WorldRuleSnapshot] = Field(default_factory=list)
+    map_pins: list[MapPinSnapshot] = Field(default_factory=list)
+    random_tables: list[RandomTableSnapshot] = Field(default_factory=list)
+    random_table_rows: list[RandomTableRowSnapshot] = Field(default_factory=list)
+    detective_board_nodes: list[DetectiveBoardNodeSnapshot] = Field(default_factory=list)
+    detective_board_connections: list[DetectiveBoardConnectionSnapshot] = Field(default_factory=list)
     proposals: list[ExtractionProposalSnapshot] = Field(default_factory=list)
 
 
@@ -167,6 +340,11 @@ class WorldImportResult(BaseModel):
     imported_entities: int
     imported_relationships: int
     imported_world_rules: int
+    imported_map_pins: int = 0
+    imported_random_tables: int = 0
+    imported_random_table_rows: int = 0
+    imported_detective_board_nodes: int = 0
+    imported_detective_board_connections: int = 0
     imported_proposals: int = 0
 
 
@@ -232,6 +410,7 @@ class WorldContextRead(BaseModel):
     entities: list[EntityRead] = Field(default_factory=list)
     relationships: list[RelationshipRead] = Field(default_factory=list)
     world_rules: list[WorldRuleRead] = Field(default_factory=list)
+    random_tables: list[RandomTableRead] = Field(default_factory=list)
     context_text: str
 
 
@@ -306,10 +485,20 @@ class ExtractedWorldRuleDraft(BaseModel):
     status: VerificationStatus = VerificationStatus.proposed
 
 
+class ExtractedRandomTableRowDraft(BaseModel):
+    table_id: str
+    source_excerpt: str | None = Field(default=None, max_length=240)
+    label: str | None = Field(default=None, max_length=200)
+    result: str = Field(min_length=1)
+    weight: int = Field(default=1, ge=1, le=1000)
+    is_secret: bool = False
+
+
 class ExtractionPayload(BaseModel):
     entities: list[ExtractedEntityDraft] = Field(default_factory=list, max_length=50)
     relationships: list[ExtractedRelationshipDraft] = Field(default_factory=list, max_length=100)
     world_rules: list[ExtractedWorldRuleDraft] = Field(default_factory=list, max_length=25)
+    random_table_rows: list[ExtractedRandomTableRowDraft] = Field(default_factory=list, max_length=100)
     notes: list[str] = Field(default_factory=list, max_length=25)
 
     @model_validator(mode="after")
@@ -355,12 +544,14 @@ class ProposalApplyResult(BaseModel):
     updated_entities: int = 0
     created_relationships: int = 0
     created_world_rules: int = 0
+    created_random_table_rows: int = 0
 
 
 class ProposalItemSelection(BaseModel):
     entity_indices: list[int] | None = None
     relationship_indices: list[int] | None = None
     world_rule_indices: list[int] | None = None
+    random_table_row_indices: list[int] | None = None
 
 
 class HealthRead(BaseModel):
