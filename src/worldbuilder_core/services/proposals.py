@@ -43,11 +43,12 @@ def create_extraction_proposal(
     if session.get(World, world_id) is None:
         raise ProposalWorldNotFoundError(f"World {world_id!r} not found")
 
-    validate_payload_references(session, world_id, payload.payload)
+    deduped_payload = dedupe_extraction_payload(payload.payload)
+    validate_payload_references(session, world_id, deduped_payload)
     proposal = ExtractionProposal(
         world_id=world_id,
         source_text=payload.source_text,
-        payload=payload.payload.model_dump(mode="json"),
+        payload=deduped_payload.model_dump(mode="json"),
         status=ProposalStatus.pending,
     )
     session.add(proposal)
@@ -83,6 +84,7 @@ def _apply_extraction_proposal(
     payload = ExtractionPayload.model_validate(proposal.payload)
     if selection is not None:
         payload = _select_payload_items(payload, selection)
+    payload = dedupe_extraction_payload(payload)
     try:
         validate_payload_references(session, proposal.world_id, payload)
         result = _apply_payload(session, proposal, payload)
@@ -113,6 +115,84 @@ def reject_extraction_proposal(session: Session, proposal_id: str) -> Extraction
     return proposal
 
 
+def delete_extraction_proposal(session: Session, proposal_id: str) -> None:
+    proposal = session.get(ExtractionProposal, proposal_id)
+    if proposal is None:
+        raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
+    session.delete(proposal)
+    session.commit()
+
+
+def sanitize_extraction_payload_for_world(
+    session: Session,
+    world_id: str,
+    payload: ExtractionPayload,
+) -> ExtractionPayload:
+    """Keep useful LLM output when individual references are invalid."""
+    valid_entity_ids = set(session.scalars(select(Entity.id).where(Entity.world_id == world_id)))
+    valid_table_ids = set(session.scalars(select(RandomTable.id).where(RandomTable.world_id == world_id)))
+    used_client_ids = {entity.client_id for entity in payload.entities if entity.client_id}
+    recovered_match_ids: dict[str, str] = {}
+    entities = []
+
+    for index, entity in enumerate(payload.entities):
+        if entity.match_entity_id and entity.match_entity_id not in valid_entity_ids:
+            client_id = _unique_recovered_client_id(index, used_client_ids)
+            recovered_match_ids[entity.match_entity_id] = client_id
+            entities.append(
+                entity.model_copy(
+                    update={
+                        "client_id": client_id,
+                        "match_entity_id": None,
+                    }
+                )
+            )
+            continue
+        entities.append(entity)
+
+    client_ids = {entity.client_id for entity in entities if entity.client_id}
+    relationships = []
+    for relationship in payload.relationships:
+        updates = {}
+        if relationship.source_entity_id in recovered_match_ids:
+            updates.update(
+                source_entity_id=None,
+                source_client_id=recovered_match_ids[relationship.source_entity_id],
+            )
+        if relationship.target_entity_id in recovered_match_ids:
+            updates.update(
+                target_entity_id=None,
+                target_client_id=recovered_match_ids[relationship.target_entity_id],
+            )
+        candidate = relationship.model_copy(update=updates) if updates else relationship
+        source_valid = (
+            candidate.source_entity_id in valid_entity_ids
+            if candidate.source_entity_id
+            else candidate.source_client_id in client_ids
+        )
+        target_valid = (
+            candidate.target_entity_id in valid_entity_ids
+            if candidate.target_entity_id
+            else candidate.target_client_id in client_ids
+        )
+        if source_valid and target_valid:
+            relationships.append(candidate)
+
+    table_client_ids = {table.client_id for table in payload.random_tables}
+    return payload.model_copy(
+        update={
+            "entities": entities,
+            "relationships": relationships,
+            "random_table_rows": [
+                row
+                for row in payload.random_table_rows
+                if (row.table_id and row.table_id in valid_table_ids)
+                or (row.table_client_id and row.table_client_id in table_client_ids)
+            ],
+        }
+    )
+
+
 def validate_payload_references(session: Session, world_id: str, payload: ExtractionPayload) -> None:
     client_ids = {entity.client_id for entity in payload.entities if entity.client_id}
 
@@ -131,8 +211,208 @@ def validate_payload_references(session: Session, world_id: str, payload: Extrac
         elif relationship.target_client_id not in client_ids:
             raise ProposalValidationError(f"Unknown target_client_id {relationship.target_client_id!r}")
 
+    table_client_ids = {table.client_id for table in payload.random_tables}
     for row in payload.random_table_rows:
-        _ensure_random_table_in_world(session, world_id, row.table_id)
+        if row.table_id:
+            _ensure_random_table_in_world(session, world_id, row.table_id)
+        elif row.table_client_id not in table_client_ids:
+            raise ProposalValidationError(f"Unknown table_client_id {row.table_client_id!r}")
+
+
+def dedupe_extraction_payload(payload: ExtractionPayload) -> ExtractionPayload:
+    entities, client_id_aliases = _dedupe_entities(payload.entities)
+    relationships = _dedupe_relationships(payload.relationships, client_id_aliases)
+    random_tables, table_client_id_aliases = _dedupe_random_tables(payload.random_tables)
+    random_table_rows = _dedupe_random_table_rows(payload.random_table_rows, table_client_id_aliases)
+    return ExtractionPayload(
+        entities=entities,
+        relationships=relationships,
+        world_rules=_dedupe_by_key(payload.world_rules, _world_rule_key, _merge_world_rule_draft),
+        random_tables=random_tables,
+        random_table_rows=random_table_rows,
+        notes=_dedupe_notes(payload.notes),
+    )
+
+
+def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
+    deduped = []
+    by_key: dict[tuple, int] = {}
+    client_id_aliases: dict[str, str] = {}
+
+    for draft in entities:
+        key = _entity_key(draft)
+        existing_index = by_key.get(key)
+        if existing_index is None:
+            by_key[key] = len(deduped)
+            deduped.append(draft)
+            continue
+
+        existing = deduped[existing_index]
+        merged = _merge_entity_draft(existing, draft)
+        deduped[existing_index] = merged
+        if draft.client_id and merged.client_id and draft.client_id != merged.client_id:
+            client_id_aliases[draft.client_id] = merged.client_id
+        if existing.client_id and merged.client_id and existing.client_id != merged.client_id:
+            client_id_aliases[existing.client_id] = merged.client_id
+
+    return deduped, client_id_aliases
+
+
+def _dedupe_relationships(relationships: list, client_id_aliases: dict[str, str]) -> list:
+    remapped = []
+    for draft in relationships:
+        updates = {}
+        if draft.source_client_id in client_id_aliases:
+            updates["source_client_id"] = client_id_aliases[draft.source_client_id]
+        if draft.target_client_id in client_id_aliases:
+            updates["target_client_id"] = client_id_aliases[draft.target_client_id]
+        remapped.append(draft.model_copy(update=updates) if updates else draft)
+    return _dedupe_by_key(remapped, _relationship_key, _merge_relationship_draft)
+
+
+def _dedupe_random_tables(random_tables: list) -> tuple[list, dict[str, str]]:
+    deduped = []
+    by_name: dict[str, int] = {}
+    client_id_aliases: dict[str, str] = {}
+    for draft in random_tables:
+        key = _normalized_text(draft.name)
+        existing_index = by_name.get(key)
+        if existing_index is None:
+            by_name[key] = len(deduped)
+            deduped.append(draft)
+            continue
+        existing = deduped[existing_index]
+        deduped[existing_index] = existing.model_copy(
+            update={
+                "source_excerpt": existing.source_excerpt or draft.source_excerpt,
+                "description": existing.description or draft.description,
+                "is_secret": existing.is_secret or draft.is_secret,
+            }
+        )
+        client_id_aliases[draft.client_id] = existing.client_id
+    return deduped, client_id_aliases
+
+
+def _dedupe_random_table_rows(rows: list, client_id_aliases: dict[str, str]) -> list:
+    remapped = []
+    for row in rows:
+        if row.table_client_id in client_id_aliases:
+            row = row.model_copy(update={"table_client_id": client_id_aliases[row.table_client_id]})
+        remapped.append(row)
+    return _dedupe_by_key(remapped, _random_table_row_key, _merge_random_table_row_draft)
+
+
+def _dedupe_by_key(items: list, key_factory, merge_factory) -> list:
+    deduped = []
+    by_key: dict[tuple, int] = {}
+    for item in items:
+        key = key_factory(item)
+        existing_index = by_key.get(key)
+        if existing_index is None:
+            by_key[key] = len(deduped)
+            deduped.append(item)
+            continue
+        deduped[existing_index] = merge_factory(deduped[existing_index], item)
+    return deduped
+
+
+def _dedupe_notes(notes: list[str]) -> list[str]:
+    deduped = []
+    seen = set()
+    for note in notes:
+        key = _normalized_text(note)
+        if key and key not in seen:
+            deduped.append(note)
+            seen.add(key)
+    return deduped
+
+
+def _unique_recovered_client_id(index: int, used_client_ids: set[str]) -> str:
+    base = f"recovered-entity-{index + 1}"
+    candidate = base
+    suffix = 2
+    while candidate in used_client_ids:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used_client_ids.add(candidate)
+    return candidate
+
+
+def _entity_key(draft) -> tuple:
+    if draft.match_entity_id:
+        return ("match", draft.match_entity_id)
+    return ("new", str(draft.type), _normalized_text(draft.name))
+
+
+def _relationship_key(draft) -> tuple:
+    return (
+        draft.source_entity_id or f"client:{draft.source_client_id}",
+        draft.target_entity_id or f"client:{draft.target_client_id}",
+        _normalized_text(draft.type),
+    )
+
+
+def _world_rule_key(draft) -> tuple:
+    return (_normalized_text(draft.condition), _normalized_text(draft.effect))
+
+
+def _random_table_row_key(draft) -> tuple:
+    table_ref = draft.table_id or f"client:{draft.table_client_id}"
+    return (table_ref, _normalized_text(draft.label or ""), _normalized_text(draft.result))
+
+
+def _merge_entity_draft(current, incoming):
+    return current.model_copy(
+        update={
+            "client_id": current.client_id or incoming.client_id,
+            "source_excerpt": current.source_excerpt or incoming.source_excerpt,
+            "summary": current.summary or incoming.summary,
+            "description": current.description or incoming.description,
+            "aliases": _merge_list(current.aliases, incoming.aliases),
+            "tags": _merge_list(current.tags, incoming.tags),
+            "is_secret": current.is_secret or incoming.is_secret,
+            "attributes": {**incoming.attributes, **current.attributes},
+        }
+    )
+
+
+def _merge_relationship_draft(current, incoming):
+    return current.model_copy(
+        update={
+            "source_excerpt": current.source_excerpt or incoming.source_excerpt,
+            "label": current.label or incoming.label,
+            "description": current.description or incoming.description,
+            "confidence": max(current.confidence, incoming.confidence),
+            "is_secret": current.is_secret or incoming.is_secret,
+            "attributes": {**incoming.attributes, **current.attributes},
+        }
+    )
+
+
+def _merge_world_rule_draft(current, incoming):
+    return current.model_copy(
+        update={
+            "source_excerpt": current.source_excerpt or incoming.source_excerpt,
+            "tags": _merge_list(current.tags, incoming.tags),
+            "is_active": current.is_active or incoming.is_active,
+            "is_secret": current.is_secret or incoming.is_secret,
+        }
+    )
+
+
+def _merge_random_table_row_draft(current, incoming):
+    return current.model_copy(
+        update={
+            "source_excerpt": current.source_excerpt or incoming.source_excerpt,
+            "label": current.label or incoming.label,
+            "weight": max(current.weight, incoming.weight),
+            "is_secret": current.is_secret or incoming.is_secret,
+        }
+    )
+
+
+def _normalized_text(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
 def _apply_payload(
@@ -189,8 +469,30 @@ def _apply_payload(
         session.add(rule)
         result.created_world_rules += 1
 
+    table_client_ids: dict[str, str] = {}
+    for draft in payload.random_tables:
+        table = _find_random_table_by_name(session, proposal.world_id, draft.name)
+        if table is None:
+            table = RandomTable(
+                world_id=proposal.world_id,
+                name=draft.name,
+                description=draft.description,
+                is_secret=draft.is_secret,
+            )
+            session.add(table)
+            session.flush()
+            result.created_random_tables += 1
+        else:
+            table.description = table.description or draft.description
+            table.is_secret = table.is_secret or draft.is_secret
+        table_client_ids[draft.client_id] = table.id
+
     for draft in payload.random_table_rows:
-        row = RandomTableRow(**draft.model_dump(exclude={"source_excerpt"}))
+        table_id = draft.table_id or table_client_ids[draft.table_client_id or ""]
+        row = RandomTableRow(
+            table_id=table_id,
+            **draft.model_dump(exclude={"table_id", "table_client_id", "source_excerpt"}),
+        )
         session.add(row)
         result.created_random_table_rows += 1
 
@@ -198,11 +500,21 @@ def _apply_payload(
 
 
 def _select_payload_items(payload: ExtractionPayload, selection: ProposalItemSelection) -> ExtractionPayload:
+    selected_rows = _select_by_indices(payload.random_table_rows, selection.random_table_row_indices)
+    selected_tables = _select_by_indices(payload.random_tables, selection.random_table_indices)
+    required_table_client_ids = {row.table_client_id for row in selected_rows if row.table_client_id}
+    selected_table_client_ids = {table.client_id for table in selected_tables}
+    selected_tables.extend(
+        table
+        for table in payload.random_tables
+        if table.client_id in required_table_client_ids and table.client_id not in selected_table_client_ids
+    )
     return ExtractionPayload(
         entities=_select_by_indices(payload.entities, selection.entity_indices),
         relationships=_select_by_indices(payload.relationships, selection.relationship_indices),
         world_rules=_select_by_indices(payload.world_rules, selection.world_rule_indices),
-        random_table_rows=_select_by_indices(payload.random_table_rows, selection.random_table_row_indices),
+        random_tables=selected_tables,
+        random_table_rows=selected_rows,
         notes=payload.notes,
     )
 
@@ -252,6 +564,10 @@ def _find_entity_by_type_and_name(session: Session, world_id: str, entity_type: 
             Entity.name == name,
         )
     )
+
+
+def _find_random_table_by_name(session: Session, world_id: str, name: str) -> RandomTable | None:
+    return session.scalar(select(RandomTable).where(RandomTable.world_id == world_id, RandomTable.name == name))
 
 
 def _ensure_entity_in_world(session: Session, world_id: str, entity_id: str) -> Entity:

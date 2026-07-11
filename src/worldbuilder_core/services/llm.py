@@ -88,11 +88,19 @@ def parse_openai_chat_response(data: dict[str, Any], *, fallback_model: str) -> 
 
     message = first_choice.get("message")
     if not isinstance(message, dict):
-        raise LLMProviderError("LLM provider response choice does not contain a message")
+        delta = first_choice.get("delta")
+        if isinstance(delta, dict):
+            message = delta
+        elif isinstance(first_choice.get("text"), str):
+            message = {"role": "assistant", "content": first_choice["text"]}
+        else:
+            raise LLMProviderError("LLM provider response choice does not contain a message")
 
     role = message.get("role", "assistant")
-    content = message.get("content")
-    if role not in {"system", "user", "assistant"} or not isinstance(content, str) or not content:
+    content = normalize_openai_message_content(message.get("content"))
+    if role not in {"system", "user", "assistant"}:
+        role = "assistant"
+    if not content:
         raise LLMProviderError("LLM provider response message is malformed")
 
     usage_data = data.get("usage")
@@ -104,3 +112,23 @@ def parse_openai_chat_response(data: dict[str, Any], *, fallback_model: str) -> 
         finish_reason=first_choice.get("finish_reason"),
         usage=usage,
     )
+
+
+def normalize_openai_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            text = item.get("text") or item.get("content") or item.get("value")
+            if isinstance(text, str):
+                parts.append(text)
+            elif isinstance(text, dict) and isinstance(text.get("value"), str):
+                parts.append(text["value"])
+        return "".join(parts)
+    return ""

@@ -80,6 +80,13 @@ The backend:
 - builds role-aware world context;
 - asks the configured OpenAI-compatible model for strict JSON;
 - validates the JSON with Pydantic;
+- removes repeated draft entities, relationships, world rules, random-table
+  rows, and notes before storing the proposal;
+- extracts quest requests as a primary Event entity tagged `quest`;
+- separates newly described random tables and their rows from relationships;
+- recovers invalid invented match IDs as new draft entities when possible and
+  drops dangling relationships or unknown table rows instead of failing the
+  entire LLM-created draft;
 - performs one repair retry if the model returns malformed JSON;
 - stores the result as a pending proposal.
 
@@ -123,12 +130,14 @@ fails, the completion is still returned with `wiki_save_error`.
 POST /api/proposals/{proposal_id}/apply
 POST /api/proposals/{proposal_id}/apply-selected
 POST /api/proposals/{proposal_id}/reject
+DELETE /api/proposals/{proposal_id}
 ```
 
 Applying a proposal writes extracted entities, relationships, and rules into the
-wiki. It can also add reviewed rows to existing random tables. Applying the same
-proposal twice is blocked. The UI supports applying all draft items or only the
-checked items.
+wiki. It can also create reviewed random tables and add rows to new or existing
+tables. Applying the same proposal twice is blocked. The UI supports applying
+all draft items or only the checked items.
+Deleting a proposal removes the draft/review record without applying it.
 
 ## Statuses
 

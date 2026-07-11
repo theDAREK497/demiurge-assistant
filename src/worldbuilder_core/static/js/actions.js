@@ -1,24 +1,38 @@
 import { api } from "./api.js";
 import { $, toast } from "./dom.js";
 import { language, t } from "./i18n.js";
-import { selectedWorld, state } from "./state.js";
+import {
+  createChatThreadFromMessages,
+  deleteChatThread as deleteStoredChatThread,
+  loadChatThreadsForContext,
+  persistActiveChatMessages,
+  renameChatThread as renameStoredChatThread,
+  selectedWorld,
+  state,
+  switchChatThread,
+} from "./state.js";
 import {
   activateTab,
   closeEntityDrawer,
+  closeEntityReader,
   currentRole,
   openEntityDrawer,
   renderAllWorldData,
   renderChat,
+  renderChatThreads,
   renderDetectiveConnectionFormMode,
   renderDetectiveNodeFormMode,
   renderEntityFormMode,
   renderLlmConfig,
   renderMapPinFormMode,
+  renderRelationshipFormMode,
   renderRandomTableFormMode,
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
 } from "./render.js";
+
+const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 
 export function splitTags(value) {
   return value
@@ -46,9 +60,6 @@ function normalizeStaticControlLabels() {
   const languageSelect = $("languageSelect");
   if (languageSelect?.options?.[0]) {
     languageSelect.options[0].textContent = "\u0420\u0443\u0441\u0441\u043a\u0438\u0439";
-    return;
-    languageSelect.options[0].textContent = "\u0420\u0443\u0441\u0441\u043a\u0438\u0439";
-    languageSelect.options[0].textContent = "Русский";
   }
 }
 
@@ -142,6 +153,7 @@ export async function loadWorldData() {
     state.selectedEntityId = null;
     state.selectedReaderType = null;
     state.selectedReaderSourceId = null;
+    loadChatThreadsForContext(null, currentRole());
     renderAllWorldData();
     return;
   }
@@ -166,6 +178,7 @@ export async function loadWorldData() {
   state.detectiveNodes = detectiveBoard.nodes;
   state.detectiveConnections = detectiveBoard.connections;
   state.proposals = proposals;
+  loadChatThreadsForContext(state.selectedWorldId, role);
   renderAllWorldData();
 }
 
@@ -309,19 +322,60 @@ export async function createRelationship(event) {
     return;
   }
 
-  await api(`/worlds/${state.selectedWorldId}/relationships`, {
-    method: "POST",
-    body: JSON.stringify({
-      source_entity_id: $("relationshipSource").value,
-      target_entity_id: $("relationshipTarget").value,
-      type: $("relationshipType").value.trim(),
-      label: $("relationshipLabel").value.trim() || null,
-      is_secret: $("relationshipSecret").checked,
-    }),
-  });
-  $("relationshipForm").reset();
-  toast(t("relationship.created"));
+  const payload = {
+    source_entity_id: $("relationshipSource").value,
+    target_entity_id: $("relationshipTarget").value,
+    type: $("relationshipType").value.trim(),
+    label: $("relationshipLabel").value.trim() || null,
+    description: $("relationshipDescription").value.trim() || null,
+    confidence: Number($("relationshipConfidence").value),
+    is_secret: $("relationshipSecret").checked,
+  };
+  if (state.editingRelationshipId) {
+    await api(`/relationships/${state.editingRelationshipId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    toast(t("relationship.updated"));
+  } else {
+    await api(`/worlds/${state.selectedWorldId}/relationships`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    toast(t("relationship.created"));
+  }
+  resetRelationshipForm();
   await loadWorldData();
+}
+
+export function editRelationship(relationshipId) {
+  const relationship = state.relationships.find((item) => item.id === relationshipId);
+  if (!relationship) return;
+  state.editingRelationshipId = relationship.id;
+  $("relationshipSource").value = relationship.source_entity_id;
+  $("relationshipTarget").value = relationship.target_entity_id;
+  $("relationshipType").value = relationship.type;
+  $("relationshipLabel").value = relationship.label || "";
+  $("relationshipDescription").value = relationship.description || "";
+  $("relationshipConfidence").value = String(relationship.confidence);
+  $("relationshipSecret").checked = Boolean(relationship.is_secret);
+  renderRelationshipFormMode();
+  $("relationshipType").focus();
+}
+
+export function resetRelationshipForm() {
+  state.editingRelationshipId = null;
+  $("relationshipForm").reset();
+  $("relationshipConfidence").value = "1";
+  renderRelationshipFormMode();
+}
+
+export async function deleteWorld(worldId) {
+  const world = state.worlds.find((item) => item.id === worldId);
+  if (!world || !confirm(t("world.confirmDelete", { name: world.name }))) return;
+  await api(`/worlds/${worldId}`, { method: "DELETE" });
+  toast(t("world.deleted"));
+  await loadWorlds();
 }
 
 export async function createRule(event) {
@@ -733,6 +787,32 @@ export function openDetectiveConnectionEditor() {
   $("detectiveConnectionLabel").focus();
 }
 
+export async function generateDetectiveBoard() {
+  if (!requireWorld()) return;
+  const button = $("generateDetectiveBoard");
+  button.disabled = true;
+  toast(t("detective.generating"));
+  try {
+    await api(`/worlds/${state.selectedWorldId}/detective-board/generate`, {
+      method: "POST",
+      body: JSON.stringify({ output_language: language() }),
+    });
+    toast(t("detective.generated"));
+    await loadWorldData();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+export async function deleteDetectiveBoard() {
+  if (!requireWorld() || !confirm(t("detective.confirmBoardDelete"))) return;
+  await api(`/worlds/${state.selectedWorldId}/detective-board`, { method: "DELETE" });
+  toast(t("detective.boardDeleted"));
+  resetDetectiveNodeForm();
+  resetDetectiveConnectionForm();
+  await loadWorldData();
+}
+
 export async function sendChat(event) {
   event.preventDefault();
   if (!requireWorld()) return;
@@ -742,6 +822,8 @@ export async function sendChat(event) {
 
   $("chatInput").value = "";
   state.chatMessages.push({ role: "user", content });
+  persistActiveChatMessages();
+  renderChatThreads();
   state.chatBusy = true;
   renderChat();
 
@@ -749,20 +831,23 @@ export async function sendChat(event) {
   submit.disabled = true;
   $("chatInput").disabled = true;
   try {
+    const requestMessages = state.chatMessages.slice(-CHAT_CONTEXT_MESSAGE_LIMIT).map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
     const response = await api(`/worlds/${state.selectedWorldId}/chat`, {
       method: "POST",
       body: JSON.stringify({
         role: currentRole(),
         output_language: language(),
-        save_to_wiki: $("saveToWiki").checked,
-        messages: state.chatMessages.map((message) => ({
-          role: message.role,
-          content: message.content,
-        })),
+        query: content,
+        messages: requestMessages,
       }),
     });
 
     state.chatMessages.push(response.completion.message);
+    persistActiveChatMessages();
+    renderChatThreads();
     if (response.proposal) {
       toast(t("chat.proposalCreated"));
     }
@@ -772,6 +857,7 @@ export async function sendChat(event) {
     renderChat();
     await loadWorldData();
   } catch (error) {
+    persistActiveChatMessages();
     toast(t("chat.failed", { message: error.message }), "error");
   } finally {
     state.chatBusy = false;
@@ -779,6 +865,98 @@ export async function sendChat(event) {
     $("chatInput").disabled = false;
     renderChat();
   }
+}
+
+export function startNewChatThread() {
+  createChatThreadFromMessages();
+  renderChatThreads();
+  renderChat();
+}
+
+export function branchChatThread() {
+  createChatThreadFromMessages(state.chatMessages);
+  renderChatThreads();
+  renderChat();
+}
+
+export function changeChatThread(threadId) {
+  switchChatThread(threadId);
+  renderChatThreads();
+  renderChat();
+}
+
+export function renameChatThread(threadId) {
+  const thread = state.chatThreads.find((item) => item.id === threadId);
+  if (!thread) return;
+  state.editingChatThreadId = threadId;
+  renderChatThreads();
+  $(`chatThreadEdit-${threadId}`)?.focus();
+}
+
+export function cancelChatThreadRename() {
+  state.editingChatThreadId = null;
+  renderChatThreads();
+}
+
+export function saveChatThreadRename(threadId) {
+  const input = $(`chatThreadEdit-${threadId}`);
+  if (!renameStoredChatThread(threadId, input?.value)) {
+    toast(t("chat.renameEmpty"), "error");
+    return;
+  }
+  state.editingChatThreadId = null;
+  renderChatThreads();
+}
+
+export function deleteChatThread(threadId) {
+  if (!confirm(t("chat.confirmDeleteThread"))) return;
+  deleteStoredChatThread(threadId);
+  renderChatThreads();
+  renderChat();
+}
+
+export function editChatMessage(messageIndex) {
+  if (!state.chatMessages[messageIndex]) return;
+  state.editingChatMessageIndex = messageIndex;
+  renderChat();
+  $(`chatMessageEdit-${messageIndex}`)?.focus();
+}
+
+export function cancelChatMessageEdit() {
+  state.editingChatMessageIndex = null;
+  renderChat();
+}
+
+export function saveChatMessageEdit(messageIndex) {
+  const input = $(`chatMessageEdit-${messageIndex}`);
+  const content = input?.value.trim() || "";
+  if (!content) {
+    toast(t("chat.messageEmpty"), "error");
+    return;
+  }
+  state.chatMessages[messageIndex] = { ...state.chatMessages[messageIndex], content };
+  state.editingChatMessageIndex = null;
+  persistActiveChatMessages();
+  renderChatThreads();
+  renderChat();
+}
+
+export function deleteChatMessage(messageIndex) {
+  if (!state.chatMessages[messageIndex] || !confirm(t("chat.confirmDeleteMessage"))) return;
+  state.chatMessages.splice(messageIndex, 1);
+  state.editingChatMessageIndex = null;
+  persistActiveChatMessages();
+  renderChatThreads();
+  renderChat();
+}
+
+export function insertChatTemplate(templateId) {
+  const input = $("chatInput");
+  const text = t(`chatTemplate.${templateId}.text`);
+  if (!input || text === `chatTemplate.${templateId}.text`) return;
+  const prefix = input.value.trim() ? "\n\n" : "";
+  input.value = `${input.value}${prefix}${text}`;
+  input.focus();
 }
 
 export async function saveAssistantMessageToWiki(messageIndex) {
@@ -829,7 +1007,7 @@ export async function createManualProposal(event) {
     }),
   });
   $("manualProposalForm").reset();
-  $("proposalPayload").value = '{ "entities": [], "relationships": [], "world_rules": [], "random_table_rows": [], "notes": [] }';
+  $("proposalPayload").value = '{ "entities": [], "relationships": [], "world_rules": [], "random_tables": [], "random_table_rows": [], "notes": [] }';
   toast(t("proposal.created"));
   await loadWorldData();
 }
@@ -849,12 +1027,14 @@ export async function applySelectedProposal(id) {
     entity_indices: checked("entity"),
     relationship_indices: checked("relationship"),
     world_rule_indices: checked("rule"),
+    random_table_indices: checked("random-table"),
     random_table_row_indices: checked("random-table-row"),
   };
   const totalSelected =
     payload.entity_indices.length +
     payload.relationship_indices.length +
     payload.world_rule_indices.length +
+    payload.random_table_indices.length +
     payload.random_table_row_indices.length;
   if (!totalSelected) {
     toast(t("proposal.selectAtLeastOne"), "error");
@@ -871,6 +1051,13 @@ export async function applySelectedProposal(id) {
 export async function rejectProposal(id) {
   await api(`/proposals/${id}/reject`, { method: "POST" });
   toast(t("proposal.rejected"));
+  await loadWorldData();
+}
+
+export async function deleteProposal(id) {
+  if (!confirm(t("proposal.confirmDelete"))) return;
+  await api(`/proposals/${id}`, { method: "DELETE" });
+  toast(t("proposal.deleted"));
   await loadWorldData();
 }
 
@@ -942,4 +1129,28 @@ function clampUnit(value) {
   const number = Number(value);
   if (Number.isNaN(number)) return 0.5;
   return Math.min(1, Math.max(0, number));
+}
+
+export async function deleteEntity(entityId) {
+  if (!confirm(t("entity.confirmDelete") || "Удалить эту карточку?")) return;
+  await api(`/entities/${entityId}`, { method: "DELETE" });
+  if (state.selectedEntityId === entityId) {
+    closeEntityReader();
+  }
+  toast(t("entity.deleted") || "Карточка удалена.");
+  await loadWorldData();
+}
+
+export async function deleteRelationship(relationshipId) {
+  if (!confirm(t("relationship.confirmDelete") || "Удалить эту связь?")) return;
+  await api(`/relationships/${relationshipId}`, { method: "DELETE" });
+  toast(t("relationship.deleted") || "Связь удалена.");
+  await loadWorldData();
+}
+
+export async function deleteRule(ruleId) {
+  if (!confirm(t("rule.confirmDelete") || "Удалить этот закон?")) return;
+  await api(`/world-rules/${ruleId}`, { method: "DELETE" });
+  toast(t("rule.deleted") || "Закон удален.");
+  await loadWorldData();
 }

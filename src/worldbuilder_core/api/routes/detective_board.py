@@ -1,5 +1,7 @@
+from math import ceil, sqrt
+
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import Select, select
+from sqlalchemy import delete, select
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import DetectiveBoardConnection, DetectiveBoardNode, Entity, ViewerRole, World
@@ -7,11 +9,16 @@ from worldbuilder_core.schemas import (
     DetectiveBoardConnectionCreate,
     DetectiveBoardConnectionRead,
     DetectiveBoardConnectionUpdate,
+    DetectiveBoardGenerateRequest,
     DetectiveBoardNodeCreate,
     DetectiveBoardNodeRead,
     DetectiveBoardNodeUpdate,
     DetectiveBoardRead,
 )
+from worldbuilder_core.services.detective_generation import DetectiveGenerationParseError, generate_detective_board_with_llm
+from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
+from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
+from worldbuilder_core.services.retrieval import build_world_context
 
 router = APIRouter(tags=["detective board"])
 
@@ -68,6 +75,94 @@ def get_detective_board(world_id: str, session: DbSession, role: ViewerRole = Vi
         nodes=[DetectiveBoardNodeRead.model_validate(node) for node in visible_nodes],
         connections=[DetectiveBoardConnectionRead.model_validate(connection) for connection in visible_connections],
     )
+
+
+@router.post(
+    "/worlds/{world_id}/detective-board/generate",
+    response_model=DetectiveBoardRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_detective_board(
+    world_id: str,
+    payload: DetectiveBoardGenerateRequest,
+    session: DbSession,
+) -> DetectiveBoardRead:
+    ensure_world(session, world_id)
+    existing_node = session.scalar(
+        select(DetectiveBoardNode.id).where(DetectiveBoardNode.world_id == world_id).limit(1)
+    )
+    if existing_node:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Detective board is not empty")
+
+    runtime_settings = get_llm_runtime_settings(session)
+    model = payload.model or runtime_settings.model_for("extractor")
+    context = build_world_context(
+        session,
+        world_id,
+        role=ViewerRole.master,
+        query="detective board clues suspects motives locations",
+        max_entities=payload.max_nodes,
+    )
+    client = build_llm_client(runtime_settings, default_model=model)
+    try:
+        generated = await generate_detective_board_with_llm(
+            llm_client=client,
+            context_text=context.context_text,
+            output_language=payload.output_language,
+            max_nodes=payload.max_nodes,
+            model=model,
+        )
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except DetectiveGenerationParseError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Board generation failed: {exc}") from exc
+
+    valid_entity_ids = set(session.scalars(select(Entity.id).where(Entity.world_id == world_id)))
+    columns = max(2, ceil(sqrt(max(len(generated.nodes), 1) * 1.6)))
+    rows = max(1, ceil(len(generated.nodes) / columns))
+    node_ids: dict[str, str] = {}
+    for index, draft in enumerate(generated.nodes):
+        column = index % columns
+        row = index // columns
+        node = DetectiveBoardNode(
+            world_id=world_id,
+            entity_id=draft.entity_id if draft.entity_id in valid_entity_ids else None,
+            title=draft.title,
+            note=draft.note,
+            evidence_url=draft.evidence_url,
+            x=(column + 1) / (columns + 1),
+            y=(row + 1) / (rows + 1),
+            is_secret=draft.is_secret,
+        )
+        session.add(node)
+        session.flush()
+        node_ids[draft.client_id] = node.id
+
+    for draft in generated.connections:
+        source_id = node_ids.get(draft.source_client_id)
+        target_id = node_ids.get(draft.target_client_id)
+        if not source_id or not target_id or source_id == target_id:
+            continue
+        session.add(
+            DetectiveBoardConnection(
+                world_id=world_id,
+                source_node_id=source_id,
+                target_node_id=target_id,
+                label=draft.label,
+                note=draft.note,
+                is_secret=draft.is_secret,
+            )
+        )
+    session.commit()
+    return get_detective_board(world_id, session, ViewerRole.master)
+
+
+@router.delete("/worlds/{world_id}/detective-board", status_code=status.HTTP_204_NO_CONTENT)
+def delete_detective_board(world_id: str, session: DbSession) -> None:
+    ensure_world(session, world_id)
+    session.execute(delete(DetectiveBoardConnection).where(DetectiveBoardConnection.world_id == world_id))
+    session.execute(delete(DetectiveBoardNode).where(DetectiveBoardNode.world_id == world_id))
+    session.commit()
 
 
 @router.post(

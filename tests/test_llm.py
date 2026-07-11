@@ -53,6 +53,45 @@ def test_openai_response_parser_rejects_malformed_payload() -> None:
         parse_openai_chat_response({"choices": []}, fallback_model="story-model")
 
 
+def test_openai_response_parser_accepts_multipart_message_content() -> None:
+    response = parse_openai_chat_response(
+        {
+            "model": "story-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "text", "text": "Cinder Port "},
+                            {"type": "text", "text": {"value": "glows."}},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        fallback_model="fallback-model",
+    )
+
+    assert response.model == "story-model"
+    assert response.message.content == "Cinder Port glows."
+
+
+def test_openai_response_parser_accepts_delta_or_text_choice_content() -> None:
+    delta_response = parse_openai_chat_response(
+        {"choices": [{"delta": {"role": "model", "content": "Delta answer."}}]},
+        fallback_model="story-model",
+    )
+    text_response = parse_openai_chat_response(
+        {"choices": [{"text": "Legacy answer."}]},
+        fallback_model="story-model",
+    )
+
+    assert delta_response.message.role == "assistant"
+    assert delta_response.message.content == "Delta answer."
+    assert text_response.message.content == "Legacy answer."
+
+
 def test_world_chat_request_prepends_role_aware_context() -> None:
     context = WorldContextRead(
         world=WorldRead(

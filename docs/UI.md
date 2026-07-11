@@ -44,7 +44,8 @@ Current UI coverage:
 - event journal, quest journal, and maps/location module views;
 - focused Modules workspace with one active mini-section at a time instead of
   one noisy all-modules grid;
-- detective board with evidence nodes and connection lines;
+- detective board with evidence nodes, connection lines, empty-board AI
+  generation, and confirmed whole-board deletion;
 - collapsible editors for maps, random tables, detective board, and advanced
   manual proposal JSON;
 - quick action bars and compact content summaries in Maps and Detective board;
@@ -52,12 +53,23 @@ Current UI coverage:
 - preview the AI memory/context;
 - configure persistent LLM provider settings;
 - send world-aware chat messages;
+- keep local browser chat history in separate branches per world and viewer
+  role;
+- insert prepared chat prompt templates for base card types and enabled modules;
+- render Markdown, including aligned pipe tables, in chat answers, drafts,
+  wiki cards, and module prose;
 - save a liked assistant answer into draft wiki changes;
 - forward the selected UI language into world-aware chat and extraction so
   generated rules and draft lore match the user's language;
 - review draft changes;
-- review and apply AI-suggested rows for existing random tables;
+- review and apply AI-suggested new random tables or rows for existing tables;
 - apply checked, apply all, or reject draft changes;
+- use Player mode as a read-only public view without Master settings or editing
+  tools;
+- edit relationships and see confidence as a percentage with a readable level;
+- use force-directed relationship graph arrangement, drag nodes, and keep their
+  positions in browser storage per world and viewer role;
+- delete worlds only after an explicit confirmation;
 - export and import world snapshots.
 
 This is still a lightweight UI, but the main testing path is now meant to feel
@@ -104,12 +116,14 @@ model.
 The recommended user flow is:
 
 1. Ask the AI co-author to expand the world.
-2. Click "Save to world" under an assistant answer you like.
+2. Click "Save as draft" under an assistant answer you like.
 3. Review the created draft changes.
 4. Apply all changes or only checked items.
 
-The old automatic `save_to_wiki` flow is still available as an optional checkbox,
-but the click-to-save message flow is the preferred manual-testing path.
+The UI intentionally has no automatic `save_to_wiki` checkbox. Draft creation is
+an explicit action on an assistant message. Chat branches are shown as a list and
+support create, copy, rename, and delete. Individual messages can be edited or
+deleted; this local history is stored per world and viewer role.
 
 ## Localization
 
@@ -148,6 +162,11 @@ http://YOUR_LOCAL_IP:8000/app/
 
 On first entry they choose Master or Player. The selected role is stored in
 `localStorage` as `worldbuilder.viewerRole`.
+
+The visible selector is no longer a normal dropdown in the top bar. Users enter
+through the role choice modal, and can reopen it with the mode switch button.
+Player mode hides Master-only settings, write-back, backup, and editing tools;
+public data is still fetched through role-aware backend APIs.
 
 ## Worldbuilder Views
 

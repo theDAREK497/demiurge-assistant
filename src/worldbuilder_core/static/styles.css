@@ -351,6 +351,25 @@ button.item {
   border-color: var(--line);
 }
 
+.world-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.world-list-item .item {
+  min-width: 0;
+}
+
+.world-list-item.active .item {
+  border-color: var(--accent);
+}
+
+.compact-actions {
+  margin-top: 0;
+}
+
 .list button.item .item-title {
   color: var(--text);
   text-shadow:
@@ -1136,17 +1155,29 @@ marker path {
   padding: 7px;
 }
 
-.proposal-check span {
+.proposal-check-content {
+  min-width: 0;
   color: var(--text);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 
 .proposal-evidence {
-  display: block;
+  display: grid;
+  gap: 4px;
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.4;
+}
+
+.proposal-source {
+  border-left: 3px solid var(--line);
+  padding-left: 10px;
+}
+
+.proposal-notes {
+  display: grid;
+  gap: 8px;
 }
 
 .proposal-intent {
@@ -1208,7 +1239,141 @@ marker path {
 .chat-panel {
   display: grid;
   min-height: 68vh;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+}
+
+.chat-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-template-row button {
+  padding: 7px 10px;
+}
+
+.icon-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 4px;
+}
+
+.chat-workspace {
+  display: grid;
+  min-width: 0;
+  min-height: 60vh;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.chat-thread-panel {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  grid-template-rows: auto auto auto;
+  gap: 10px;
+  border-right: 1px solid var(--line);
+  padding-right: 14px;
+}
+
+.chat-thread-head,
+.chat-thread-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-thread-head {
+  justify-content: space-between;
+}
+
+.chat-thread-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.chat-thread-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.chat-thread-item.active {
+  border-color: var(--accent);
+  background: var(--panel);
+}
+
+.chat-thread-item.editing {
+  border-color: var(--accent);
+  padding: 5px;
+}
+
+.chat-thread-edit {
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.chat-thread-main {
+  display: grid;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 8px;
+}
+
+.chat-thread-main:hover {
+  background: transparent;
+}
+
+.chat-thread-main span,
+.chat-thread-main small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-thread-main small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.chat-thread-actions {
+  padding-right: 5px;
+}
+
+.chat-thread-actions .icon-button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.chat-branch-button {
+  width: 100%;
+}
+
+.chat-conversation {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: auto minmax(180px, 1fr) auto auto;
+  align-content: stretch;
+  gap: 10px;
+}
+
+.chat-save-hint {
+  margin: 0;
 }
 
 .chat-log {
@@ -1228,7 +1393,117 @@ marker path {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
-  white-space: pre-wrap;
+  white-space: normal;
+}
+
+.md-content {
+  display: grid;
+  gap: 8px;
+}
+
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4,
+.md-content h5,
+.md-content h6,
+.md-content p,
+.md-content ul,
+.md-content ol,
+.md-content blockquote,
+.md-content hr,
+.md-content pre {
+  margin: 0;
+}
+
+.md-content h1 {
+  font-size: 22px;
+}
+
+.md-content h2 {
+  font-size: 18px;
+}
+
+.md-content h3 {
+  font-size: 16px;
+}
+
+.md-content h4,
+.md-content h5,
+.md-content h6 {
+  font-size: 14px;
+}
+
+.md-content ul,
+.md-content ol {
+  padding-left: 20px;
+}
+
+.md-content hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.md-content blockquote {
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  padding-left: 10px;
+}
+
+.md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.md-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.md-content th,
+.md-content td {
+  border: 1px solid var(--line);
+  padding: 7px 9px;
+  vertical-align: top;
+}
+
+.md-content th {
+  background: var(--panel-strong);
+  font-weight: 700;
+}
+
+.md-align-left {
+  text-align: left;
+}
+
+.md-align-center {
+  text-align: center;
+}
+
+.md-align-right {
+  text-align: right;
+}
+
+.md-content code {
+  border-radius: 4px;
+  background: var(--panel-strong);
+  padding: 2px 4px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.md-content pre {
+  overflow: auto;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.md-content pre code {
+  padding: 0;
+  background: transparent;
 }
 
 .message.user {
@@ -1269,6 +1544,11 @@ marker path {
 
 .message-actions button {
   padding: 7px 10px;
+}
+
+.message-editor,
+.message-editor textarea {
+  width: 100%;
 }
 
 .chat-form {
@@ -1401,7 +1681,481 @@ marker path {
     grid-template-columns: 1fr;
   }
 
+  .chat-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-thread-panel {
+    max-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: 12px;
+  }
+
   .role-choice-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Category Filters Styling */
+.category-filters-wrapper {
+  margin-top: 10px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.category-filters {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 4px 0;
+  scrollbar-width: thin;
+}
+
+.category-filters::-webkit-scrollbar {
+  height: 4px;
+}
+
+.category-filters::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+.category-filter {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.category-filter:hover {
+  background: var(--panel-strong);
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.category-filter.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(47, 125, 77, 0.2);
+}
+
+/* Reader Breadcrumbs */
+.reader-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.breadcrumb-item {
+  transition: color 0.15s ease;
+}
+
+.breadcrumb-item.clickable {
+  cursor: pointer;
+}
+
+.breadcrumb-item.clickable:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.breadcrumb-item.active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.breadcrumb-separator {
+  color: var(--line);
+  user-select: none;
+}
+
+/* 3-Column Wiki Reading Layout */
+@media (min-width: 992px) {
+  .reader-reading-layout {
+    grid-template-columns: 200px 1fr 300px;
+    gap: 28px;
+  }
+}
+
+@media (max-width: 991px) and (min-width: 768px) {
+  .reader-reading-layout {
+    grid-template-columns: 180px 1fr;
+    gap: 20px;
+  }
+  .reader-aside {
+    grid-column: span 2;
+    margin-top: 20px;
+  }
+}
+
+@media (max-width: 767px) {
+  .reader-reading-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .reader-toc-column {
+    display: none; /* Hide TOC on mobile screen sizes to maximize reading space */
+  }
+}
+
+/* TOC Sidebar (Left Column) */
+.reader-toc-column {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.reader-toc {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding-right: 14px;
+}
+
+.toc-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.toc-link {
+  display: block;
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toc-link:hover {
+  color: var(--text);
+  border-left-color: var(--line);
+  background: var(--panel-strong);
+}
+
+.toc-link.active {
+  color: var(--accent-strong);
+  font-weight: 600;
+  border-left-color: var(--accent);
+  background: var(--panel-strong);
+}
+
+/* Middle Column / Article Layout */
+.reader-section-block {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 22px;
+  margin-bottom: 22px;
+}
+
+.reader-section-block:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.section-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 12px;
+  letter-spacing: -0.01em;
+}
+
+.reader-timeline-date-meta {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  margin-top: 16px;
+}
+
+/* General Layout / Panels Aesthetics Overhaul */
+.panel {
+  border-radius: 12px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.item {
+  border-radius: 10px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.item:hover {
+  border-color: var(--accent);
+  box-shadow: 0 4px 14px rgba(46, 62, 42, 0.06);
+}
+
+.encyclopedia-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.encyclopedia-card .item-body {
+  flex-grow: 1;
+}
+
+.encyclopedia-card .entity-image {
+  border-radius: 6px;
+  margin-bottom: 10px;
+  width: 100%;
+  height: 150px;
+  object-fit: cover;
+  border: 1px solid var(--line);
+}
+
+/* White text readability helpers - black text shadows and outlines */
+.white-outline-text,
+.map-pin span,
+.map-card-title,
+.map-card-subtitle,
+.graph-node text,
+.graph-label {
+  text-shadow:
+    -1px -1px 0 #000,
+     1px -1px 0 #000,
+    -1px  1px 0 #000,
+     1px  1px 0 #000,
+     0px  2px 4px rgba(0, 0, 0, 0.95);
+}
+
+/* Prettified delete cross button */
+.small-delete-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 22px !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  border: 1px solid var(--line) !important;
+  background: var(--panel) !important;
+  color: var(--muted) !important;
+  font-size: 14px !important;
+  line-height: 1 !important;
+  transition: all 0.2s ease !important;
+  cursor: pointer !important;
+}
+
+.small-delete-btn:hover {
+  background: var(--danger) !important;
+  color: #ffffff !important;
+  border-color: var(--danger) !important;
+  transform: scale(1.1) !important;
+}
+
+/* Map pin delete hover badge */
+.map-pin-delete-badge {
+  position: absolute;
+  z-index: 12;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: white;
+  border: 1px solid #ffffff;
+  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  padding: 0;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+}
+
+.map-image-wrap:hover .map-pin-delete-badge {
+  opacity: 1;
+}
+
+.map-pin-delete-badge:hover {
+  transform: translate(-50%, -50%) scale(1.2);
+  background: #ff4d4d;
+}
+
+/* Beautiful custom contrast outline for badges and status pills */
+.badge, .status-pill {
+  text-shadow:
+    -1px -1px 0 var(--title-outline),
+     1px -1px 0 var(--title-outline),
+    -1px  1px 0 var(--title-outline),
+     1px  1px 0 var(--title-outline);
+  color: var(--text) !important;
+  font-weight: 600;
+  border-color: var(--line);
+}
+
+/* Customized Scrollbars for Tabs, Filters, and Lists */
+.tabs::-webkit-scrollbar,
+.category-filters::-webkit-scrollbar,
+.grid-list::-webkit-scrollbar,
+.list::-webkit-scrollbar,
+textarea::-webkit-scrollbar {
+  height: 5px;
+  width: 5px;
+}
+
+.tabs::-webkit-scrollbar-track,
+.category-filters::-webkit-scrollbar-track,
+.grid-list::-webkit-scrollbar-track,
+.list::-webkit-scrollbar-track,
+textarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.tabs::-webkit-scrollbar-thumb,
+.category-filters::-webkit-scrollbar-thumb,
+.grid-list::-webkit-scrollbar-thumb,
+.list::-webkit-scrollbar-thumb,
+textarea::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 4px;
+}
+
+.tabs::-webkit-scrollbar-thumb:hover,
+.category-filters::-webkit-scrollbar-thumb:hover,
+.grid-list::-webkit-scrollbar-thumb:hover,
+.list::-webkit-scrollbar-thumb:hover,
+textarea::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+.tabs, .category-filters {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+/* Master (GM) vs Player visual themes */
+body.role-master {
+  --accent: #b23a3a;
+  --accent-strong: #8a2424;
+}
+
+body.role-master[data-theme="dark"] {
+  --accent: #ff6b6b;
+  --accent-strong: #e65252;
+}
+
+/* Role indicator badge styling */
+.role-indicator-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 20px;
+  line-height: 1;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.role-indicator-badge.master {
+  background: var(--danger);
+  color: #ffffff !important;
+  border: 1px solid var(--danger);
+  text-shadow: none !important;
+}
+
+.role-indicator-badge.player {
+  background: var(--accent);
+  color: #ffffff !important;
+  border: 1px solid var(--accent);
+  text-shadow: none !important;
+}
+
+/* Master-only header accent line */
+body.role-master .topbar {
+  border-top: 4px solid var(--accent);
+  transition: border-top 0.3s ease;
+}
+
+body.role-player .topbar {
+  border-top: 4px solid transparent;
+  transition: border-top 0.3s ease;
+}
+
+/* Responsive Left Sidebar Drawer & Layout for Mobile Devices */
+@media (max-width: 980px) {
+  .shell {
+    position: relative;
+    grid-template-columns: 1fr;
+    overflow-x: hidden;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 100;
+    width: 300px;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: none;
+    border-right: 1px solid var(--line);
+    border-bottom: 0 !important;
+  }
+
+  .shell.sidebar-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.35);
+  }
+
+  .sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+
+  .shell.sidebar-open .sidebar-backdrop {
+    display: block;
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  #toggleSidebarMobile {
+    display: inline-flex !important;
   }
 }

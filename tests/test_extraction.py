@@ -160,6 +160,39 @@ def test_build_extraction_request_can_request_english_output() -> None:
     assert "in English" in request.messages[0].content
 
 
+def test_parse_extraction_payload_creates_quest_and_new_random_table() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"id": "lost-bell", "type": "quest", "name": "The Lost Bell", "summary": "Recover the bell."},
+            {
+              "id": "road-rumors",
+              "type": "random_table",
+              "name": "Road rumors",
+              "description": "What travelers whisper.",
+              "rows": [
+                {"label": "Bell", "result": "A bell rings beneath the road.", "weight": 2}
+              ]
+            }
+          ],
+          "relationships": [
+            {"source_id": "road-rumors", "target": "A rider carries a sealed map.", "type": "contains"}
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert len(payload.entities) == 1
+    assert payload.entities[0].type.value == "event"
+    assert "quest" in payload.entities[0].tags
+    assert len(payload.random_tables) == 1
+    assert payload.random_tables[0].name == "Road rumors"
+    assert len(payload.random_table_rows) == 2
+    assert {row.table_client_id for row in payload.random_table_rows} == {payload.random_tables[0].client_id}
+
+
 def test_annotate_payload_with_source_excerpts_matches_relevant_sentences() -> None:
     payload = parse_extraction_payload(
         """

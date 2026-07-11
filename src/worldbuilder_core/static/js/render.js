@@ -1,28 +1,44 @@
 import { $, escapeHtml } from "./dom.js";
 import { selectedWorld, state } from "./state.js";
-import { t } from "./i18n.js";
+import { language, t } from "./i18n.js";
 import {
   applyProposal,
   applySelectedProposal,
+  cancelChatMessageEdit,
+  cancelChatThreadRename,
+  changeChatThread,
+  deleteChatMessage,
+  deleteChatThread,
   deleteDetectiveConnection,
   deleteDetectiveNode,
+  deleteEntity,
   deleteMapPin,
   deleteRandomTable,
   deleteRandomTableRow,
+  deleteRelationship,
+  deleteRule,
+  deleteProposal,
+  deleteWorld,
+  editChatMessage,
   editDetectiveConnection,
   editDetectiveNode,
   editEntity,
+  editRelationship,
   editMapPin,
   editRandomTable,
   editRandomTableRow,
   openMapPinEditor,
   persistDetectiveNodePosition,
   rejectProposal,
+  renameChatThread,
   loadWorldData,
   rollRandomTable,
+  saveChatMessageEdit,
+  saveChatThreadRename,
   saveAssistantMessageToWiki,
   setDetectiveNodeDraft,
   setMapPinDraft,
+  startCreateEntityWithType,
 } from "./actions.js";
 
 export function activateTab(tabName) {
@@ -48,9 +64,23 @@ export function currentRole() {
   return $("viewerRole").value;
 }
 
+function isMasterMode() {
+  return currentRole() === "master";
+}
+
 export function renderAllWorldData() {
+  const role = currentRole();
+  document.body.classList.toggle("role-master", role === "master");
+  document.body.classList.toggle("role-player", role === "player");
+  const badge = $("roleIndicatorBadge");
+  if (badge) {
+    badge.textContent = role === "master" ? t("role.master") : t("role.player");
+    badge.className = `role-indicator-badge ${role}`;
+  }
+
   renderEntities();
   renderRelationshipOptions();
+  renderRelationshipFormMode();
   renderMapPinOptions();
   renderRandomTableOptions();
   renderDetectiveOptions();
@@ -61,7 +91,27 @@ export function renderAllWorldData() {
   renderTimeline();
   renderModules();
   renderModuleVisibility();
+  renderRoleVisibility();
+  renderChatThreads();
+  renderChatTemplates();
+  renderChat();
   renderEntityReader();
+}
+
+function renderRoleVisibility() {
+  const master = isMasterMode();
+  document.querySelectorAll("[data-master-only]").forEach((element) => {
+    element.classList.toggle("hidden", !master);
+  });
+
+  if (!master) {
+    closeEntityDrawer();
+  }
+
+  const activeTab = document.querySelector(".tab.active");
+  if (activeTab?.dataset.masterOnly === "true" && !master) {
+    activateTab("wiki");
+  }
 }
 
 export function renderModuleVisibility() {
@@ -108,6 +158,7 @@ export function renderModuleVisibility() {
   if (activeTab?.classList.contains("hidden")) {
     activateTab("wiki");
   }
+  renderChatTemplates();
 }
 
 export function renderInviteLinks() {
@@ -128,6 +179,17 @@ export function renderEntityFormMode() {
 export function renderMapPinFormMode() {
   $("mapPinSubmit").textContent = state.editingMapPinId ? t("map.pinSave") : t("map.pinAdd");
   $("cancelMapPinEdit").classList.toggle("hidden", !state.editingMapPinId);
+  const deleteBtn = $("deleteMapPinBtn");
+  if (deleteBtn) {
+    deleteBtn.classList.toggle("hidden", !state.editingMapPinId);
+  }
+}
+
+export function renderRelationshipFormMode() {
+  const editing = Boolean(state.editingRelationshipId);
+  $("relationshipFormTitle").textContent = t(editing ? "relationship.editTitle" : "relationship.createTitle");
+  $("relationshipSubmit").textContent = t(editing ? "relationship.save" : "relationship.add");
+  $("cancelRelationshipEdit").classList.toggle("hidden", !editing);
 }
 
 export function renderRandomTableFormMode() {
@@ -192,15 +254,17 @@ export function renderWorlds() {
   }
 
   list.className = "list";
+  const master = isMasterMode();
   list.innerHTML = state.worlds
     .map(
       (world) => `
-        <button class="item ${world.id === state.selectedWorldId ? "active" : ""}" data-world-id="${world.id}" type="button">
-          <div class="item-top">
-            <span class="item-title">${escapeHtml(world.name)}</span>
-          </div>
-          <div class="item-meta">${escapeHtml(world.description || t("common.noDescription"))}</div>
-        </button>
+        <div class="world-list-item ${world.id === state.selectedWorldId ? "active" : ""}">
+          <button class="item" data-world-id="${world.id}" type="button">
+            <div class="item-top"><span class="item-title">${escapeHtml(world.name)}</span></div>
+            <div class="item-meta">${escapeHtml(world.description || t("common.noDescription"))}</div>
+          </button>
+          ${master ? `<button class="ghost danger icon-button" data-delete-world="${world.id}" type="button" title="${escapeHtml(t("world.delete"))}" aria-label="${escapeHtml(t("world.delete"))}">&times;</button>` : ""}
+        </div>
       `,
     )
     .join("");
@@ -209,11 +273,15 @@ export function renderWorlds() {
     button.addEventListener("click", async () => {
       state.selectedWorldId = button.dataset.worldId;
       state.chatMessages = [];
+      document.querySelector(".shell")?.classList.remove("sidebar-open");
       renderWorlds();
       renderSelectedWorld();
       renderChat();
       await loadWorldData();
     });
+  });
+  list.querySelectorAll("[data-delete-world]").forEach((button) => {
+    button.addEventListener("click", () => deleteWorld(button.dataset.deleteWorld));
   });
 }
 
@@ -225,19 +293,31 @@ export function renderSelectedWorld() {
 
 export function renderEntities() {
   const list = $("entityList");
+  const master = isMasterMode();
   if (!state.selectedWorldId) {
     list.className = "grid-list empty";
     list.textContent = t("entity.selectWorld");
     return;
   }
-  if (!state.entities.length) {
+
+  // Update active state for filter buttons
+  document.querySelectorAll(".category-filter").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.filter === (state.entityTypeFilter || "all"));
+  });
+
+  let filteredEntities = state.entities;
+  if (state.entityTypeFilter && state.entityTypeFilter !== "all") {
+    filteredEntities = state.entities.filter((entity) => entity.type === state.entityTypeFilter);
+  }
+
+  if (!filteredEntities.length) {
     list.className = "grid-list empty";
     list.textContent = t("entity.empty");
     return;
   }
 
   list.className = "grid-list";
-  list.innerHTML = state.entities
+  list.innerHTML = filteredEntities
     .map(
       (entity) => `
         <article class="item entity-card encyclopedia-card" data-open-entity="${entity.id}" role="button" tabindex="0">
@@ -249,12 +329,17 @@ export function renderEntities() {
             </div>
             <span class="badge">${escapeHtml(entity.id.slice(0, 8))}</span>
           </div>
-          <div class="item-body">${escapeHtml(entity.summary || entity.description || t("common.noSummary"))}</div>
+          <div class="item-body">${renderMarkdown(entity.summary || entity.description || t("common.noSummary"))}</div>
           ${entity.attributes?.timeline_date ? `<div class="item-meta">${t("entity.timelineDate")}: ${escapeHtml(entity.attributes.timeline_date)}</div>` : ""}
           ${entity.tags?.length ? `<div class="item-meta">${entity.tags.map(escapeHtml).join(", ")}</div>` : ""}
           <div class="item-actions">
             <button class="ghost" data-open-entity-button="${entity.id}" type="button">${t("entity.open")}</button>
-            <button class="ghost" data-edit-entity="${entity.id}" type="button">${t("entity.edit")}</button>
+            ${
+              master
+                ? `<button class="ghost" data-edit-entity="${entity.id}" type="button">${t("entity.edit")}</button>
+                   <button class="ghost danger" data-delete-entity="${entity.id}" type="button">${t("randomTable.delete")}</button>`
+                : ""
+            }
           </div>
         </article>
       `,
@@ -280,6 +365,12 @@ export function renderEntities() {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       editEntity(button.dataset.editEntity);
+    });
+  });
+  list.querySelectorAll("[data-delete-entity]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteEntity(button.dataset.deleteEntity);
     });
   });
 }
@@ -369,6 +460,164 @@ function renderReaderHeader({ title, eyebrow, summary, badge, imageHtml }) {
   `;
 }
 
+export function renderMarkdown(text) {
+  if (!text) return "";
+  const lines = escapeHtml(text).replace(/\r\n/g, "\n").split("\n");
+  const output = [];
+  let listType = null;
+  let inCode = false;
+  let codeLines = [];
+
+  const closeList = () => {
+    if (listType) {
+      output.push(`</${listType}>`);
+      listType = null;
+    }
+  };
+
+  const openList = (nextListType) => {
+    if (listType === nextListType) return;
+    closeList();
+    output.push(`<${nextListType}>`);
+    listType = nextListType;
+  };
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    if (line.trim().startsWith("```")) {
+      if (inCode) {
+        output.push(`<pre><code>${codeLines.join("\n")}</code></pre>`);
+        codeLines = [];
+        inCode = false;
+      } else {
+        closeList();
+        inCode = true;
+      }
+      continue;
+    }
+
+    if (inCode) {
+      codeLines.push(line);
+      continue;
+    }
+
+    const tableHeader = parseMarkdownTableRow(line);
+    const tableSeparator = parseMarkdownTableSeparator(lines[lineIndex + 1]);
+    if (tableHeader && tableSeparator && tableHeader.length === tableSeparator.length) {
+      closeList();
+      const rows = [];
+      lineIndex += 2;
+      while (lineIndex < lines.length) {
+        const row = parseMarkdownTableRow(lines[lineIndex]);
+        if (!row) break;
+        rows.push(row);
+        lineIndex += 1;
+      }
+      lineIndex -= 1;
+      output.push(renderMarkdownTable(tableHeader, tableSeparator, rows));
+      continue;
+    }
+
+    const heading = /^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      output.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+      continue;
+    }
+
+    if (/^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$/.test(line)) {
+      closeList();
+      output.push("<hr>");
+      continue;
+    }
+
+    const bullet = /^\s*[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      openList("ul");
+      output.push(`<li>${renderInlineMarkdown(bullet[1].trim())}</li>`);
+      continue;
+    }
+
+    const ordered = /^\s*\d+\.\s+(.+)$/.exec(line);
+    if (ordered) {
+      openList("ol");
+      output.push(`<li>${renderInlineMarkdown(ordered[1].trim())}</li>`);
+      continue;
+    }
+
+    const quote = /^\s*>\s?(.*)$/.exec(line);
+    if (quote) {
+      closeList();
+      output.push(`<blockquote>${renderInlineMarkdown(quote[1].trim())}</blockquote>`);
+      continue;
+    }
+
+    closeList();
+    if (line.trim()) {
+      output.push(`<p>${renderInlineMarkdown(line.trim())}</p>`);
+    }
+  }
+
+  closeList();
+  if (inCode) {
+    output.push(`<pre><code>${codeLines.join("\n")}</code></pre>`);
+  }
+  return `<div class="md-content">${output.join("")}</div>`;
+}
+
+function parseMarkdownTableRow(line) {
+  if (!line || !line.includes("|")) return null;
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = trimmed.split("|").map((cell) => cell.trim());
+  return cells.length > 1 ? cells : null;
+}
+
+function parseMarkdownTableSeparator(line) {
+  const cells = parseMarkdownTableRow(line);
+  if (!cells || !cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, "")))) return null;
+  return cells.map((cell) => {
+    const normalized = cell.replace(/\s+/g, "");
+    if (normalized.startsWith(":") && normalized.endsWith(":")) return "center";
+    if (normalized.endsWith(":")) return "right";
+    return "left";
+  });
+}
+
+function renderMarkdownTable(headers, alignments, rows) {
+  const renderCells = (cells, tag) => headers
+    .map((_, index) => `<${tag} class="md-align-${alignments[index]}">${renderInlineMarkdown(cells[index] || "")}</${tag}>`)
+    .join("");
+  return `
+    <div class="md-table-wrap">
+      <table>
+        <thead><tr>${renderCells(headers, "th")}</tr></thead>
+        <tbody>${rows.map((row) => `<tr>${renderCells(row, "td")}</tr>`).join("")}</tbody>
+      </table>
+    </div>`;
+}
+
+function renderInlineMarkdown(value) {
+  const codeSegments = [];
+  const withCodeTokens = value.replace(/`([^`]+)`/g, (_, code) => {
+    const token = `%%CODETOKEN${codeSegments.length}%%`;
+    codeSegments.push(code);
+    return token;
+  });
+  const rendered = withCodeTokens
+    .replace(/\*\*\*([^*]+)\*\*\*/g, "<strong><em>$1</em></strong>")
+    .replace(/___([^_]+)___/g, "<strong><em>$1</em></strong>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_]+)_/g, "<em>$1</em>")
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  return codeSegments.reduce(
+    (result, code, index) => result.replace(`%%CODETOKEN${index}%%`, `<code>${code}</code>`),
+    rendered,
+  );
+}
+
 function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
   const related = state.relationships.filter(
     (relationship) => relationship.source_entity_id === entity.id || relationship.target_entity_id === entity.id,
@@ -377,7 +626,51 @@ function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
     ? `<img class="reader-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
     : `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
 
+  // Breadcrumbs
+  const breadcrumbsHtml = `
+    <nav class="reader-breadcrumbs" aria-label="Breadcrumb">
+      <span class="breadcrumb-item clickable" data-breadcrumb-action="back-to-wiki">${escapeHtml(t("tabs.wiki"))}</span>
+      <span class="breadcrumb-separator">/</span>
+      <span class="breadcrumb-item clickable" data-breadcrumb-action="filter-type" data-filter-type="${entity.type}">${escapeHtml(t(`entityType.${entity.type}`))}</span>
+      <span class="breadcrumb-separator">/</span>
+      <span class="breadcrumb-item active">${escapeHtml(entity.name)}</span>
+    </nav>
+  `;
+
+  // Table of Contents (TOC)
+  const hasSummary = !!entity.summary;
+  const hasDesc = !!(entity.description && entity.description !== entity.summary);
+  const hasRelationships = related.length > 0;
+  const hasExtra = extraSections.length > 0;
+
+  let tocHtml = `
+    <nav class="reader-toc">
+      <div class="toc-title">${escapeHtml(t("entity.tocTitle") || "Содержание")}</div>
+      <ul class="toc-list">
+        <li class="toc-item"><a href="#sec-overview" class="toc-link active">${escapeHtml(t("entity.tocOverview") || "Обзор")}</a></li>
+  `;
+  if (hasDesc) {
+    tocHtml += `
+        <li class="toc-item"><a href="#sec-details" class="toc-link">${escapeHtml(t("entity.tocDetails") || "Описание")}</a></li>
+    `;
+  }
+  if (hasRelationships) {
+    tocHtml += `
+        <li class="toc-item"><a href="#sec-relations" class="toc-link">${escapeHtml(t("entity.tocRelations") || "Связи")}</a></li>
+    `;
+  }
+  if (hasExtra) {
+    tocHtml += `
+        <li class="toc-item"><a href="#sec-extra" class="toc-link">${escapeHtml(t("entity.tocExtra") || "Объекты")}</a></li>
+    `;
+  }
+  tocHtml += `
+      </ul>
+    </nav>
+  `;
+
   return `
+    ${breadcrumbsHtml}
     ${renderReaderHeader({
       title: entity.name,
       eyebrow: t(`entityType.${entity.type}`),
@@ -386,26 +679,46 @@ function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
       imageHtml,
     })}
     <div class="reader-reading-layout">
+      <!-- Left Column: Table of Contents -->
+      <aside class="reader-toc-column">
+        ${tocHtml}
+      </aside>
+
+      <!-- Unified Article Column: TOC items act as Tabs -->
       <article class="reader-article">
-        <div class="reader-body">${escapeHtml(entity.description || entity.summary || t("common.noSummary"))}</div>
+        <section id="sec-overview" class="reader-section-block">
+          <div class="reader-body">${renderMarkdown(entity.summary || entity.description || t("common.noSummary"))}</div>
+        </section>
+
+        ${hasDesc ? `
+          <section id="sec-details" class="reader-section-block">
+            <h3 class="section-title">${escapeHtml(t("entity.description") || "Описание")}</h3>
+            <div class="reader-body">${renderMarkdown(entity.description)}</div>
+          </section>
+        ` : ""}
+
+        ${hasExtra ? `
+          <section id="sec-extra" class="reader-section-block">
+            ${extraSections.join("")}
+          </section>
+        ` : ""}
+
+        <section id="sec-relations" class="reader-section-block reader-section">
+          <h3 class="section-title">${escapeHtml(t("relationship.listTitle"))}</h3>
+          ${related.length ? renderReaderRelationshipCards(entity.id, related) : `<p class="muted">${escapeHtml(t("relationship.empty"))}</p>`}
+        </section>
+
         ${
           entity.tags?.length
-            ? `<div class="reader-tags">${entity.tags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}</div>`
+            ? `<div class="reader-tags" style="margin-top: 16px;">${entity.tags.map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join("")}</div>`
             : ""
         }
         ${
           entity.attributes?.timeline_date
-            ? `<div class="item-meta">${escapeHtml(t("entity.timelineDate"))}: ${escapeHtml(entity.attributes.timeline_date)}</div>`
+            ? `<div class="item-meta reader-timeline-date-meta">${escapeHtml(t("entity.timelineDate"))}: ${escapeHtml(entity.attributes.timeline_date)}</div>`
             : ""
         }
       </article>
-      <aside class="reader-aside">
-        ${extraSections.join("")}
-        <section class="reader-section">
-          <h3>${escapeHtml(t("relationship.listTitle"))}</h3>
-          ${related.length ? renderReaderRelationshipCards(entity.id, related) : `<p class="muted">${escapeHtml(t("relationship.empty"))}</p>`}
-        </section>
-      </aside>
     </div>
   `;
 }
@@ -421,7 +734,7 @@ function renderReaderRelationshipCards(entityId, relationships) {
             <article class="reader-subcard">
               <div class="reader-card-head">
                 <strong>${escapeHtml(entityName(otherEntityId))}</strong>
-                <span class="badge">${escapeHtml(relationship.label || relationship.type)}</span>
+                <span class="badge">${escapeHtml(relationshipDisplayLabel(relationship))}</span>
               </div>
               <div class="reader-inline-actions">
                 <span class="item-meta">${escapeHtml(entityName(relationship.source_entity_id))} -> ${escapeHtml(entityName(relationship.target_entity_id))}</span>
@@ -451,7 +764,7 @@ function renderMapReaderPinsSection(entityId) {
                         <strong>${escapeHtml(pin.title)}</strong>
                         <span class="badge">${pin.is_secret ? escapeHtml(t("common.secretValue")) : escapeHtml(t("common.public"))}</span>
                       </div>
-                      ${pin.note ? `<div class="reader-card-body">${escapeHtml(pin.note)}</div>` : ""}
+                      ${pin.note ? `<div class="reader-card-body">${renderMarkdown(pin.note)}</div>` : ""}
                       ${
                         pin.linked_entity_id
                           ? `<div class="reader-inline-actions">
@@ -497,7 +810,7 @@ function renderDetectiveNodeReader() {
     })}
     <div class="reader-reading-layout">
       <article class="reader-article">
-        <div class="reader-body">${escapeHtml(node.note || linkedEntity?.description || linkedEntity?.summary || t("common.noSummary"))}</div>
+        <div class="reader-body">${renderMarkdown(node.note || linkedEntity?.description || linkedEntity?.summary || t("common.noSummary"))}</div>
       </article>
       <aside class="reader-aside">
         ${
@@ -540,7 +853,7 @@ function renderDetectiveNodeReader() {
                             <strong>${escapeHtml(detectiveNodeTitle(otherNodeId))}</strong>
                             <span class="badge">${escapeHtml(connection.label || t("detective.connection"))}</span>
                           </div>
-                          ${connection.note ? `<div class="reader-card-body">${escapeHtml(connection.note)}</div>` : ""}
+                          ${connection.note ? `<div class="reader-card-body">${renderMarkdown(connection.note)}</div>` : ""}
                           <div class="reader-inline-actions">
                             <span class="item-meta">${escapeHtml(detectiveNodeTitle(connection.source_node_id))} -> ${escapeHtml(detectiveNodeTitle(connection.target_node_id))}</span>
                             <button class="ghost" data-reader-open-detective-node="${otherNodeId}" type="button">${escapeHtml(t("entity.open"))}</button>
@@ -570,6 +883,53 @@ function bindEntityReaderActions() {
     .forEach((button) => {
       button.addEventListener("click", () => openDetectiveNodeReader(button.dataset.readerOpenDetectiveNode));
     });
+
+  // Breadcrumb actions
+  const backToWikiBtn = $("entityReaderContent").querySelector('[data-breadcrumb-action="back-to-wiki"]');
+  if (backToWikiBtn) {
+    backToWikiBtn.addEventListener("click", () => {
+      closeEntityReader();
+    });
+  }
+
+  const filterTypeBtn = $("entityReaderContent").querySelector('[data-breadcrumb-action="filter-type"]');
+  if (filterTypeBtn) {
+    filterTypeBtn.addEventListener("click", () => {
+      state.entityTypeFilter = filterTypeBtn.dataset.filterType;
+      closeEntityReader();
+      renderEntities();
+    });
+  }
+
+  // Tab-switching and active status for TOC links
+  const tocLinks = $("entityReaderContent").querySelectorAll(".toc-link");
+
+  function showSection(targetId) {
+    $("entityReaderContent").querySelectorAll(".reader-section-block").forEach((sec) => {
+      if (sec.id === targetId) {
+        sec.style.display = "block";
+      } else {
+        sec.style.display = "none";
+      }
+    });
+  }
+
+  // Set initial active state based on active class
+  const activeLink = $("entityReaderContent").querySelector(".toc-link.active");
+  if (activeLink) {
+    showSection(activeLink.getAttribute("href").slice(1));
+  }
+
+  tocLinks.forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      tocLinks.forEach((l) => l.classList.remove("active"));
+      link.classList.add("active");
+
+      const targetId = link.getAttribute("href").slice(1);
+      showSection(targetId);
+    });
+  });
 }
 
 export function renderGraph() {
@@ -586,19 +946,33 @@ export function renderGraph() {
     return;
   }
 
+  loadGraphPositions();
+
   const width = 960;
   const height = 520;
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const radius = Math.min(width, height) * 0.36;
   const nodes = state.entities.map((entity, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(state.entities.length, 1) - Math.PI / 2;
+    if (state.graphPositions[entity.id]) {
+      return {
+        entity,
+        x: state.graphPositions[entity.id].x,
+        y: state.graphPositions[entity.id].y,
+        fixed: true,
+      };
+    }
+    const columns = Math.max(1, Math.ceil(Math.sqrt(state.entities.length * (width / height))));
+    const rows = Math.max(1, Math.ceil(state.entities.length / columns));
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const initialX = 75 + column * ((width - 150) / Math.max(columns - 1, 1));
+    const initialY = 75 + row * ((height - 150) / Math.max(rows - 1, 1));
     return {
       entity,
-      x: centerX + Math.cos(angle) * radius,
-      y: centerY + Math.sin(angle) * radius,
+      x: initialX,
+      y: initialY,
+      fixed: false,
     };
   });
+
   const byId = new Map(nodes.map((node) => [node.entity.id, node]));
   const edges = state.relationships
     .map((relationship) => ({
@@ -608,35 +982,301 @@ export function renderGraph() {
     }))
     .filter((edge) => edge.source && edge.target);
 
+  if (nodes.some((node) => !node.fixed)) {
+    applyForceDirectedLayout(nodes, edges, width, height);
+    nodes.forEach((node) => {
+      state.graphPositions[node.entity.id] = { x: node.x, y: node.y };
+    });
+    saveGraphPositions();
+  }
+
   view.className = "graph-view";
+
+  const edgesHtml = edges.map(({ relationship, source, target }, edgeIndex) => {
+    const x1 = source.x;
+    const y1 = source.y;
+    const x2 = target.x;
+    const y2 = target.y;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const r = 45; // circle radius is 45
+
+    // Offset the target and source position by radius so the arrow is precisely on the border
+    const tx = x2 - (dx / d) * r;
+    const ty = y2 - (dy / d) * r;
+    const sx = x1 + (dx / d) * r;
+    const sy = y1 + (dy / d) * r;
+
+    return `
+      <line class="graph-edge"
+            data-edge-id="${edgeIndex}"
+            data-source-entity="${relationship.source_entity_id}"
+            data-target-entity="${relationship.target_entity_id}"
+            x1="${sx}" y1="${sy}" x2="${tx}" y2="${ty}"
+            marker-end="url(#arrow)"
+            style="stroke: var(--line); stroke-width: 2;" />
+      <text class="graph-label"
+            data-edge-id="${edgeIndex}"
+            x="${(sx + tx) / 2}" y="${(sy + ty) / 2 - 4}"
+            text-anchor="middle"
+            style="font-size: 11px; fill: var(--text);">
+        ${escapeHtml(relationshipDisplayLabel(relationship))}
+      </text>
+    `;
+  }).join("");
+
+  const nodesHtml = nodes.map(({ entity, x, y }, index) => {
+    return `
+      <g class="graph-node-group" data-node-index="${index}" style="cursor: grab; user-select: none;">
+        <circle cx="${x}" cy="${y}" r="45"
+                style="fill: var(--panel); stroke: var(--accent); stroke-width: 3; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.15)); transition: stroke 0.2s, fill 0.2s;" />
+        <foreignObject x="${x - 38}" y="${y - 38}" width="76" height="76" style="pointer-events: none;">
+          <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; padding: 4px; overflow: hidden;">
+            <div class="graph-node-name" style="font-size: 11px; font-weight: bold; color: var(--text); word-break: break-word; line-height: 1.15; max-height: 44px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;">
+              ${escapeHtml(entity.name)}
+            </div>
+            <div style="font-size: 8px; color: var(--muted); text-transform: uppercase; margin-top: 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 68px;">
+              ${escapeHtml(t(`entityType.${entity.type}`))}
+            </div>
+          </div>
+        </foreignObject>
+      </g>
+    `;
+  }).join("");
+
   view.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(t("graph.title"))}">
+    <svg viewBox="0 0 ${width} ${height}" style="width: 100%; height: 100%; overflow: visible;" role="img" aria-label="${escapeHtml(t("graph.title"))}">
       <defs>
-        <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
-          <path d="M0,0 L0,6 L9,3 z" />
+        <marker id="arrow" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+          <path d="M0,0 L0,6 L6,3 z" fill="var(--line)" />
         </marker>
       </defs>
-      ${edges
-        .map(
-          ({ relationship, source, target }) => `
-            <line class="graph-edge" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" marker-end="url(#arrow)" />
-            <text class="graph-label" x="${(source.x + target.x) / 2}" y="${(source.y + target.y) / 2}">${escapeHtml(relationship.label || relationship.type)}</text>
-          `,
-        )
-        .join("")}
-      ${nodes
-        .map(
-          ({ entity, x, y }) => `
-            <g class="graph-node">
-              <circle cx="${x}" cy="${y}" r="32" />
-              <text x="${x}" y="${y - 4}" text-anchor="middle">${escapeHtml(shortLabel(entity.name))}</text>
-              <text class="graph-node-type" x="${x}" y="${y + 12}" text-anchor="middle">${escapeHtml(t(`entityType.${entity.type}`))}</text>
-            </g>
-          `,
-        )
-        .join("")}
+      ${edgesHtml}
+      ${nodesHtml}
     </svg>
   `;
+
+  // Attach interactive drag-and-drop and click events
+  const svg = view.querySelector("svg");
+  let dragNode = null;
+  let dragOffset = { x: 0, y: 0 };
+
+  function updateLinePosition(line) {
+    const edgeId = line.dataset.edgeId;
+    const sourceId = line.dataset.sourceEntity;
+    const targetId = line.dataset.targetEntity;
+    const srcNode = state.graphPositions[sourceId];
+    const tgtNode = state.graphPositions[targetId];
+    if (!srcNode || !tgtNode) return;
+
+    const x1 = srcNode.x;
+    const y1 = srcNode.y;
+    const x2 = tgtNode.x;
+    const y2 = tgtNode.y;
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const r = 45;
+
+    const tx = x2 - (dx / d) * r;
+    const ty = y2 - (dy / d) * r;
+    const sx = x1 + (dx / d) * r;
+    const sy = y1 + (dy / d) * r;
+
+    line.setAttribute("x1", String(sx));
+    line.setAttribute("y1", String(sy));
+    line.setAttribute("x2", String(tx));
+    line.setAttribute("y2", String(ty));
+
+    const label = svg.querySelector(`text[data-edge-id="${edgeId}"]`);
+    if (label) {
+      label.setAttribute("x", String((sx + tx) / 2));
+      label.setAttribute("y", String((sy + ty) / 2 - 4));
+    }
+  }
+
+  svg.querySelectorAll(".graph-node-group").forEach((group) => {
+    const index = Number(group.dataset.nodeIndex);
+    const node = nodes[index];
+    const circle = group.querySelector("circle");
+
+    group.addEventListener("click", () => {
+      if (group.dataset.dragged === "true") {
+        group.dataset.dragged = "false";
+        return;
+      }
+      openEntityReader(node.entity.id);
+    });
+
+    group.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      dragNode = node;
+      const rect = svg.getBoundingClientRect();
+      const clickX = ((event.clientX - rect.left) / rect.width) * width;
+      const clickY = ((event.clientY - rect.top) / rect.height) * height;
+      dragOffset = {
+        x: clickX - node.x,
+        y: clickY - node.y,
+      };
+      group.setPointerCapture(event.pointerId);
+      group.style.cursor = "grabbing";
+      circle.style.stroke = "var(--accent-strong)";
+      circle.style.fill = "var(--panel-strong)";
+      group.dataset.dragged = "false";
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    group.addEventListener("pointermove", (event) => {
+      if (dragNode !== node) return;
+      const rect = svg.getBoundingClientRect();
+      const currentX = ((event.clientX - rect.left) / rect.width) * width;
+      const currentY = ((event.clientY - rect.top) / rect.height) * height;
+
+      const newX = Math.max(45, Math.min(width - 45, currentX - dragOffset.x));
+      const newY = Math.max(45, Math.min(height - 45, currentY - dragOffset.y));
+
+      node.x = newX;
+      node.y = newY;
+      state.graphPositions[node.entity.id] = { x: newX, y: newY };
+
+      circle.setAttribute("cx", String(newX));
+      circle.setAttribute("cy", String(newY));
+
+      const fo = group.querySelector("foreignObject");
+      if (fo) {
+        fo.setAttribute("x", String(newX - 38));
+        fo.setAttribute("y", String(newY - 38));
+      }
+
+      svg.querySelectorAll(`[data-source-entity="${node.entity.id}"], [data-target-entity="${node.entity.id}"]`).forEach((line) => {
+        updateLinePosition(line);
+      });
+
+      group.dataset.dragged = "true";
+      event.preventDefault();
+    });
+
+    const stopDrag = (event) => {
+      if (dragNode !== node) return;
+      dragNode = null;
+      group.style.cursor = "grab";
+      circle.style.stroke = "var(--accent)";
+      circle.style.fill = "var(--panel)";
+      saveGraphPositions();
+      if (group.hasPointerCapture?.(event.pointerId)) {
+        group.releasePointerCapture(event.pointerId);
+      }
+    };
+
+    group.addEventListener("pointerup", stopDrag);
+    group.addEventListener("pointercancel", stopDrag);
+  });
+}
+
+export function arrangeGraph() {
+  const key = graphPositionStorageKey();
+  if (key) localStorage.removeItem(key);
+  state.graphPositions = {};
+  state.graphPositionScope = key;
+  renderGraph();
+}
+
+function applyForceDirectedLayout(nodes, edges, width, height) {
+  const velocities = new Map(nodes.map((node) => [node.entity.id, { x: 0, y: 0 }]));
+  const desiredDistance = nodes.length > 24 ? 105 : 145;
+  const repulsion = nodes.length > 24 ? 5200 : 7600;
+
+  for (let iteration = 0; iteration < 180; iteration += 1) {
+    const cooling = 1 - iteration / 220;
+    nodes.forEach((node, index) => {
+      for (let otherIndex = index + 1; otherIndex < nodes.length; otherIndex += 1) {
+        const other = nodes[otherIndex];
+        if (node.fixed && other.fixed) continue;
+        const dx = node.x - other.x || 0.5;
+        const dy = node.y - other.y || 0.5;
+        const distanceSquared = Math.max(dx * dx + dy * dy, 100);
+        const force = repulsion / distanceSquared;
+        const distance = Math.sqrt(distanceSquared);
+        if (!node.fixed) {
+          const velocity = velocities.get(node.entity.id);
+          velocity.x += (dx / distance) * force;
+          velocity.y += (dy / distance) * force;
+        }
+        if (!other.fixed) {
+          const otherVelocity = velocities.get(other.entity.id);
+          otherVelocity.x -= (dx / distance) * force;
+          otherVelocity.y -= (dy / distance) * force;
+        }
+      }
+    });
+
+    edges.forEach(({ source, target }) => {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
+      const force = (distance - desiredDistance) * 0.018;
+      if (!source.fixed) {
+        const velocity = velocities.get(source.entity.id);
+        velocity.x += (dx / distance) * force;
+        velocity.y += (dy / distance) * force;
+      }
+      if (!target.fixed) {
+        const velocity = velocities.get(target.entity.id);
+        velocity.x -= (dx / distance) * force;
+        velocity.y -= (dy / distance) * force;
+      }
+    });
+
+    nodes.forEach((node) => {
+      if (node.fixed) return;
+      const velocity = velocities.get(node.entity.id);
+      velocity.x += (width / 2 - node.x) * 0.004;
+      velocity.y += (height / 2 - node.y) * 0.004;
+      velocity.x *= 0.72;
+      velocity.y *= 0.72;
+      node.x = Math.max(55, Math.min(width - 55, node.x + Math.max(-12, Math.min(12, velocity.x)) * cooling));
+      node.y = Math.max(55, Math.min(height - 55, node.y + Math.max(-12, Math.min(12, velocity.y)) * cooling));
+    });
+  }
+
+  resolveGraphCollisions(nodes, width, height);
+}
+
+function resolveGraphCollisions(nodes, width, height) {
+  const minimumDistance = 104;
+  for (let iteration = 0; iteration < 36; iteration += 1) {
+    let moved = false;
+    nodes.forEach((node, index) => {
+      for (let otherIndex = index + 1; otherIndex < nodes.length; otherIndex += 1) {
+        const other = nodes[otherIndex];
+        const rawDx = other.x - node.x;
+        const rawDy = other.y - node.y;
+        const distance = Math.sqrt(rawDx * rawDx + rawDy * rawDy);
+        if (distance >= minimumDistance) continue;
+
+        const dx = distance > 0.01 ? rawDx / distance : index % 2 === 0 ? 1 : -1;
+        const dy = distance > 0.01 ? rawDy / distance : otherIndex % 2 === 0 ? 0.5 : -0.5;
+        const overlap = (minimumDistance - Math.max(distance, 0.01)) / 2;
+        if (!node.fixed) {
+          node.x -= dx * overlap;
+          node.y -= dy * overlap;
+        }
+        if (!other.fixed) {
+          other.x += dx * overlap;
+          other.y += dy * overlap;
+        }
+        moved = true;
+      }
+    });
+
+    nodes.forEach((node) => {
+      node.x = Math.max(55, Math.min(width - 55, node.x));
+      node.y = Math.max(55, Math.min(height - 55, node.y));
+    });
+    if (!moved) break;
+  }
 }
 
 export function renderTimeline() {
@@ -659,7 +1299,7 @@ export function renderTimeline() {
           <div class="timeline-date">${escapeHtml(event.attributes?.timeline_date || t("timeline.noDate"))}</div>
           <div class="item">
             <div class="item-title">${escapeHtml(event.name)}</div>
-            <div class="item-body">${escapeHtml(event.summary || event.description || t("common.noSummary"))}</div>
+            <div class="item-body">${renderMarkdown(event.summary || event.description || t("common.noSummary"))}</div>
             ${event.tags?.length ? `<div class="item-meta">${event.tags.map(escapeHtml).join(", ")}</div>` : ""}
           </div>
         </article>
@@ -693,6 +1333,7 @@ function renderQuests() {
 function renderMaps() {
   const list = $("mapList");
   const summary = $("mapSummary");
+  const master = isMasterMode();
   if (!list) return;
   const locations = state.entities.filter((entity) => entity.type === "location");
   if (summary) {
@@ -732,16 +1373,21 @@ function renderMaps() {
             ${pins
               .map(
                 (pin) => `
-                  <button class="map-pin ${pin.is_secret ? "secret" : ""}" data-edit-map-pin="${pin.id}" style="left: ${pin.x * 100}%; top: ${pin.y * 100}%;" type="button" title="${escapeHtml(pin.title)}">
+                  <button class="map-pin ${pin.is_secret ? "secret" : ""}" ${master ? `data-edit-map-pin="${pin.id}"` : ""} style="left: ${pin.x * 100}%; top: ${pin.y * 100}%;" type="button" title="${escapeHtml(pin.title)}">
                     <span>${escapeHtml(pin.title.slice(0, 2).toUpperCase())}</span>
                   </button>
+                  ${
+                    master
+                      ? `<button class="map-pin-delete-badge" data-delete-map-pin="${pin.id}" style="left: calc(${pin.x * 100}% + 8px); top: calc(${pin.y * 100}% - 24px);" type="button" title="${escapeHtml(t("map.pinDelete"))}">&times;</button>`
+                      : ""
+                  }
                 `,
               )
               .join("")}
           </div>
           <div class="map-card-actions">
             <button class="ghost" data-open-map-reader="${location.id}" type="button">${t("entity.open")}</button>
-            <button class="ghost" data-prepare-map-pin="${location.id}" type="button">${t("map.pinAdd")}</button>
+            ${master ? `<button class="ghost" data-prepare-map-pin="${location.id}" type="button">${t("map.pinAdd")}</button>` : ""}
           </div>
           ${
             pins.length
@@ -750,10 +1396,14 @@ function renderMaps() {
                     (pin) => `
                       <div class="pin-row">
                         <span>${escapeHtml(pin.title)}${pin.linked_entity_id ? ` - ${escapeHtml(entityName(pin.linked_entity_id))}` : ""}</span>
-                        <span class="item-actions">
-                          <button class="ghost" data-edit-map-pin="${pin.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
-                          <button class="ghost danger" data-delete-map-pin="${pin.id}" type="button">${escapeHtml(t("map.pinDelete"))}</button>
-                        </span>
+                        ${
+                          master
+                            ? `<span class="item-actions">
+                                <button class="ghost" data-edit-map-pin="${pin.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                                <button class="ghost danger" data-delete-map-pin="${pin.id}" type="button">${escapeHtml(t("map.pinDelete"))}</button>
+                              </span>`
+                            : ""
+                        }
                       </div>
                     `,
                   )
@@ -767,7 +1417,8 @@ function renderMaps() {
 
   list.querySelectorAll("[data-map-image]").forEach((container) => {
     container.addEventListener("click", (event) => {
-      if (event.target.closest("[data-edit-map-pin]")) return;
+      if (!master) return;
+      if (event.target.closest("[data-edit-map-pin]") || event.target.closest("[data-delete-map-pin]")) return;
       const rect = container.getBoundingClientRect();
       setMapPinDraft(
         container.dataset.mapImage,
@@ -801,6 +1452,7 @@ function renderMaps() {
 
 function renderRandomTables() {
   const list = $("randomTableList");
+  const master = isMasterMode();
   if (!list) return;
   if (!state.randomTables.length) {
     list.className = "grid-list empty";
@@ -821,11 +1473,15 @@ function renderRandomTables() {
             </div>
             <div class="item-actions">
               <button data-roll-random-table="${table.id}" type="button" ${table.rows.length ? "" : "disabled"}>${escapeHtml(t("randomTable.roll"))}</button>
-              <button class="ghost" data-edit-random-table="${table.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
-              <button class="ghost danger" data-delete-random-table="${table.id}" type="button">${escapeHtml(t("randomTable.delete"))}</button>
+              ${
+                master
+                  ? `<button class="ghost" data-edit-random-table="${table.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                     <button class="ghost danger" data-delete-random-table="${table.id}" type="button">${escapeHtml(t("randomTable.delete"))}</button>`
+                  : ""
+              }
             </div>
           </div>
-          ${table.description ? `<div class="item-body">${escapeHtml(table.description)}</div>` : ""}
+          ${table.description ? `<div class="item-body">${renderMarkdown(table.description)}</div>` : ""}
           ${
             roll
               ? `<div class="roll-result">
@@ -845,12 +1501,16 @@ function renderRandomTables() {
                           <div>
                             <strong>${escapeHtml(row.label || t("randomTable.result"))}</strong>
                             <span class="item-meta">${escapeHtml(t("randomTable.weight"))}: ${row.weight}${row.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</span>
-                            <div>${escapeHtml(row.result)}</div>
+                            <div>${renderMarkdown(row.result)}</div>
                           </div>
-                          <span class="item-actions">
-                            <button class="ghost" data-edit-random-row="${table.id}:${row.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
-                            <button class="ghost danger" data-delete-random-row="${row.id}" type="button">${escapeHtml(t("randomTable.rowDelete"))}</button>
-                          </span>
+                          ${
+                            master
+                              ? `<span class="item-actions">
+                                  <button class="ghost" data-edit-random-row="${table.id}:${row.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                                  <button class="ghost danger" data-delete-random-row="${row.id}" type="button">${escapeHtml(t("randomTable.rowDelete"))}</button>
+                                </span>`
+                              : ""
+                          }
                         </div>
                       `,
                     )
@@ -971,7 +1631,7 @@ function renderDetectiveBoardLegacy() {
             <article class="detective-node ${node.is_secret ? "secret" : ""}" style="left: ${node.x * 100}%; top: ${node.y * 100}%;">
               <div class="item-title">${escapeHtml(node.title)}</div>
               <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
-              ${node.note ? `<div class="item-body">${escapeHtml(node.note)}</div>` : ""}
+              ${node.note ? `<div class="item-body">${renderMarkdown(node.note)}</div>` : ""}
               ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
               <div class="item-actions">
                 <button class="ghost" data-open-detective-node="${node.id}" type="button">${escapeHtml(t("entity.open"))}</button>
@@ -1016,7 +1676,7 @@ function renderDetectiveBoardLegacy() {
               <button class="ghost danger" data-delete-detective-connection="${connection.id}" type="button">${escapeHtml(t("detective.connectionDelete"))}</button>
             </div>
           </div>
-          ${connection.note ? `<div class="item-body">${escapeHtml(connection.note)}</div>` : ""}
+          ${connection.note ? `<div class="item-body">${renderMarkdown(connection.note)}</div>` : ""}
         </article>
       `,
     )
@@ -1044,7 +1704,7 @@ function renderEntityMiniList(list, entities, emptyText) {
           ${entity.attributes?.image_url ? `<img class="entity-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />` : ""}
           <div class="item-title">${escapeHtml(entity.name)}</div>
           <div class="item-meta">${escapeHtml(t(`entityType.${entity.type}`))}${entity.attributes?.timeline_date ? ` - ${escapeHtml(entity.attributes.timeline_date)}` : ""}</div>
-          <div class="item-body">${escapeHtml(entity.summary || entity.description || t("common.noSummary"))}</div>
+          <div class="item-body">${renderMarkdown(entity.summary || entity.description || t("common.noSummary"))}</div>
           ${entity.tags?.length ? `<div class="item-meta">${entity.tags.map(escapeHtml).join(", ")}</div>` : ""}
         </article>
       `,
@@ -1059,6 +1719,61 @@ function timelineSortKey(entity) {
 function shortLabel(value) {
   const text = String(value || "");
   return text.length > 18 ? `${text.slice(0, 15)}...` : text;
+}
+
+const relationshipLabelTranslations = {
+  is_involved_in: { en: "is involved in", ru: "участвует в" },
+  involved_in: { en: "is involved in", ru: "участвует в" },
+  member_of: { en: "member of", ru: "состоит в" },
+  belongs_to: { en: "belongs to", ru: "принадлежит" },
+  located_in: { en: "located in", ru: "находится в" },
+  controls: { en: "controls", ru: "контролирует" },
+  founded: { en: "founded", ru: "основал" },
+  guards: { en: "guards", ru: "охраняет" },
+  knows: { en: "knows", ru: "знает" },
+  ally_of: { en: "ally of", ru: "союзник" },
+  enemy_of: { en: "enemy of", ru: "враг" },
+  related_to: { en: "related to", ru: "связан с" },
+};
+
+function relationshipDisplayLabel(relationship) {
+  if (relationship.label) return relationship.label;
+  const normalizedType = String(relationship.type || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const translated = relationshipLabelTranslations[normalizedType]?.[language()];
+  if (translated) return translated;
+  return normalizedType.replace(/_/g, " ") || relationship.type || "";
+}
+
+function graphPositionStorageKey() {
+  return state.selectedWorldId ? `worldbuilder.graphPositions.${state.selectedWorldId}.${currentRole()}` : null;
+}
+
+function loadGraphPositions() {
+  const key = graphPositionStorageKey();
+  if (!key) {
+    state.graphPositions = {};
+    state.graphPositionScope = null;
+    return;
+  }
+  if (state.graphPositionScope === key) return;
+  state.graphPositionScope = key;
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || "{}");
+    state.graphPositions = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    state.graphPositions = {};
+  }
+}
+
+function saveGraphPositions() {
+  const key = graphPositionStorageKey();
+  if (!key) return;
+  state.graphPositionScope = key;
+  localStorage.setItem(key, JSON.stringify(state.graphPositions));
 }
 
 export function renderRelationshipOptions() {
@@ -1108,15 +1823,19 @@ function renderDetectiveBoard() {
   const board = $("detectiveBoardView");
   const connectionList = $("detectiveConnectionList");
   const summary = $("detectiveSummary");
+  const master = isMasterMode();
   if (!board || !connectionList) return;
   if (summary) {
     summary.textContent = `${state.detectiveNodes.length} ${t("detective.nodesLabel")} - ${state.detectiveConnections.length} ${t("detective.connectionsLabel")}`;
   }
+  $("generateDetectiveBoard")?.classList.toggle("hidden", !master || state.detectiveNodes.length > 0);
+  $("deleteDetectiveBoard")?.classList.toggle("hidden", !master || state.detectiveNodes.length === 0);
 
   let suppressBoardClick = false;
   let dragState = null;
 
   board.onclick = (event) => {
+    if (!master) return;
     if (suppressBoardClick) {
       suppressBoardClick = false;
       return;
@@ -1164,11 +1883,16 @@ function renderDetectiveBoard() {
             <article class="detective-node ${node.is_secret ? "secret" : ""}" data-detective-node="${node.id}" data-node-x="${node.x}" data-node-y="${node.y}" style="left: ${node.x * 100}%; top: ${node.y * 100}%;">
               <div class="item-title">${escapeHtml(node.title)}</div>
               <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
-              ${node.note ? `<div class="item-body">${escapeHtml(node.note)}</div>` : ""}
+              ${node.note ? `<div class="item-body">${renderMarkdown(node.note)}</div>` : ""}
               ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
               <div class="item-actions">
-                <button class="ghost" data-edit-detective-node="${node.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
-                <button class="ghost danger" data-delete-detective-node="${node.id}" type="button">${escapeHtml(t("detective.nodeDelete"))}</button>
+                <button class="ghost" data-open-detective-node="${node.id}" type="button">${escapeHtml(t("entity.open"))}</button>
+                ${
+                  master
+                    ? `<button class="ghost" data-edit-detective-node="${node.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                       <button class="ghost danger" data-delete-detective-node="${node.id}" type="button">${escapeHtml(t("detective.nodeDelete"))}</button>`
+                    : ""
+                }
               </div>
             </article>
           `,
@@ -1180,11 +1904,15 @@ function renderDetectiveBoard() {
   board.querySelectorAll("[data-edit-detective-node]").forEach((button) => {
     button.addEventListener("click", () => editDetectiveNode(button.dataset.editDetectiveNode));
   });
+  board.querySelectorAll("[data-open-detective-node]").forEach((button) => {
+    button.addEventListener("click", () => openDetectiveNodeReader(button.dataset.openDetectiveNode));
+  });
   board.querySelectorAll("[data-delete-detective-node]").forEach((button) => {
     button.addEventListener("click", () => deleteDetectiveNode(button.dataset.deleteDetectiveNode));
   });
   board.querySelectorAll("[data-detective-node]").forEach((nodeElement) => {
     nodeElement.addEventListener("pointerdown", (event) => {
+      if (!master) return;
       if (event.button !== 0) return;
       if (event.target.closest("button, a")) return;
 
@@ -1283,12 +2011,16 @@ function renderDetectiveBoard() {
               <div class="item-title">${escapeHtml(detectiveNodeTitle(connection.source_node_id))} -> ${escapeHtml(detectiveNodeTitle(connection.target_node_id))}</div>
               <div class="item-meta">${escapeHtml(connection.label || t("detective.connection"))}${connection.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
             </div>
-            <div class="item-actions">
-              <button class="ghost" data-edit-detective-connection="${connection.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
-              <button class="ghost danger" data-delete-detective-connection="${connection.id}" type="button">${escapeHtml(t("detective.connectionDelete"))}</button>
-            </div>
+            ${
+              master
+                ? `<div class="item-actions">
+                    <button class="ghost" data-edit-detective-connection="${connection.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
+                    <button class="ghost danger" data-delete-detective-connection="${connection.id}" type="button">${escapeHtml(t("detective.connectionDelete"))}</button>
+                  </div>`
+                : ""
+            }
           </div>
-          ${connection.note ? `<div class="item-body">${escapeHtml(connection.note)}</div>` : ""}
+          ${connection.note ? `<div class="item-body">${renderMarkdown(connection.note)}</div>` : ""}
         </article>
       `,
     )
@@ -1311,6 +2043,7 @@ function randomTableName(id) {
 
 export function renderRelationships() {
   const list = $("relationshipList");
+  const master = isMasterMode();
   if (!state.relationships.length) {
     list.className = "grid-list empty";
     list.textContent = t("relationship.empty");
@@ -1322,17 +2055,37 @@ export function renderRelationships() {
     .map(
       (relationship) => `
         <article class="item">
-          <div class="item-title">${escapeHtml(entityName(relationship.source_entity_id))} -> ${escapeHtml(entityName(relationship.target_entity_id))}</div>
-          <div class="item-meta">${escapeHtml(relationship.label || relationship.type)} - ${escapeHtml(relationship.status)} - ${t("relationship.confidence")} ${relationship.confidence}</div>
-          ${relationship.description ? `<div class="item-body">${escapeHtml(relationship.description)}</div>` : ""}
+          <div class="item-top" style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="item-title">${escapeHtml(entityName(relationship.source_entity_id))} &rarr; ${escapeHtml(entityName(relationship.target_entity_id))}</div>
+            ${master ? `<div class="item-actions compact-actions">
+              <button class="ghost" data-edit-relationship="${relationship.id}" type="button">${escapeHtml(t("common.edit"))}</button>
+              <button class="ghost danger" data-delete-relationship="${relationship.id}" type="button">${escapeHtml(t("common.delete"))}</button>
+            </div>` : ""}
+          </div>
+          <div class="item-meta">${escapeHtml(relationshipDisplayLabel(relationship))} - ${escapeHtml(relationshipConfidenceText(relationship.confidence))}</div>
+          ${relationship.description ? `<div class="item-body">${renderMarkdown(relationship.description)}</div>` : ""}
         </article>
       `,
     )
     .join("");
+
+  list.querySelectorAll("[data-delete-relationship]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteRelationship(btn.dataset.deleteRelationship));
+  });
+  list.querySelectorAll("[data-edit-relationship]").forEach((btn) => {
+    btn.addEventListener("click", () => editRelationship(btn.dataset.editRelationship));
+  });
+}
+
+function relationshipConfidenceText(confidence) {
+  const value = Math.round(Number(confidence || 0) * 100);
+  const level = value >= 85 ? "high" : value >= 50 ? "medium" : "low";
+  return `${t("relationship.confidence")}: ${value}% - ${t(`relationship.confidence.${level}`)}`;
 }
 
 export function renderRules() {
   const list = $("ruleList");
+  const master = isMasterMode();
   if (!state.rules.length) {
     list.className = "grid-list empty";
     list.textContent = t("rule.empty");
@@ -1344,16 +2097,23 @@ export function renderRules() {
     .map(
       (rule) => `
         <article class="item">
-          <div class="item-top">
+          <div class="item-top" style="display: flex; justify-content: space-between; align-items: center;">
             <div class="item-title">${t("rule.priority")} ${rule.priority}</div>
-            <span class="badge">${rule.is_secret ? t("common.secretValue") : t("common.public")}</span>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <span class="badge">${rule.is_secret ? t("common.secretValue") : t("common.public")}</span>
+              ${master ? `<button class="ghost danger small-delete-btn" data-delete-rule="${rule.id}" type="button">&times;</button>` : ""}
+            </div>
           </div>
-          <div class="item-body"><strong>${t("rule.if")}:</strong> ${escapeHtml(rule.condition)}\n<strong>${t("rule.then")}:</strong> ${escapeHtml(rule.effect)}</div>
+          <div class="item-body rule-markdown"><strong>${t("rule.if")}:</strong>${renderMarkdown(rule.condition)}<strong>${t("rule.then")}:</strong>${renderMarkdown(rule.effect)}</div>
           <div class="item-meta">${escapeHtml(rule.status)}${rule.tags?.length ? ` - ${rule.tags.map(escapeHtml).join(", ")}` : ""}</div>
         </article>
       `,
     )
     .join("");
+
+  list.querySelectorAll("[data-delete-rule]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteRule(btn.dataset.deleteRule));
+  });
 }
 
 export function renderProposals() {
@@ -1371,24 +2131,26 @@ export function renderProposals() {
         `${proposal.payload.entities.length} ${t("proposal.entities")}`,
         `${proposal.payload.relationships.length} ${t("proposal.relationships")}`,
         `${proposal.payload.world_rules.length} ${t("proposal.rules")}`,
+        `${(proposal.payload.random_tables || []).length} ${t("proposal.randomTables")}`,
         `${(proposal.payload.random_table_rows || []).length} ${t("proposal.randomRows")}`,
       ].join(" - ");
       return `
         <article class="item">
           <div class="item-top">
             <div>
-              <div class="item-title">${escapeHtml(proposal.status)}</div>
+              <div class="item-title">${escapeHtml(t(`proposal.status.${proposal.status}`))}</div>
               <div class="item-meta">${counts} - ${escapeHtml(proposal.id.slice(0, 8))}</div>
             </div>
             <span class="badge">${new Date(proposal.created_at).toLocaleString()}</span>
           </div>
-          <div class="item-body">${escapeHtml(proposal.source_text)}</div>
+          <div class="item-body proposal-source">${renderMarkdown(proposal.source_text)}</div>
           ${proposal.error ? `<div class="item-body danger">${escapeHtml(proposal.error)}</div>` : ""}
           ${renderProposalReview(proposal)}
           <div class="item-actions">
-            <button data-apply-proposal="${proposal.id}" type="button" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.apply")}</button>
-            <button data-apply-selected-proposal="${proposal.id}" class="ghost" type="button" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.applySelected")}</button>
-            <button data-reject-proposal="${proposal.id}" class="ghost danger" type="button" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.reject")}</button>
+            <button data-apply-proposal="${proposal.id}" type="button" title="${escapeHtml(t("proposal.applyTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.apply")}</button>
+            <button data-apply-selected-proposal="${proposal.id}" class="ghost" type="button" title="${escapeHtml(t("proposal.applySelectedTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.applySelected")}</button>
+            <button data-reject-proposal="${proposal.id}" class="ghost danger" type="button" title="${escapeHtml(t("proposal.rejectTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.reject")}</button>
+            <button data-delete-proposal="${proposal.id}" class="ghost danger" type="button" title="${escapeHtml(t("proposal.deleteTitle"))}">${t("common.delete")}</button>
           </div>
         </article>
       `;
@@ -1403,6 +2165,9 @@ export function renderProposals() {
   });
   list.querySelectorAll("[data-reject-proposal]").forEach((button) => {
     button.addEventListener("click", () => rejectProposal(button.dataset.rejectProposal));
+  });
+  list.querySelectorAll("[data-delete-proposal]").forEach((button) => {
+    button.addEventListener("click", () => deleteProposal(button.dataset.deleteProposal));
   });
 }
 
@@ -1424,7 +2189,7 @@ function renderProposalReview(proposal) {
       title: t("proposal.relationships"),
       kind: "relationship",
       items: proposal.payload.relationships.map((relationship) => ({
-        summary: `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationship.label || relationship.type}`,
+        summary: `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationshipDisplayLabel(relationship)}`,
         excerpt: relationship.source_excerpt || "",
       })),
     },
@@ -1437,10 +2202,19 @@ function renderProposalReview(proposal) {
       })),
     },
     {
+      title: t("proposal.randomTables"),
+      kind: "random-table",
+      items: (proposal.payload.random_tables || []).map((table) => ({
+        summary: `${table.name}${table.description ? ` - ${table.description}` : ""}`,
+        excerpt: table.source_excerpt || "",
+        changes: [table.is_secret ? t("common.secretValue") : t("common.public")],
+      })),
+    },
+    {
       title: t("proposal.randomRows"),
       kind: "random-table-row",
       items: (proposal.payload.random_table_rows || []).map((row) => ({
-        summary: `${randomTableName(row.table_id)}: ${row.label ? `${row.label} - ` : ""}${row.result}`,
+        summary: `${proposalRandomTableName(proposal, row)}: ${row.label ? `${row.label} - ` : ""}${row.result}`,
         excerpt: row.source_excerpt || "",
         changes: [
           `${t("randomTable.weight")}: ${row.weight}`,
@@ -1461,13 +2235,13 @@ function renderProposalReview(proposal) {
                     (item, index) => `
                       <label class="check proposal-check">
                         <input data-proposal-id="${proposal.id}" data-proposal-kind="${section.kind}" data-proposal-index="${index}" type="checkbox" checked ${disabled} />
-                        <span>
-                          ${escapeHtml(item.summary)}
+                        <div class="proposal-check-content">
+                          ${renderMarkdown(item.summary)}
                           ${item.intent ? `<small class="proposal-intent">${escapeHtml(item.intent)}</small>` : ""}
                           ${item.changes?.length ? `<small class="proposal-change-summary">${escapeHtml(item.changes.join(", "))}</small>` : ""}
                           ${item.changeDetails?.length ? item.changeDetails.map((detail) => `<small class="proposal-change-detail">${escapeHtml(detail)}</small>`).join("") : ""}
-                          ${item.excerpt ? `<small class="proposal-evidence">${escapeHtml(t("proposal.sourceText"))}: ${escapeHtml(item.excerpt)}</small>` : ""}
-                        </span>
+                          ${item.excerpt ? `<div class="proposal-evidence"><small>${escapeHtml(t("proposal.sourceText"))}</small>${renderMarkdown(item.excerpt)}</div>` : ""}
+                        </div>
                       </label>
                     `,
                   )
@@ -1476,8 +2250,21 @@ function renderProposalReview(proposal) {
             : "",
         )
         .join("")}
+      ${
+        proposal.payload.notes?.length
+          ? `<div class="proposal-review-section">
+              <div class="item-meta">${escapeHtml(t("proposal.notes"))}</div>
+              <div class="proposal-notes">${proposal.payload.notes.map((note) => renderMarkdown(note)).join("")}</div>
+            </div>`
+          : ""
+      }
     </div>
   `;
+}
+
+function proposalRandomTableName(proposal, row) {
+  if (row.table_id) return randomTableName(row.table_id);
+  return (proposal.payload.random_tables || []).find((table) => table.client_id === row.table_client_id)?.name || row.table_client_id;
 }
 
 function findMatchedProposalEntity(entity) {
@@ -1664,20 +2451,29 @@ export function renderChat() {
 
   log.className = "chat-log";
   const messagesHtml = state.chatMessages
-    .map(
-      (message, index) => `
+    .map((message, index) => {
+      const isEditing = state.editingChatMessageIndex === index;
+      return `
         <div class="message ${message.role}">
-          <div class="message-content">${escapeHtml(message.content)}</div>
           ${
-            message.role === "assistant"
-              ? `<div class="message-actions">
-                  <button class="ghost" data-save-message="${index}" type="button">${t("chat.saveThis")}</button>
+            isEditing
+              ? `<div class="message-editor">
+                  <textarea id="chatMessageEdit-${index}" rows="6">${escapeHtml(message.content)}</textarea>
+                  <div class="message-actions">
+                    <button data-save-message-edit="${index}" type="button">${escapeHtml(t("common.save"))}</button>
+                    <button class="ghost" data-cancel-message-edit type="button">${escapeHtml(t("common.cancel"))}</button>
+                  </div>
                 </div>`
-              : ""
+              : `<div class="message-content">${renderMarkdown(message.content)}</div>
+                <div class="message-actions">
+                  ${message.role === "assistant" ? `<button class="ghost" data-save-message="${index}" type="button" title="${escapeHtml(t("chat.saveThisTitle"))}">${escapeHtml(t("chat.saveThis"))}</button>` : ""}
+                  <button class="ghost" data-edit-message="${index}" type="button" title="${escapeHtml(t("chat.editMessageTitle"))}">${escapeHtml(t("common.edit"))}</button>
+                  <button class="ghost danger" data-delete-message="${index}" type="button" title="${escapeHtml(t("chat.deleteMessageTitle"))}">${escapeHtml(t("common.delete"))}</button>
+                </div>`
           }
         </div>
-      `,
-    )
+      `;
+    })
     .join("");
   const loadingHtml = state.chatBusy
     ? `<div class="message assistant loading">
@@ -1695,5 +2491,84 @@ export function renderChat() {
       button.disabled = false;
     });
   });
+  log.querySelectorAll("[data-edit-message]").forEach((button) => {
+    button.addEventListener("click", () => editChatMessage(Number(button.dataset.editMessage)));
+  });
+  log.querySelectorAll("[data-delete-message]").forEach((button) => {
+    button.addEventListener("click", () => deleteChatMessage(Number(button.dataset.deleteMessage)));
+  });
+  log.querySelectorAll("[data-save-message-edit]").forEach((button) => {
+    button.addEventListener("click", () => saveChatMessageEdit(Number(button.dataset.saveMessageEdit)));
+  });
+  log.querySelectorAll("[data-cancel-message-edit]").forEach((button) => {
+    button.addEventListener("click", cancelChatMessageEdit);
+  });
   log.scrollTop = log.scrollHeight;
+}
+
+export function renderChatThreads() {
+  const list = $("chatThreadList");
+  if (!list) return;
+  list.innerHTML = state.chatThreads
+    .map((thread, index) => {
+      const title = thread.title || t("chat.threadUntitled", { number: index + 1 });
+      const active = thread.id === state.activeChatThreadId;
+      if (state.editingChatThreadId === thread.id) {
+        return `
+          <div class="chat-thread-item editing">
+            <input id="chatThreadEdit-${escapeHtml(thread.id)}" class="chat-thread-edit" type="text" maxlength="80" value="${escapeHtml(title)}" aria-label="${escapeHtml(t("chat.renameThread"))}" />
+            <div class="chat-thread-actions">
+              <button class="ghost icon-button" data-save-chat-thread-name="${escapeHtml(thread.id)}" type="button" title="${escapeHtml(t("common.save"))}" aria-label="${escapeHtml(t("common.save"))}">&#10003;</button>
+              <button class="ghost icon-button" data-cancel-chat-thread-name type="button" title="${escapeHtml(t("common.cancel"))}" aria-label="${escapeHtml(t("common.cancel"))}">&times;</button>
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="chat-thread-item ${active ? "active" : ""}">
+          <button class="chat-thread-main" data-change-chat-thread="${escapeHtml(thread.id)}" type="button">
+            <span>${escapeHtml(title)}</span>
+            <small>${thread.messages.length} ${escapeHtml(t("chat.messagesCount"))}</small>
+          </button>
+          <div class="chat-thread-actions">
+            <button class="ghost icon-button" data-rename-chat-thread="${escapeHtml(thread.id)}" type="button" title="${escapeHtml(t("chat.renameThread"))}" aria-label="${escapeHtml(t("chat.renameThread"))}">&#9998;</button>
+            <button class="ghost danger icon-button" data-delete-chat-thread="${escapeHtml(thread.id)}" type="button" title="${escapeHtml(t("chat.deleteThread"))}" aria-label="${escapeHtml(t("chat.deleteThread"))}">&times;</button>
+          </div>
+        </div>`;
+    })
+    .join("");
+  list.querySelectorAll("[data-change-chat-thread]").forEach((button) => {
+    button.addEventListener("click", () => changeChatThread(button.dataset.changeChatThread));
+  });
+  list.querySelectorAll("[data-rename-chat-thread]").forEach((button) => {
+    button.addEventListener("click", () => renameChatThread(button.dataset.renameChatThread));
+  });
+  list.querySelectorAll("[data-delete-chat-thread]").forEach((button) => {
+    button.addEventListener("click", () => deleteChatThread(button.dataset.deleteChatThread));
+  });
+  list.querySelectorAll("[data-save-chat-thread-name]").forEach((button) => {
+    button.addEventListener("click", () => saveChatThreadRename(button.dataset.saveChatThreadName));
+  });
+  list.querySelectorAll("[data-cancel-chat-thread-name]").forEach((button) => {
+    button.addEventListener("click", cancelChatThreadRename);
+  });
+  list.querySelectorAll(".chat-thread-edit").forEach((input) => {
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") saveChatThreadRename(state.editingChatThreadId);
+      if (event.key === "Escape") cancelChatThreadRename();
+    });
+  });
+}
+
+export function renderChatTemplates() {
+  const container = $("chatTemplates");
+  if (!container) return;
+  const moduleVisible = {
+    quest: state.moduleSettings.quests !== false,
+    map: state.moduleSettings.maps !== false,
+    randomTable: state.moduleSettings.randomTables !== false,
+    clue: state.moduleSettings.detectiveBoard !== false,
+  };
+  container.querySelectorAll("[data-chat-template-module]").forEach((button) => {
+    button.classList.toggle("hidden", !moduleVisible[button.dataset.chatTemplateModule]);
+  });
 }

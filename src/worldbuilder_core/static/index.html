@@ -17,7 +17,7 @@
           <span id="apiStatus" class="status-pill" data-i18n="status.checking">Checking</span>
         </div>
 
-        <form id="worldForm" class="stack">
+        <form id="worldForm" class="stack" data-master-only="true">
           <label>
             <span data-i18n="world.name">World name</span>
             <input id="worldName" name="name" type="text" data-i18n-placeholder="world.namePlaceholder" required />
@@ -38,10 +38,16 @@
 
       <main class="main">
         <header class="topbar">
-          <div>
-            <p class="eyebrow" data-i18n="world.selected">Selected world</p>
-            <h2 id="selectedWorldName">None</h2>
-            <p id="selectedWorldDescription" class="muted"></p>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <button id="toggleSidebarMobile" class="ghost" type="button" aria-label="Toggle Sidebar" style="padding: 6px 12px; font-size: 18px; min-height: 38px; display: none;">☰</button>
+            <div>
+              <p class="eyebrow" data-i18n="world.selected">Selected world</p>
+              <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                <h2 id="selectedWorldName" style="margin: 0;">None</h2>
+                <span id="roleIndicatorBadge" class="role-indicator-badge"></span>
+              </div>
+              <p id="selectedWorldDescription" class="muted"></p>
+            </div>
           </div>
           <div class="top-controls">
             <label>
@@ -58,27 +64,28 @@
                 <option value="dark" data-i18n="theme.dark">Dark</option>
               </select>
             </label>
-            <label>
+            <label class="hidden" aria-hidden="true">
               <span data-i18n="settings.viewerRole">Viewer role</span>
               <select id="viewerRole">
                 <option value="master" data-i18n="role.master">Master</option>
                 <option value="player" data-i18n="role.player">Player</option>
               </select>
             </label>
+            <button id="switchRole" class="ghost" type="button" data-i18n="roleGate.switch">Switch mode</button>
           </div>
         </header>
 
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" data-tab="wiki" type="button" data-i18n="tabs.wiki">Wiki</button>
-          <button class="tab" data-tab="rules" type="button" data-i18n="tabs.rules">Rules</button>
-          <button class="tab" data-tab="chat" type="button" data-i18n="tabs.chat">Chat</button>
-          <button class="tab" data-tab="proposals" type="button" data-i18n="tabs.proposals">Proposals</button>
+          <button class="tab" data-tab="rules" data-master-only="true" type="button" data-i18n="tabs.rules">Rules</button>
+          <button class="tab" data-tab="chat" data-master-only="true" type="button" data-i18n="tabs.chat">Chat</button>
+          <button class="tab" data-tab="proposals" data-master-only="true" type="button" data-i18n="tabs.proposals">Proposals</button>
           <button class="tab" data-tab="graph" data-module-tab="graph" type="button" data-i18n="tabs.graph">Graph</button>
           <button class="tab" data-tab="timeline" data-module-tab="timeline" type="button" data-i18n="tabs.timeline">Timeline</button>
           <button class="tab" data-tab="modules" data-module-tab="modules" type="button" data-i18n="tabs.modules">Modules</button>
-          <button class="tab" data-tab="context" type="button" data-i18n="tabs.context">Context</button>
-          <button class="tab" data-tab="settings" type="button" data-i18n="tabs.settings">Settings</button>
-          <button class="tab" data-tab="backup" type="button" data-i18n="tabs.backup">Backup</button>
+          <button class="tab" data-tab="context" data-master-only="true" type="button" data-i18n="tabs.context">Context</button>
+          <button class="tab" data-tab="settings" data-master-only="true" type="button" data-i18n="tabs.settings">Settings</button>
+          <button class="tab" data-tab="backup" data-master-only="true" type="button" data-i18n="tabs.backup">Backup</button>
         </nav>
 
         <section id="tab-wiki" class="tab-panel active">
@@ -91,15 +98,27 @@
               <div class="inline-actions">
                 <input id="entitySearch" type="search" data-i18n-placeholder="common.search" />
                 <button id="refreshEntities" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
-                <button id="openEntityDrawer" type="button" data-i18n="entity.newCard">New card</button>
+                <button id="openEntityDrawer" data-master-only="true" type="button" data-i18n="entity.newCard">New card</button>
+              </div>
+            </div>
+            <div class="category-filters-wrapper">
+              <div class="category-filters" id="categoryFilters">
+                <button class="category-filter active" data-filter="all" data-i18n="entityType.all" type="button">All</button>
+                <button class="category-filter" data-filter="character" data-i18n="entityType.character" type="button">Character</button>
+                <button class="category-filter" data-filter="location" data-i18n="entityType.location" type="button">Location</button>
+                <button class="category-filter" data-filter="faction" data-i18n="entityType.faction" type="button">Faction</button>
+                <button class="category-filter" data-filter="item" data-i18n="entityType.item" type="button">Item</button>
+                <button class="category-filter" data-filter="event" data-i18n="entityType.event" type="button">Event</button>
+                <button class="category-filter" data-filter="clue" data-i18n="entityType.clue" type="button">Clue</button>
+                <button class="category-filter" data-filter="concept" data-i18n="entityType.concept" type="button">Concept</button>
               </div>
             </div>
             <div id="entityList" class="grid-list encyclopedia-list empty"></div>
           </div>
 
-          <div class="split lower">
+          <div class="split lower" data-master-only="true">
             <form id="relationshipForm" class="panel stack">
-              <h3 data-i18n="relationship.createTitle">Create relationship</h3>
+              <h3 id="relationshipFormTitle" data-i18n="relationship.createTitle">Create relationship</h3>
               <label>
                 <span data-i18n="relationship.source">Source</span>
                 <select id="relationshipSource"></select>
@@ -116,11 +135,23 @@
                 <span data-i18n="relationship.label">Label</span>
                 <input id="relationshipLabel" type="text" placeholder="member of" />
               </label>
+              <label>
+                <span data-i18n="common.description">Description</span>
+                <textarea id="relationshipDescription" rows="3"></textarea>
+              </label>
+              <label>
+                <span data-i18n="relationship.confidenceLabel">Confidence (0-1)</span>
+                <input id="relationshipConfidence" type="number" min="0" max="1" step="0.05" value="1" required />
+                <small class="muted" data-i18n="relationship.confidenceHint">1 means explicit or confirmed; 0 means a weak hypothesis.</small>
+              </label>
               <label class="check">
                 <input id="relationshipSecret" type="checkbox" />
                 <span data-i18n="common.secret">Secret</span>
               </label>
-              <button type="submit" data-i18n="relationship.add">Add relationship</button>
+              <div class="item-actions">
+                <button id="relationshipSubmit" type="submit" data-i18n="relationship.add">Add relationship</button>
+                <button id="cancelRelationshipEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+              </div>
             </form>
 
             <div class="panel">
@@ -174,20 +205,35 @@
           <div class="panel chat-panel">
             <div class="panel-head">
               <h3 data-i18n="chat.title">World-aware chat</h3>
-              <div class="inline-actions">
-                <label class="check compact">
-                  <input id="saveToWiki" type="checkbox" />
-                  <span data-i18n="chat.autoDraft">Auto-create draft changes</span>
-                </label>
-                <button id="clearChat" class="ghost" type="button" data-i18n="common.clear">Clear</button>
+            </div>
+            <div class="chat-workspace">
+              <aside class="chat-thread-panel">
+                <div class="chat-thread-head">
+                  <strong data-i18n="chat.threadLabel">Chat branches</strong>
+                  <button id="newChatThread" class="ghost icon-button" type="button" aria-label="New chat" data-i18n-aria-label="chat.newThread" data-i18n-title="chat.newThreadTitle">+</button>
+                </div>
+                <div id="chatThreadList" class="chat-thread-list"></div>
+                <button id="branchChatThread" class="ghost chat-branch-button" type="button" data-i18n="chat.branchThread" data-i18n-title="chat.branchThreadTitle">Branch current chat</button>
+              </aside>
+              <div class="chat-conversation">
+                <p class="muted chat-save-hint" data-i18n="chat.saveHint">Save useful assistant answers as drafts and review them before applying.</p>
+                <div id="chatLog" class="chat-log empty"></div>
+                <div id="chatTemplates" class="chat-template-row" aria-label="Prompt templates">
+                  <button class="ghost" type="button" data-chat-template="character" data-i18n="chatTemplate.character">Character</button>
+                  <button class="ghost" type="button" data-chat-template="location" data-i18n="chatTemplate.location">Place</button>
+                  <button class="ghost" type="button" data-chat-template="faction" data-i18n="chatTemplate.faction">Faction</button>
+                  <button class="ghost" type="button" data-chat-template="event" data-i18n="chatTemplate.event">Event</button>
+                  <button class="ghost" type="button" data-chat-template="quest" data-chat-template-module="quest" data-i18n="chatTemplate.quest">Quest</button>
+                  <button class="ghost" type="button" data-chat-template="map" data-chat-template-module="map" data-i18n="chatTemplate.map">Map</button>
+                  <button class="ghost" type="button" data-chat-template="randomTable" data-chat-template-module="randomTable" data-i18n="chatTemplate.randomTable">Table</button>
+                  <button class="ghost" type="button" data-chat-template="clue" data-chat-template-module="clue" data-i18n="chatTemplate.clue">Clue</button>
+                </div>
+                <form id="chatForm" class="chat-form">
+                  <textarea id="chatInput" rows="3" data-i18n-placeholder="chat.placeholder" required></textarea>
+                  <button type="submit" data-i18n="chat.send">Send</button>
+                </form>
               </div>
             </div>
-            <p class="muted" data-i18n="chat.saveHint">If you like an assistant answer, click Save to world under that message. You can review changes before applying them.</p>
-            <div id="chatLog" class="chat-log empty"></div>
-            <form id="chatForm" class="chat-form">
-              <textarea id="chatInput" rows="3" data-i18n-placeholder="chat.placeholder" required></textarea>
-              <button type="submit" data-i18n="chat.send">Send</button>
-            </form>
           </div>
         </section>
 
@@ -202,7 +248,7 @@
                 </label>
                 <label>
                   <span data-i18n="proposal.payloadJson">Payload JSON</span>
-                  <textarea id="proposalPayload" rows="10" spellcheck="false">{ "entities": [], "relationships": [], "world_rules": [], "random_table_rows": [], "notes": [] }</textarea>
+                  <textarea id="proposalPayload" rows="10" spellcheck="false">{ "entities": [], "relationships": [], "world_rules": [], "random_tables": [], "random_table_rows": [], "notes": [] }</textarea>
                 </label>
                 <button type="submit" data-i18n="proposal.create">Create proposal</button>
               </form>
@@ -225,7 +271,10 @@
                 <h3 data-i18n="graph.title">Relationship graph</h3>
                 <p class="muted" data-i18n="graph.hint">Shows visible wiki entities and relationships for the selected role.</p>
               </div>
-              <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              <div class="inline-actions">
+                <button id="arrangeGraph" class="ghost" type="button" data-i18n="graph.arrange" data-i18n-title="graph.arrangeTitle">Arrange</button>
+                <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
             </div>
             <div id="graphView" class="graph-view empty"></div>
           </div>
@@ -233,12 +282,15 @@
 
         <section id="tab-timeline" class="tab-panel">
           <div class="panel stack">
-            <div class="panel-head">
+            <div class="panel-head" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
               <div>
                 <h3 data-i18n="timeline.title">Timeline</h3>
                 <p class="muted" data-i18n="timeline.hint">Create Event entities and fill Timeline date to build a chronology.</p>
               </div>
-              <button id="refreshTimeline" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              <div style="display:flex; gap:8px;">
+                <button id="addTimelineEventBtn" data-master-only="true" type="button" data-i18n="timeline.addEvent" style="background:var(--primary); color:#fff; font-weight:600; padding:6px 16px; border-radius:6px; border:none; cursor:pointer;">Add Event</button>
+                <button id="refreshTimeline" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
             </div>
             <div id="timelineList" class="timeline-list empty"></div>
           </div>
@@ -291,12 +343,12 @@
               <p class="muted" data-i18n="map.hint">Add Location entities with image URLs for maps, regions, rooms, or pins.</p>
               <div class="module-toolbar">
                 <div id="mapSummary" class="module-summary muted"></div>
-                <div class="inline-actions">
+                <div class="inline-actions" data-master-only="true">
                   <button id="openMapPinEditor" class="ghost" type="button" data-i18n="map.pinAdd">Add pin</button>
                   <button id="openMapLocationCreator" type="button" data-i18n="map.locationAdd">New location</button>
                 </div>
               </div>
-              <details id="mapPinEditor" class="panel-lite editor-disclosure">
+              <details id="mapPinEditor" class="panel-lite editor-disclosure" data-master-only="true">
                 <summary data-i18n="map.pinFormTitle">Add map pin</summary>
                 <form id="mapPinForm" class="stack disclosure-body">
                   <div class="form-grid">
@@ -331,6 +383,7 @@
                   </label>
                   <div class="item-actions">
                     <button id="mapPinSubmit" type="submit" data-i18n="map.pinAdd">Add pin</button>
+                    <button id="deleteMapPinBtn" class="ghost danger hidden" type="button" data-i18n="map.pinDelete">Delete</button>
                     <button id="cancelMapPinEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
                   </div>
                   <p class="muted" data-i18n="map.clickHint">Click an image to fill pin coordinates.</p>
@@ -344,7 +397,7 @@
                 <span class="badge" data-i18n="randomTable.badge">Rolls</span>
               </div>
               <p class="muted" data-i18n="randomTable.hint">Create quick roll tables for encounters, rumors, treasure, or session prompts.</p>
-              <details id="randomTableEditor" class="panel-lite editor-disclosure">
+              <details id="randomTableEditor" class="panel-lite editor-disclosure" data-master-only="true">
                 <summary data-i18n="randomTable.formTitle">Create random table</summary>
                 <form id="randomTableForm" class="stack disclosure-body">
                   <label>
@@ -365,7 +418,7 @@
                   </div>
                 </form>
               </details>
-              <details id="randomTableRowEditor" class="panel-lite editor-disclosure">
+              <details id="randomTableRowEditor" class="panel-lite editor-disclosure" data-master-only="true">
                 <summary data-i18n="randomTable.rowFormTitle">Add table row</summary>
                 <form id="randomTableRowForm" class="stack disclosure-body">
                   <div class="form-grid">
@@ -406,12 +459,14 @@
               <p class="muted" data-i18n="detective.hint">Connect clues, suspects, places, and free notes without exposing secrets to players.</p>
               <div class="module-toolbar">
                 <div id="detectiveSummary" class="module-summary muted"></div>
-                <div class="inline-actions">
+                <div class="inline-actions" data-master-only="true">
+                  <button id="generateDetectiveBoard" type="button" data-i18n="detective.generateAi" data-i18n-title="detective.generateAiTitle">Generate with AI</button>
+                  <button id="deleteDetectiveBoard" class="ghost danger hidden" type="button" data-i18n="detective.boardDelete" data-i18n-title="detective.boardDeleteTitle">Delete board</button>
                   <button id="openDetectiveNodeEditor" class="ghost" type="button" data-i18n="detective.nodeAdd">Add node</button>
                   <button id="openDetectiveConnectionEditor" type="button" data-i18n="detective.connectionAdd">Add connection</button>
                 </div>
               </div>
-              <details id="detectiveNodeEditor" class="panel-lite editor-disclosure">
+              <details id="detectiveNodeEditor" class="panel-lite editor-disclosure" data-master-only="true">
                 <summary data-i18n="detective.nodeFormTitle">Add board node</summary>
                 <form id="detectiveNodeForm" class="stack disclosure-body">
                   <div class="form-grid">
@@ -451,7 +506,7 @@
                   <p class="muted" data-i18n="detective.clickHint">Click the board background to fill node coordinates.</p>
                 </form>
               </details>
-              <details id="detectiveConnectionEditor" class="panel-lite editor-disclosure">
+              <details id="detectiveConnectionEditor" class="panel-lite editor-disclosure" data-master-only="true">
                 <summary data-i18n="detective.connectionFormTitle">Add board connection</summary>
                 <form id="detectiveConnectionForm" class="stack disclosure-body">
                   <div class="form-grid">
@@ -688,6 +743,16 @@
           </label>
           <label>
             <span data-i18n="entity.description">Description</span>
+            <div class="md-toolbar" style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; background: var(--panel-strong); border: 1px solid var(--line); padding: 4px; border-radius: 6px;">
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="**" data-md-suffix="**" title="Bold" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-weight:bold;">B</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="*" data-md-suffix="*" title="Italic" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-style:italic;">I</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="# " data-md-suffix="" title="H1" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-weight:600;">H1</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="## " data-md-suffix="" title="H2" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-weight:600;">H2</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="### " data-md-suffix="" title="H3" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-weight:600;">H3</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="- " data-md-suffix="" title="List" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px;">&bull; List</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="`" data-md-suffix="`" title="Code" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-family:monospace;">Code</button>
+              <button type="button" class="md-btn cursor-pointer" data-md-prefix="```\n" data-md-suffix="\n```" title="Code Block" style="min-height:28px; padding:2px 8px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--text); border-radius:4px; font-family:monospace;">Block</button>
+            </div>
             <textarea id="entityDescription" rows="7"></textarea>
           </label>
           <label>
@@ -722,8 +787,9 @@
       <article class="reader-panel">
         <div class="reader-toolbar">
           <button id="closeEntityReader" class="ghost" type="button" data-i18n="common.back">Back</button>
-          <div class="item-actions">
+          <div class="item-actions" style="display:flex; gap:8px;" data-master-only="true">
             <button id="readerEditEntity" type="button" data-i18n="entity.edit">Edit</button>
+            <button id="readerDeleteEntity" type="button" class="danger" data-i18n="randomTable.delete">Delete</button>
           </div>
         </div>
         <div id="entityReaderContent" class="reader-content"></div>

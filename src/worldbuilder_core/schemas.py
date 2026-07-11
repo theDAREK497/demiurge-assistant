@@ -315,6 +315,12 @@ class DetectiveBoardRead(BaseModel):
     connections: list[DetectiveBoardConnectionRead] = Field(default_factory=list)
 
 
+class DetectiveBoardGenerateRequest(BaseModel):
+    output_language: Literal["ru", "en"] = "ru"
+    model: str | None = None
+    max_nodes: int = Field(default=12, ge=3, le=24)
+
+
 class ExportMetadata(BaseModel):
     schema_version: str
     app_version: str
@@ -485,19 +491,35 @@ class ExtractedWorldRuleDraft(BaseModel):
     status: VerificationStatus = VerificationStatus.proposed
 
 
+class ExtractedRandomTableDraft(BaseModel):
+    client_id: str = Field(min_length=1, max_length=80)
+    source_excerpt: str | None = Field(default=None, max_length=240)
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    is_secret: bool = False
+
+
 class ExtractedRandomTableRowDraft(BaseModel):
-    table_id: str
+    table_id: str | None = None
+    table_client_id: str | None = Field(default=None, min_length=1, max_length=80)
     source_excerpt: str | None = Field(default=None, max_length=240)
     label: str | None = Field(default=None, max_length=200)
     result: str = Field(min_length=1)
     weight: int = Field(default=1, ge=1, le=1000)
     is_secret: bool = False
 
+    @model_validator(mode="after")
+    def validate_table_ref(self) -> "ExtractedRandomTableRowDraft":
+        if bool(self.table_id) == bool(self.table_client_id):
+            raise ValueError("Provide exactly one table reference")
+        return self
+
 
 class ExtractionPayload(BaseModel):
     entities: list[ExtractedEntityDraft] = Field(default_factory=list, max_length=50)
     relationships: list[ExtractedRelationshipDraft] = Field(default_factory=list, max_length=100)
     world_rules: list[ExtractedWorldRuleDraft] = Field(default_factory=list, max_length=25)
+    random_tables: list[ExtractedRandomTableDraft] = Field(default_factory=list, max_length=25)
     random_table_rows: list[ExtractedRandomTableRowDraft] = Field(default_factory=list, max_length=100)
     notes: list[str] = Field(default_factory=list, max_length=25)
 
@@ -506,6 +528,9 @@ class ExtractionPayload(BaseModel):
         client_ids = [entity.client_id for entity in self.entities if entity.client_id]
         if len(client_ids) != len(set(client_ids)):
             raise ValueError("Entity client_id values must be unique")
+        table_client_ids = [table.client_id for table in self.random_tables]
+        if len(table_client_ids) != len(set(table_client_ids)):
+            raise ValueError("Random table client_id values must be unique")
         return self
 
 
@@ -544,6 +569,7 @@ class ProposalApplyResult(BaseModel):
     updated_entities: int = 0
     created_relationships: int = 0
     created_world_rules: int = 0
+    created_random_tables: int = 0
     created_random_table_rows: int = 0
 
 
@@ -551,6 +577,7 @@ class ProposalItemSelection(BaseModel):
     entity_indices: list[int] | None = None
     relationship_indices: list[int] | None = None
     world_rule_indices: list[int] | None = None
+    random_table_indices: list[int] | None = None
     random_table_row_indices: list[int] | None = None
 
 

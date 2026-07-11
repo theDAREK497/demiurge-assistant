@@ -408,6 +408,8 @@ def test_visual_app_is_served() -> None:
     assert 'data-tab="modules"' in app_response.text
     assert 'data-module-toggle="quests"' in app_response.text
     assert 'data-i18n="chat.saveHint"' in app_response.text
+    assert 'id="chatThreadList"' in app_response.text
+    assert 'id="saveToWiki"' not in app_response.text
     assert 'id="llmSettingsForm"' in app_response.text
     assert 'id="roleGate"' in app_response.text
     assert 'id="entityDrawerBackdrop"' in app_response.text
@@ -425,6 +427,9 @@ def test_visual_app_is_served() -> None:
     assert ru_response.json()["tabs.proposals"] == "Черновики"
     assert ru_response.json()["rule.condition"] == "Когда это важно"
     assert ru_response.json()["entity.open"] == "Открыть"
+    assert ru_response.json()["chat.saveThis"] == "Сохранить в черновик"
+    assert ru_response.json()["proposal.status.applied"] == "Применен"
+    assert ru_response.json()["proposal.status.rejected"] == "Отклонен"
 
     module_response = client.get("/app/js/main.js")
     assert module_response.status_code == 200
@@ -441,6 +446,9 @@ def test_visual_app_is_served() -> None:
     assert "entityReviewChangeDetails" in render_response.text
     assert "proposal-change-summary" in render_response.text
     assert "proposal-change-detail" in render_response.text
+    assert "data-delete-proposal" in render_response.text
+    assert "#{1,6}" in render_response.text
+    assert 'output.push("<hr>")' in render_response.text
 
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
@@ -778,6 +786,7 @@ def test_extraction_proposal_apply_and_reject_flow() -> None:
         "updated_entities": 0,
         "created_relationships": 1,
         "created_world_rules": 1,
+        "created_random_tables": 0,
         "created_random_table_rows": 0,
     }
 
@@ -843,6 +852,76 @@ def test_extraction_proposal_apply_and_reject_flow() -> None:
     assert invalid_response.status_code == 422
 
 
+def test_extraction_endpoint_keeps_valid_items_when_llm_references_are_noisy(monkeypatch) -> None:
+    client = build_client()
+    world_response = client.post("/api/worlds", json={"name": "Recovered Vale"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+    invented_match_id = "11111111-1111-4111-8111-111111111111"
+
+    class FakeExtractionLLMClient:
+        async def chat(self, request):
+            return LLMChatResponse(
+                model="fake-extractor",
+                message=LLMMessage(
+                    role="assistant",
+                    content=f"""
+                    {{
+                      "entities": [
+                        {{"match_entity_id": "{invented_match_id}", "type": "character", "name": "Mira"}},
+                        {{"client_id": "north-gate", "type": "location", "name": "North Gate"}}
+                      ],
+                      "relationships": [
+                        {{"source_entity_id": "{invented_match_id}", "target_client_id": "north-gate", "type": "guards"}},
+                        {{"source_client_id": "missing", "target_client_id": "north-gate", "type": "haunts"}}
+                      ],
+                      "random_table_rows": [
+                        {{"table_id": "invented-table", "result": "Broken row"}}
+                      ]
+                    }}
+                    """,
+                ),
+                finish_reason="stop",
+            )
+
+    import worldbuilder_core.api.routes.proposals as proposals_route
+
+    monkeypatch.setattr(proposals_route, "build_llm_client", lambda *_, **__: FakeExtractionLLMClient())
+
+    response = client.post(
+        f"/api/worlds/{world_id}/proposals/extract",
+        json={"source_text": "Mira guards the North Gate."},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()["payload"]
+    assert [entity["name"] for entity in payload["entities"]] == ["Mira", "North Gate"]
+    assert payload["entities"][0]["match_entity_id"] is None
+    assert payload["entities"][0]["client_id"].startswith("recovered-entity-")
+    assert len(payload["relationships"]) == 1
+    assert payload["relationships"][0]["source_client_id"] == payload["entities"][0]["client_id"]
+    assert payload["random_table_rows"] == []
+
+
+def test_extraction_proposal_can_be_deleted() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Brief Draft"}).json()["id"]
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Temporary note.",
+            "payload": {"notes": ["Temporary note."]},
+        },
+    )
+    assert proposal.status_code == 201
+    proposal_id = proposal.json()["id"]
+
+    delete_response = client.delete(f"/api/proposals/{proposal_id}")
+    assert delete_response.status_code == 204
+    assert client.get(f"/api/proposals/{proposal_id}").status_code == 404
+    assert client.delete(f"/api/proposals/{proposal_id}").status_code == 404
+
+
 def test_extraction_proposal_can_apply_selected_items() -> None:
     client = build_client()
     world_response = client.post("/api/worlds", json={"name": "Selective Marches"})
@@ -894,6 +973,7 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
         "updated_entities": 0,
         "created_relationships": 0,
         "created_world_rules": 0,
+        "created_random_tables": 0,
         "created_random_table_rows": 0,
     }
 
@@ -909,6 +989,56 @@ def test_extraction_proposal_can_apply_selected_items() -> None:
         json={"entity_indices": [1]},
     )
     assert second_apply.status_code == 409
+
+
+def test_extraction_proposal_deduplicates_repeated_draft_items() -> None:
+    client = build_client()
+    world_response = client.post("/api/worlds", json={"name": "Duplicate Forge"})
+    assert world_response.status_code == 201
+    world_id = world_response.json()["id"]
+
+    table_response = client.post(f"/api/worlds/{world_id}/random-tables", json={"name": "Rumors"})
+    assert table_response.status_code == 201
+    table_id = table_response.json()["id"]
+
+    proposal_response = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Mira joins the Brass Guild. A bell tolls under the river.",
+            "payload": {
+                "entities": [
+                    {"client_id": "mira", "type": "character", "name": "Mira", "aliases": ["Cartographer"]},
+                    {"client_id": "mira-copy", "type": "character", "name": "Mira", "tags": ["scout"]},
+                    {"client_id": "brass-guild", "type": "faction", "name": "Brass Guild"},
+                ],
+                "relationships": [
+                    {"source_client_id": "mira", "target_client_id": "brass-guild", "type": "member_of"},
+                    {"source_client_id": "mira-copy", "target_client_id": "brass-guild", "type": "MEMBER_OF"},
+                ],
+                "world_rules": [
+                    {"condition": "A guild is named.", "effect": "Mention its public charter.", "tags": ["guild"]},
+                    {"condition": "A guild is named.", "effect": "Mention its public charter.", "tags": ["law"]},
+                ],
+                "random_table_rows": [
+                    {"table_id": table_id, "label": "River bell", "result": "A bell tolls under the river.", "weight": 1},
+                    {"table_id": table_id, "label": "River bell", "result": "A bell tolls under the river.", "weight": 3},
+                ],
+                "notes": ["Review duplicates.", "Review duplicates."],
+            },
+        },
+    )
+    assert proposal_response.status_code == 201
+    payload = proposal_response.json()["payload"]
+    assert [entity["name"] for entity in payload["entities"]] == ["Mira", "Brass Guild"]
+    assert payload["entities"][0]["aliases"] == ["Cartographer"]
+    assert payload["entities"][0]["tags"] == ["scout"]
+    assert len(payload["relationships"]) == 1
+    assert payload["relationships"][0]["source_client_id"] == "mira"
+    assert len(payload["world_rules"]) == 1
+    assert set(payload["world_rules"][0]["tags"]) == {"guild", "law"}
+    assert len(payload["random_table_rows"]) == 1
+    assert payload["random_table_rows"][0]["weight"] == 3
+    assert payload["notes"] == ["Review duplicates."]
 
 
 def test_extraction_proposal_can_apply_random_table_rows() -> None:
@@ -966,6 +1096,7 @@ def test_extraction_proposal_can_apply_random_table_rows() -> None:
         "updated_entities": 0,
         "created_relationships": 0,
         "created_world_rules": 0,
+        "created_random_tables": 0,
         "created_random_table_rows": 1,
     }
 
@@ -990,6 +1121,110 @@ def test_extraction_proposal_can_apply_random_table_rows() -> None:
     )
     assert invalid_response.status_code == 422
 
+
+def test_extraction_proposal_can_create_random_table_with_rows() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "New Dice"}).json()["id"]
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Create a weather table.",
+            "payload": {
+                "random_tables": [
+                    {
+                        "client_id": "weather",
+                        "name": "Strange weather",
+                        "description": "Weather over the glass marsh.",
+                    }
+                ],
+                "random_table_rows": [
+                    {"table_client_id": "weather", "label": "Ash", "result": "Warm ash falls.", "weight": 2},
+                    {"table_client_id": "weather", "label": "Glass rain", "result": "Glass rain begins."},
+                ],
+            },
+        },
+    )
+    assert proposal.status_code == 201
+
+    apply_response = client.post(
+        f"/api/proposals/{proposal.json()['id']}/apply-selected",
+        json={
+            "entity_indices": [],
+            "relationship_indices": [],
+            "world_rule_indices": [],
+            "random_table_indices": [],
+            "random_table_row_indices": [0, 1],
+        },
+    )
+    assert apply_response.status_code == 200
+    assert apply_response.json()["created_random_tables"] == 1
+    assert apply_response.json()["created_random_table_rows"] == 2
+    tables = client.get(f"/api/worlds/{world_id}/random-tables").json()
+    assert [table["name"] for table in tables] == ["Strange weather"]
+    assert [row["label"] for row in tables[0]["rows"]] == ["Ash", "Glass rain"]
+
+
+def test_detective_board_can_be_generated_and_deleted(monkeypatch) -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Casebook"}).json()["id"]
+    entity = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Inspector Vale"},
+    ).json()
+
+    class FakeBoardLLMClient:
+        async def chat(self, request):
+            return LLMChatResponse(
+                model="fake-board",
+                message=LLMMessage(
+                    role="assistant",
+                    content=f"""
+                    {{
+                      "nodes": [
+                        {{"client_id": "inspector", "entity_id": "{entity['id']}", "title": "Inspector Vale", "note": "Follows the wax trail."}},
+                        {{"client_id": "seal", "title": "Blue wax seal", "note": "Found near the gate.", "is_secret": false}},
+                        {{"client_id": "patron", "title": "Hidden patron", "note": "Paid for silence.", "is_secret": true}}
+                      ],
+                      "connections": [
+                        {{"source_client_id": "inspector", "target_client_id": "seal", "label": "found"}},
+                        {{"source_client_id": "seal", "target_client_id": "patron", "label": "points to", "is_secret": true}}
+                      ]
+                    }}
+                    """,
+                ),
+                finish_reason="stop",
+            )
+
+    import worldbuilder_core.api.routes.detective_board as detective_route
+
+    monkeypatch.setattr(detective_route, "build_llm_client", lambda *_, **__: FakeBoardLLMClient())
+    generated = client.post(
+        f"/api/worlds/{world_id}/detective-board/generate",
+        json={"output_language": "en", "max_nodes": 8},
+    )
+    assert generated.status_code == 201
+    assert len(generated.json()["nodes"]) == 3
+    assert len(generated.json()["connections"]) == 2
+    assert generated.json()["nodes"][0]["entity_id"] == entity["id"]
+    assert client.post(f"/api/worlds/{world_id}/detective-board/generate", json={}).status_code == 409
+
+    deleted = client.delete(f"/api/worlds/{world_id}/detective-board")
+    assert deleted.status_code == 204
+    assert client.get(f"/api/worlds/{world_id}/detective-board").json() == {"nodes": [], "connections": []}
+
+
+def test_world_can_be_deleted_with_all_owned_data() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Disposable World"}).json()["id"]
+    client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "concept", "name": "Temporary concept"},
+    )
+
+    response = client.delete(f"/api/worlds/{world_id}")
+    assert response.status_code == 204
+    assert all(world["id"] != world_id for world in client.get("/api/worlds").json())
+    assert client.get(f"/api/worlds/{world_id}").status_code == 404
 
 def test_extraction_proposal_can_update_existing_entity_by_match_id() -> None:
     client = build_client()
@@ -1043,6 +1278,7 @@ def test_extraction_proposal_can_update_existing_entity_by_match_id() -> None:
         "updated_entities": 1,
         "created_relationships": 0,
         "created_world_rules": 0,
+        "created_random_tables": 0,
         "created_random_table_rows": 0,
     }
 

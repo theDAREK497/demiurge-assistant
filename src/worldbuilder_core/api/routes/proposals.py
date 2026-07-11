@@ -18,7 +18,9 @@ from worldbuilder_core.services.proposals import (
     apply_extraction_proposal,
     apply_selected_extraction_proposal,
     create_extraction_proposal,
+    delete_extraction_proposal,
     reject_extraction_proposal,
+    sanitize_extraction_payload_for_world,
 )
 from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context
 
@@ -67,6 +69,7 @@ async def extract_proposal_from_text(
     except ExtractionParseError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM extraction failed: {exc}") from exc
 
+    extraction_payload = sanitize_extraction_payload_for_world(session, world_id, extraction_payload)
     try:
         return create_extraction_proposal(
             session,
@@ -133,3 +136,11 @@ def reject_proposal(proposal_id: str, session: DbSession) -> ExtractionProposal:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found") from exc
     except ProposalInvalidStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.delete("/proposals/{proposal_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_proposal(proposal_id: str, session: DbSession) -> None:
+    try:
+        delete_extraction_proposal(session, proposal_id)
+    except ProposalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found") from exc

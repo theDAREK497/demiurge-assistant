@@ -1,13 +1,20 @@
 import {
   buildContext,
+  branchChatThread,
   createEntity,
   createManualProposal,
   saveMapPin,
   createRelationship,
   createRule,
   createWorld,
+  deleteDetectiveBoard,
+  deleteEntity,
+  deleteDetectiveNode,
+  deleteMapPin,
   exportWorld,
+  generateDetectiveBoard,
   importWorld,
+  insertChatTemplate,
   loadHealth,
   loadLlmConfig,
   loadWorldData,
@@ -20,6 +27,7 @@ import {
   resetDetectiveNodeForm,
   resetEntityForm,
   resetMapPinForm,
+  resetRelationshipForm,
   resetRandomTableForm,
   resetRandomTableRowForm,
   saveDetectiveConnection,
@@ -28,6 +36,7 @@ import {
   saveRandomTableRow,
   saveLlmConfig,
   sendChat,
+  startNewChatThread,
   startCreateEntity,
   startCreateEntityWithType,
   testLlmConnection,
@@ -38,9 +47,13 @@ import { language, setLanguage, t } from "./i18n.js";
 import {
   activateModuleView,
   activateTab,
+  arrangeGraph,
   closeEntityReader,
   openSelectedEntityForEdit,
   renderChat,
+  renderChatTemplates,
+  renderChatThreads,
+  renderEntities,
   renderEntityFormMode,
   renderInviteLinks,
   renderModuleVisibility,
@@ -71,20 +84,55 @@ function bindEvents() {
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
   $("cancelEntityEdit").addEventListener("click", resetEntityForm);
+  $("cancelRelationshipEdit").addEventListener("click", resetRelationshipForm);
   $("openEntityDrawer").addEventListener("click", startCreateEntity);
   $("closeEntityDrawer").addEventListener("click", resetEntityForm);
   $("closeEntityReader").addEventListener("click", closeEntityReader);
   $("readerEditEntity").addEventListener("click", openSelectedEntityForEdit);
+  $("readerDeleteEntity").addEventListener("click", () => {
+    if (state.selectedReaderType === "detectiveNode" && state.selectedReaderSourceId) {
+      deleteDetectiveNode(state.selectedReaderSourceId);
+      return;
+    }
+    if (!state.selectedEntityId) return;
+    deleteEntity(state.selectedEntityId);
+  });
   $("cancelMapPinEdit").addEventListener("click", resetMapPinForm);
+  $("deleteMapPinBtn").addEventListener("click", () => {
+    if (state.editingMapPinId) {
+      deleteMapPin(state.editingMapPinId);
+    }
+  });
   $("cancelRandomTableEdit").addEventListener("click", resetRandomTableForm);
   $("cancelRandomTableRowEdit").addEventListener("click", resetRandomTableRowForm);
   $("cancelDetectiveNodeEdit").addEventListener("click", resetDetectiveNodeForm);
   $("cancelDetectiveConnectionEdit").addEventListener("click", resetDetectiveConnectionForm);
   $("openMapPinEditor").addEventListener("click", openMapPinEditor);
   $("openMapLocationCreator").addEventListener("click", () => startCreateEntityWithType("location"));
+  $("addTimelineEventBtn").addEventListener("click", () => startCreateEntityWithType("event"));
   $("openDetectiveNodeEditor").addEventListener("click", openDetectiveNodeEditor);
   $("openDetectiveConnectionEditor").addEventListener("click", openDetectiveConnectionEditor);
+  $("generateDetectiveBoard").addEventListener("click", wrap(generateDetectiveBoard));
+  $("deleteDetectiveBoard").addEventListener("click", wrap(deleteDetectiveBoard));
   $("entityImageFile").addEventListener("change", wrap(uploadEntityImage));
+
+  // Responsive mobile sidebar listeners
+  const toggleBtn = $("toggleSidebarMobile");
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", () => {
+      document.querySelector(".shell")?.classList.toggle("sidebar-open");
+    });
+  }
+
+  let backdrop = document.querySelector(".sidebar-backdrop");
+  if (!backdrop) {
+    backdrop = document.createElement("div");
+    backdrop.className = "sidebar-backdrop";
+    document.querySelector(".shell")?.appendChild(backdrop);
+  }
+  backdrop.addEventListener("click", () => {
+    document.querySelector(".shell")?.classList.remove("sidebar-open");
+  });
 
   $("refreshWorlds").addEventListener("click", wrap(loadWorlds));
   $("refreshEntities").addEventListener("click", wrap(loadWorldData));
@@ -92,6 +140,7 @@ function bindEvents() {
   $("refreshRules").addEventListener("click", wrap(loadWorldData));
   $("refreshProposals").addEventListener("click", wrap(loadWorldData));
   $("refreshGraph").addEventListener("click", wrap(loadWorldData));
+  $("arrangeGraph").addEventListener("click", arrangeGraph);
   $("refreshTimeline").addEventListener("click", wrap(loadWorldData));
   $("refreshContext").addEventListener("click", wrap(buildContext));
   $("refreshLlmConfig").addEventListener("click", wrap(loadLlmConfig));
@@ -106,8 +155,11 @@ function bindEvents() {
     }
   });
   $("viewerRole").addEventListener("change", (event) => {
-    localStorage.setItem("worldbuilder.viewerRole", event.target.value);
+    setViewerRole(event.target.value);
     wrap(loadWorldData)();
+  });
+  $("switchRole").addEventListener("click", () => {
+    $("roleGate").classList.remove("hidden");
   });
   $("languageSelect").addEventListener("change", async (event) => {
     await setLanguage(event.target.value);
@@ -126,9 +178,10 @@ function bindEvents() {
   document.querySelectorAll("[data-module-nav]").forEach((button) => {
     button.addEventListener("click", () => activateModuleView(button.dataset.moduleNav));
   });
-  $("clearChat").addEventListener("click", () => {
-    state.chatMessages = [];
-    renderChat();
+  $("newChatThread").addEventListener("click", startNewChatThread);
+  $("branchChatThread").addEventListener("click", branchChatThread);
+  document.querySelectorAll("[data-chat-template]").forEach((button) => {
+    button.addEventListener("click", () => insertChatTemplate(button.dataset.chatTemplate));
   });
   document.querySelectorAll("[data-role-choice]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -137,12 +190,23 @@ function bindEvents() {
       wrap(loadWorldData)();
     });
   });
+
+  // Bind category filter buttons
+  document.querySelectorAll(".category-filter").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.entityTypeFilter = button.dataset.filter;
+      renderEntities();
+    });
+  });
 }
 
 function setViewerRole(role) {
   const nextRole = role === "player" ? "player" : "master";
   $("viewerRole").value = nextRole;
   localStorage.setItem("worldbuilder.viewerRole", nextRole);
+  const url = new URL(window.location.href);
+  url.searchParams.set("role", nextRole);
+  window.history.replaceState({}, "", url);
 }
 
 function bootViewerRole() {
@@ -179,6 +243,7 @@ export async function boot() {
     setTheme(theme());
     bindTabs();
     bindEvents();
+    initMarkdownToolbar();
     bootViewerRole();
     bootModuleSettings();
     renderInviteLinks();
@@ -190,6 +255,8 @@ export async function boot() {
     resetDetectiveNodeForm();
     resetDetectiveConnectionForm();
     renderModuleVisibility();
+    renderChatTemplates();
+    renderChatThreads();
     renderChat();
     await loadHealth();
     await loadLlmConfig();
@@ -197,4 +264,23 @@ export async function boot() {
   } catch (error) {
     toast(`${t("boot.failed")}: ${error.message}`, "error");
   }
+}
+
+function initMarkdownToolbar() {
+  document.querySelectorAll(".md-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const textarea = $("entityDescription");
+      if (!textarea) return;
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const prefix = btn.dataset.mdPrefix || "";
+      const suffix = btn.dataset.mdSuffix || "";
+      const selectedText = text.substring(start, end);
+      const replacement = prefix + selectedText + suffix;
+      textarea.value = text.substring(0, start) + replacement + text.substring(end);
+      textarea.focus();
+      textarea.setSelectionRange(start + prefix.length, start + prefix.length + selectedText.length);
+    });
+  });
 }

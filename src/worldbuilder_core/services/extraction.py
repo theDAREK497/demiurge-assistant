@@ -42,6 +42,21 @@ ENTITY_TYPE_ALIASES = {
     "worldbuilding_concept": "concept",
     "theme": "concept",
     "lore": "concept",
+    "quest": "event",
+    "mission": "event",
+    "adventure_hook": "event",
+    "квест": "event",
+    "задание": "event",
+}
+
+QUEST_TYPE_ALIASES = {"quest", "mission", "adventure_hook", "квест", "задание"}
+RANDOM_TABLE_TYPE_ALIASES = {
+    "random_table",
+    "random table",
+    "roll_table",
+    "table",
+    "случайная таблица",
+    "таблица",
 }
 
 GENERIC_REFERENCE_VALUES = {"", "id", "entity", "entity_id", "client_id", "new", "new_entity"}
@@ -98,15 +113,18 @@ def build_extraction_request(
                 content=(
                     "You extract structured wiki updates for Worldbuilder Core. "
                     "Return only valid JSON matching this shape: "
-                    '{"entities":[],"relationships":[],"world_rules":[],"random_table_rows":[],"notes":[]}. '
+                    '{"entities":[],"relationships":[],"world_rules":[],"random_tables":[],"random_table_rows":[],"notes":[]}. '
                     "Entity types must be one of: character, location, faction, item, event, clue, concept. "
                     "Never invent stable UUIDs. Use client_id for new entities, and use match_entity_id only "
                     "when the context gives an existing entity UUID. "
                     "Relationships must use source_client_id or source_entity_id, and target_client_id or "
-                    "target_entity_id, plus type. "
+                    "target_entity_id, plus a stable snake_case type and a readable label in the requested language. "
                     "World rules must use condition and effect strings. "
-                    "Random table rows must use table_id only from the context, plus result, optional label, "
-                    "weight, and is_secret. "
+                    "When the text describes a quest or mission, always create one primary event entity tagged 'quest'; "
+                    "supporting locations, characters, and items do not replace the quest entity. "
+                    "For a new random table use random_tables with client_id, name, description, and is_secret. "
+                    "Its rows must use table_client_id. For an existing table use table_id from context. "
+                    "Never represent random tables or their rows as entities or relationships. "
                     f"Write all names, summaries, descriptions, world rule conditions/effects, and notes in {language_name}. "
                     f"Extract at most {max_entities} entities. "
                     "Use status 'unknown' when uncertain, otherwise use 'proposed'."
@@ -137,9 +155,11 @@ def build_repair_request(
                     "Correct field names to the required schema and return corrected JSON only. "
                     "Use client_id instead of id for new entities. "
                     "Use source_client_id/target_client_id or source_entity_id/target_entity_id for relationships. "
+                    "Keep relationship type stable and machine-readable, and add a readable relationship label. "
                     "Use condition/effect for world rules. "
-                    "Use random_table_rows for proposed random table entries, and use only table_id values "
-                    "that appeared in the provided context."
+                    "Use random_tables for new tables and random_table_rows for entries. New rows must reference "
+                    "a new table_client_id; existing rows must use only table_id values from context. "
+                    "A quest must be an event entity with the tag 'quest'."
                 ),
             ),
         ],
@@ -184,18 +204,37 @@ def _normalize_extraction_payload(raw: object) -> dict:
     if not isinstance(raw, dict):
         raise TypeError("Extraction payload must be a JSON object")
 
+    raw_entities = _as_list(raw.get("entities"))
+    raw_table_entities = [entity for entity in raw_entities if _is_random_table_entity(entity)]
+    raw_wiki_entities = [entity for entity in raw_entities if not _is_random_table_entity(entity)]
     entity_aliases: dict[str, str] = {}
-    entities = _normalize_entities(raw.get("entities"), entity_aliases)
-    relationships = _normalize_relationships(raw.get("relationships"), entity_aliases)
+    table_aliases: dict[str, str] = {}
+    entities = _normalize_entities(raw_wiki_entities, entity_aliases)
+    random_tables, nested_rows = _normalize_random_tables(
+        [*_as_list(raw.get("random_tables") or raw.get("tables")), *raw_table_entities],
+        table_aliases,
+    )
+    relationship_rows, wiki_relationships = _extract_table_rows_from_relationships(
+        raw.get("relationships"),
+        table_aliases,
+        raw_entities,
+    )
+    relationships = _normalize_relationships(wiki_relationships, entity_aliases)
     world_rules = _normalize_world_rules(raw.get("world_rules"))
     random_table_rows = _normalize_random_table_rows(
-        raw.get("random_table_rows") or raw.get("random_table_entries") or raw.get("table_rows")
+        [
+            *_as_list(raw.get("random_table_rows") or raw.get("random_table_entries") or raw.get("table_rows")),
+            *nested_rows,
+            *relationship_rows,
+        ],
+        table_aliases,
     )
     notes = _normalize_notes(raw.get("notes"))
     return {
         "entities": entities,
         "relationships": relationships,
         "world_rules": world_rules,
+        "random_tables": random_tables,
         "random_table_rows": random_table_rows,
         "notes": notes,
     }
@@ -213,7 +252,8 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
         if not name:
             continue
 
-        entity_type = _normalize_entity_type(raw_entity.get("type"))
+        raw_entity_type = _clean_string(raw_entity.get("type")) or ""
+        entity_type = _normalize_entity_type(raw_entity_type)
         description = _clean_string(raw_entity.get("description"))
         summary = _clean_string(raw_entity.get("summary"))
         if summary is None and description:
@@ -221,6 +261,10 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
 
         match_entity_id = _clean_string(raw_entity.get("match_entity_id"))
         client_id = None if match_entity_id else _build_client_id(raw_entity, name, used_client_ids, index)
+
+        tags = _normalize_string_list(raw_entity.get("tags"))
+        if raw_entity_type.lower() in QUEST_TYPE_ALIASES and "quest" not in tags:
+            tags.append("quest")
 
         entity = {
             "client_id": client_id,
@@ -230,7 +274,7 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
             "summary": summary,
             "description": description,
             "aliases": _normalize_string_list(raw_entity.get("aliases")),
-            "tags": _normalize_string_list(raw_entity.get("tags")),
+            "tags": tags,
             "is_secret": bool(raw_entity.get("is_secret", False)),
             "status": _normalize_status(raw_entity.get("status")),
             "attributes": _normalize_attributes(raw_entity.get("attributes")),
@@ -353,19 +397,60 @@ def _normalize_world_rules(raw_world_rules: object) -> list[dict]:
     return rules
 
 
-def _normalize_random_table_rows(raw_rows: object) -> list[dict]:
+def _normalize_random_tables(raw_tables: object, table_aliases: dict[str, str]) -> tuple[list[dict], list[dict]]:
+    tables: list[dict] = []
+    nested_rows: list[dict] = []
+    used_client_ids: set[str] = set()
+
+    for index, raw_table in enumerate(_as_list(raw_tables)):
+        if not isinstance(raw_table, dict):
+            continue
+        name = _clean_string(raw_table.get("name") or raw_table.get("title"))
+        if not name:
+            continue
+        client_id = _build_named_client_id(raw_table, name, used_client_ids, index, "table")
+        tables.append(
+            {
+                "client_id": client_id,
+                "source_excerpt": _clean_string(raw_table.get("source_excerpt")),
+                "name": name,
+                "description": _clean_string(raw_table.get("description") or raw_table.get("summary")),
+                "is_secret": bool(raw_table.get("is_secret", False)),
+            }
+        )
+        for alias in _collect_table_aliases(raw_table, name):
+            table_aliases[alias] = client_id
+        for raw_row in _as_list(raw_table.get("rows") or raw_table.get("entries") or raw_table.get("results")):
+            if isinstance(raw_row, str):
+                raw_row = {"result": raw_row}
+            if isinstance(raw_row, dict):
+                nested_rows.append({**raw_row, "table_client_id": client_id})
+
+    return tables, nested_rows
+
+
+def _normalize_random_table_rows(raw_rows: object, table_aliases: dict[str, str] | None = None) -> list[dict]:
     rows: list[dict] = []
+    table_aliases = table_aliases or {}
 
     for raw_row in _as_list(raw_rows):
         if not isinstance(raw_row, dict):
             continue
 
-        table_id = _clean_string(
-            raw_row.get("table_id")
-            or raw_row.get("random_table_id")
-            or raw_row.get("table")
-            or raw_row.get("target_table_id")
+        explicit_table_id = _clean_string(
+            raw_row.get("table_id") or raw_row.get("random_table_id") or raw_row.get("target_table_id")
         )
+        explicit_client_id = _clean_string(raw_row.get("table_client_id"))
+        generic_table_ref = _clean_string(raw_row.get("table"))
+        table_client_id = explicit_client_id
+        table_id = explicit_table_id
+        if table_client_id:
+            table_id = None
+        elif table_id and _lookup_alias(table_aliases, table_id):
+            table_client_id = _lookup_alias(table_aliases, table_id)
+            table_id = None
+        elif not table_id and generic_table_ref:
+            table_client_id = _lookup_alias(table_aliases, generic_table_ref) or _slugify(generic_table_ref) or None
         result = _clean_string(
             raw_row.get("result")
             or raw_row.get("text")
@@ -373,12 +458,13 @@ def _normalize_random_table_rows(raw_rows: object) -> list[dict]:
             or raw_row.get("outcome")
             or raw_row.get("description")
         )
-        if not table_id or not result:
+        if (not table_id and not table_client_id) or not result:
             continue
 
         rows.append(
             {
                 "table_id": table_id,
+                "table_client_id": table_client_id,
                 "source_excerpt": _clean_string(raw_row.get("source_excerpt")),
                 "label": _clean_string(raw_row.get("label") or raw_row.get("name") or raw_row.get("title")),
                 "result": result,
@@ -388,6 +474,78 @@ def _normalize_random_table_rows(raw_rows: object) -> list[dict]:
         )
 
     return rows
+
+
+def _extract_table_rows_from_relationships(
+    raw_relationships: object,
+    table_aliases: dict[str, str],
+    raw_entities: list,
+) -> tuple[list[dict], list]:
+    rows: list[dict] = []
+    relationships: list = []
+    entity_lookup: dict[str, dict] = {}
+    for raw_entity in raw_entities:
+        if not isinstance(raw_entity, dict):
+            continue
+        name = _clean_string(raw_entity.get("name"))
+        if not name:
+            continue
+        for alias in _collect_entity_aliases(raw_entity, name):
+            entity_lookup[alias.casefold()] = raw_entity
+
+    row_relationship_types = {
+        "contains",
+        "includes",
+        "has_entry",
+        "table_entry",
+        "entry",
+        "result",
+        "roll_result",
+        "содержит",
+        "результат",
+        "строка_таблицы",
+    }
+    for raw_relationship in _as_list(raw_relationships):
+        if not isinstance(raw_relationship, dict):
+            continue
+        source = _clean_string(
+            raw_relationship.get("source_client_id")
+            or raw_relationship.get("source_entity_id")
+            or raw_relationship.get("source_id")
+            or raw_relationship.get("source")
+        )
+        target = _clean_string(
+            raw_relationship.get("target_client_id")
+            or raw_relationship.get("target_entity_id")
+            or raw_relationship.get("target_id")
+            or raw_relationship.get("target")
+        )
+        relation_type = _clean_string(raw_relationship.get("type") or raw_relationship.get("relationship_type")) or ""
+        source_table = _lookup_alias(table_aliases, source)
+        target_table = _lookup_alias(table_aliases, target)
+        if relation_type.casefold() in row_relationship_types and bool(source_table) != bool(target_table):
+            row_ref = target if source_table else source
+            raw_row_entity = entity_lookup.get((row_ref or "").casefold(), {})
+            result = _clean_string(
+                raw_row_entity.get("description")
+                or raw_row_entity.get("summary")
+                or raw_row_entity.get("name")
+                or raw_relationship.get("description")
+                or row_ref
+            )
+            if result:
+                rows.append(
+                    {
+                        "table_client_id": source_table or target_table,
+                        "label": _clean_string(raw_row_entity.get("name") or raw_relationship.get("label")),
+                        "result": result,
+                        "weight": raw_relationship.get("weight", 1),
+                        "is_secret": bool(raw_relationship.get("is_secret", False)),
+                    }
+                )
+            continue
+        relationships.append(raw_relationship)
+    return rows, relationships
 
 
 def _normalize_notes(raw_notes: object) -> list[str]:
@@ -457,11 +615,23 @@ def annotate_payload_with_source_excerpts(payload: ExtractionPayload, source_tex
         for row in payload.random_table_rows
     ]
 
+    random_tables = [
+        table.model_copy(
+            update={
+                "source_excerpt": table.source_excerpt
+                or _find_best_excerpt(sentences, [table.name, table.description or ""])
+                or fallback_excerpt,
+            }
+        )
+        for table in payload.random_tables
+    ]
+
     return payload.model_copy(
         update={
             "entities": entities,
             "relationships": relationships,
             "world_rules": rules,
+            "random_tables": random_tables,
             "random_table_rows": random_table_rows,
         }
     )
@@ -552,6 +722,49 @@ def _build_client_id(raw_entity: dict, name: str, used_client_ids: set[str], ind
         suffix += 1
     used_client_ids.add(unique_candidate)
     return unique_candidate
+
+
+def _build_named_client_id(
+    raw_item: dict,
+    name: str,
+    used_client_ids: set[str],
+    index: int,
+    fallback_prefix: str,
+) -> str:
+    preferred = _clean_string(raw_item.get("client_id")) or _clean_string(raw_item.get("id"))
+    candidate = _slugify(preferred or name) or f"{fallback_prefix}-{index + 1}"
+    unique_candidate = candidate
+    suffix = 2
+    while unique_candidate in used_client_ids:
+        unique_candidate = f"{candidate}-{suffix}"
+        suffix += 1
+    used_client_ids.add(unique_candidate)
+    return unique_candidate
+
+
+def _is_random_table_entity(raw_entity: object) -> bool:
+    if not isinstance(raw_entity, dict):
+        return False
+    raw_type = _clean_string(raw_entity.get("type") or raw_entity.get("entity_type"))
+    return bool(raw_type and raw_type.lower() in RANDOM_TABLE_TYPE_ALIASES)
+
+
+def _collect_table_aliases(raw_table: dict, name: str) -> set[str]:
+    aliases = {name}
+    for key in ("client_id", "id", "table_id", "name", "title"):
+        value = _clean_string(raw_table.get(key))
+        if value:
+            aliases.add(value)
+    return aliases
+
+
+def _lookup_alias(aliases: dict[str, str], value: str | None) -> str | None:
+    if not value:
+        return None
+    if value in aliases:
+        return aliases[value]
+    folded = value.casefold()
+    return next((target for alias, target in aliases.items() if alias.casefold() == folded), None)
 
 
 def _collect_entity_aliases(raw_entity: dict, name: str) -> set[str]:
