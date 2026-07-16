@@ -4,6 +4,7 @@ from sqlalchemy import select
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import World
 from worldbuilder_core.schemas import WorldCreate, WorldRead, WorldUpdate
+from worldbuilder_core.services.assets import cleanup_unreferenced_assets, world_asset_urls
 
 router = APIRouter(prefix="/worlds", tags=["worlds"])
 
@@ -50,6 +51,7 @@ def delete_world(world_id: str, session: DbSession) -> None:
     world = session.get(World, world_id)
     if world is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found")
+    asset_urls = world_asset_urls(session, world_id)
     session.delete(world)
     session.commit()
-
+    cleanup_unreferenced_assets(session, asset_urls)

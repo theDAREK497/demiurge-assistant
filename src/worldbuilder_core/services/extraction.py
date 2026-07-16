@@ -4,7 +4,8 @@ from typing import Protocol
 
 from pydantic import ValidationError
 
-from worldbuilder_core.schemas import ExtractionPayload, LLMChatRequest, LLMMessage
+from worldbuilder_core.models import EntityType, VerificationStatus
+from worldbuilder_core.schemas import ExtractedEntityDraft, ExtractionPayload, LLMChatRequest, LLMMessage
 
 
 class ExtractionParseError(Exception):
@@ -50,6 +51,20 @@ ENTITY_TYPE_ALIASES = {
 }
 
 QUEST_TYPE_ALIASES = {"quest", "mission", "adventure_hook", "квест", "задание"}
+QUEST_TAG_ALIASES = {
+    "quest",
+    "quests",
+    "mission",
+    "missions",
+    "adventure_hook",
+    "квест",
+    "квесты",
+    "квестовый",
+    "задание",
+    "задания",
+    "миссия",
+    "миссии",
+}
 RANDOM_TABLE_TYPE_ALIASES = {
     "random_table",
     "random table",
@@ -63,6 +78,13 @@ GENERIC_REFERENCE_VALUES = {"", "id", "entity", "entity_id", "client_id", "new",
 UUID_PATTERN = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
+QUEST_REQUEST_PATTERN = re.compile(
+    r"(?iu)\b(?:quests?|missions?|adventure[ _-]?hooks?|квест\w*|задани\w*|мисси\w*)\b"
+)
+QUEST_STAGE_PATTERN = re.compile(r"(?iu)\b(?:stage|act|этап|акт)\s*(?:[ivx]+|\d+)?\b")
+QUEST_SECTION_PATTERN = re.compile(
+    r"(?iu)^(?:objective|goal|quest giver|reward|failure|цель|заказчик|награда|последств\w*|осложнен\w*)\b"
+)
 
 
 async def extract_payload_with_llm(
@@ -73,6 +95,7 @@ async def extract_payload_with_llm(
     max_entities: int,
     output_language: str = "ru",
     model: str | None = None,
+    intent_text: str | None = None,
 ) -> ExtractionPayload:
     extraction_request = build_extraction_request(
         source_text=source_text,
@@ -80,6 +103,7 @@ async def extract_payload_with_llm(
         max_entities=max_entities,
         output_language=output_language,
         model=model,
+        intent_text=intent_text,
     )
     completion = await llm_client.chat(extraction_request)
     try:
@@ -92,6 +116,11 @@ async def extract_payload_with_llm(
         )
         repaired_completion = await llm_client.chat(repair_request)
         payload = parse_extraction_payload(repaired_completion.message.content, max_entities=max_entities)
+    payload = ensure_requested_quest_entity(
+        payload,
+        source_text=source_text,
+        intent_text=intent_text,
+    )
     return annotate_payload_with_source_excerpts(payload, source_text)
 
 
@@ -102,6 +131,7 @@ def build_extraction_request(
     max_entities: int,
     output_language: str = "ru",
     model: str | None = None,
+    intent_text: str | None = None,
 ) -> LLMChatRequest:
     language_name = "English" if output_language == "en" else "Russian"
     return LLMChatRequest(
@@ -130,7 +160,14 @@ def build_extraction_request(
                     "Use status 'unknown' when uncertain, otherwise use 'proposed'."
                 ),
             ),
-            LLMMessage(role="user", content=f"Authoritative world context:\n{context_text}\n\nText to extract:\n{source_text}"),
+            LLMMessage(
+                role="user",
+                content=(
+                    f"Authoritative world context:\n{context_text}\n\n"
+                    f"Original user intent:\n{intent_text or 'Not provided.'}\n\n"
+                    f"Text to extract:\n{source_text}"
+                ),
+            ),
         ],
     )
 
@@ -176,6 +213,189 @@ def parse_extraction_payload(content: str, *, max_entities: int) -> ExtractionPa
     if len(payload.entities) > max_entities:
         raise ExtractionParseError(f"Extracted {len(payload.entities)} entities; maximum is {max_entities}")
     return payload
+
+
+def ensure_requested_quest_entity(
+    payload: ExtractionPayload,
+    *,
+    source_text: str,
+    intent_text: str | None = None,
+) -> ExtractionPayload:
+    request_text = intent_text or source_text
+    if not QUEST_REQUEST_PATTERN.search(request_text):
+        return payload
+
+    entities = list(payload.entities)
+    quest_title = _extract_quest_title(source_text)
+    candidate_index = _find_quest_candidate_index(entities, quest_title)
+    if candidate_index is not None:
+        candidate = entities[candidate_index]
+        entities[candidate_index] = candidate.model_copy(
+            update={
+                "type": EntityType.event,
+                "tags": _merge_unique_strings(candidate.tags, ["quest"]),
+                "attributes": {**candidate.attributes, "module": "quest"},
+            }
+        )
+        return payload.model_copy(update={"entities": entities})
+
+    title = quest_title or ("New quest" if _looks_english(intent_text or source_text) else "Новый квест")
+    used_client_ids = {entity.client_id for entity in entities if entity.client_id}
+    client_id = _unique_quest_client_id(title, used_client_ids)
+    entities.append(
+        ExtractedEntityDraft(
+            client_id=client_id,
+            type=EntityType.event,
+            name=title[:200],
+            summary=_extract_quest_summary(source_text),
+            description=source_text,
+            tags=["quest"],
+            status=VerificationStatus.proposed,
+            attributes={"module": "quest"},
+        )
+    )
+    return payload.model_copy(update={"entities": entities})
+
+
+def _find_quest_candidate_index(entities: list[ExtractedEntityDraft], quest_title: str | None) -> int | None:
+    for index, entity in enumerate(entities):
+        if entity.type == EntityType.event and "quest" in _normalize_quest_tags(entity.tags):
+            return index
+
+    if quest_title:
+        title_tokens = set(_normalize_match_term(quest_title).split())
+        for index, entity in enumerate(entities):
+            if entity.type != EntityType.event or QUEST_STAGE_PATTERN.search(entity.name):
+                continue
+            name_tokens = set(_normalize_match_term(entity.name).split())
+            if title_tokens and (
+                title_tokens.issubset(name_tokens)
+                or name_tokens.issubset(title_tokens)
+                or _normalize_match_term(quest_title) in _normalize_match_term(entity.name)
+            ):
+                return index
+
+    likely_events = [
+        index
+        for index, entity in enumerate(entities)
+        if entity.type == EntityType.event
+        and not QUEST_STAGE_PATTERN.search(entity.name)
+        and (
+            _name_explicitly_marks_quest(entity.name)
+            or re.match(r"(?iu)^\s*(?:quest|mission|квест|задание)\b", entity.summary or "")
+        )
+    ]
+    if likely_events:
+        return likely_events[0]
+
+    non_stage_events = [
+        index
+        for index, entity in enumerate(entities)
+        if entity.type == EntityType.event and not QUEST_STAGE_PATTERN.search(entity.name)
+    ]
+    return non_stage_events[0] if len(non_stage_events) == 1 else None
+
+
+def _extract_quest_title(source_text: str) -> str | None:
+    heading_candidates: list[str] = []
+    for raw_line in source_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        clean_line = re.sub(r"^#{1,6}\s*", "", line)
+        clean_line = clean_line.strip("* _`#")
+        explicit = re.match(
+            r"(?iu)^(?:quest(?:\s+hook)?|mission|adventure\s+hook|квест\w*(?:\s+крючок)?|задание)\s*[:\-–—]\s*(.+)$",
+            clean_line,
+        )
+        if explicit:
+            title = _clean_quest_title(explicit.group(1))
+            if title:
+                return title
+        if line.startswith("#"):
+            heading_candidates.append(clean_line)
+
+    for heading in heading_candidates:
+        title = _clean_quest_title(heading)
+        if title and not QUEST_SECTION_PATTERN.match(title) and not re.fullmatch(
+            r"(?iu)(?:quest(?:\s+hook)?|mission|adventure\s+hook|квест\w*(?:\s+крючок)?|задание)",
+            title,
+        ):
+            return title
+    return None
+
+
+def _clean_quest_title(value: str) -> str | None:
+    title = value.strip().strip("* _`#\"'«»“”")
+    title = re.sub(r"\s+", " ", title).strip()
+    if not title or len(title) > 200:
+        return None
+    if any(character.isalpha() for character in title) and title == title.upper():
+        title = title.capitalize()
+    return title
+
+
+def _extract_quest_summary(source_text: str) -> str | None:
+    lines = source_text.splitlines()
+    for index, raw_line in enumerate(lines):
+        heading = re.sub(r"^[#*\s]+", "", raw_line).strip()
+        if not re.match(r"(?iu)^(?:objective|goal|цель(?:\s+миссии)?)\b", heading):
+            continue
+        for candidate in lines[index + 1 :]:
+            clean = _strip_markdown(candidate)
+            if clean:
+                return clean[:500]
+
+    for paragraph in re.split(r"\n\s*\n", source_text):
+        clean = _strip_markdown(paragraph)
+        if clean and not QUEST_REQUEST_PATTERN.fullmatch(clean) and not clean.lower().startswith(("hello", "привет")):
+            return clean[:500]
+    return None
+
+
+def _strip_markdown(value: str) -> str:
+    value = re.sub(r"^[#>*\-\s]+", "", value.strip())
+    value = re.sub(r"[*_`]+", "", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _unique_quest_client_id(title: str, used_client_ids: set[str]) -> str:
+    base = f"quest-{_slugify(title)}"[:80].rstrip("-") or "quest"
+    candidate = base
+    suffix = 2
+    while candidate in used_client_ids:
+        suffix_text = f"-{suffix}"
+        candidate = f"{base[: 80 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+    return candidate
+
+
+def _looks_english(value: str) -> bool:
+    latin = len(re.findall(r"[A-Za-z]", value))
+    cyrillic = len(re.findall(r"[А-Яа-яЁё]", value))
+    return latin > cyrillic
+
+
+def _normalize_quest_tags(tags: list[str]) -> list[str]:
+    normalized: list[str] = []
+    for tag in tags:
+        marker = re.sub(r"[\s-]+", "_", tag.casefold().strip())
+        value = "quest" if marker in QUEST_TAG_ALIASES or marker.startswith(("квест", "мисси")) else tag
+        if value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _name_explicitly_marks_quest(name: str) -> bool:
+    return bool(re.search(r"(?iu)(?:^|[\s(\[:\-])(?:quest|mission|квест\w*|задание)(?:$|[\s)\]:\-])", name))
+
+
+def _merge_unique_strings(current: list[str], incoming: list[str]) -> list[str]:
+    merged = list(current)
+    for value in incoming:
+        if value not in merged:
+            merged.append(value)
+    return merged
 
 
 def _extract_json_text(content: str) -> str:
@@ -262,8 +482,18 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
         match_entity_id = _clean_string(raw_entity.get("match_entity_id"))
         client_id = None if match_entity_id else _build_client_id(raw_entity, name, used_client_ids, index)
 
-        tags = _normalize_string_list(raw_entity.get("tags"))
-        if raw_entity_type.lower() in QUEST_TYPE_ALIASES and "quest" not in tags:
+        tags = _normalize_quest_tags(_normalize_string_list(raw_entity.get("tags")))
+        quest_marker = _clean_string(
+            raw_entity.get("kind")
+            or raw_entity.get("category")
+            or raw_entity.get("entity_type")
+            or _normalize_attributes(raw_entity.get("attributes")).get("module")
+        )
+        if (
+            raw_entity_type.casefold() in QUEST_TYPE_ALIASES
+            or (quest_marker and quest_marker.casefold() in QUEST_TAG_ALIASES)
+            or _name_explicitly_marks_quest(name)
+        ) and "quest" not in tags:
             tags.append("quest")
 
         entity = {
@@ -355,7 +585,6 @@ def _normalize_world_rules(raw_world_rules: object) -> list[dict]:
                     "effect": text,
                     "tags": [],
                     "is_active": True,
-                    "is_secret": False,
                     "status": "proposed",
                 }
             )

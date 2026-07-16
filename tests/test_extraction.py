@@ -4,6 +4,7 @@ from worldbuilder_core.services.extraction import (
     ExtractionParseError,
     annotate_payload_with_source_excerpts,
     build_extraction_request,
+    ensure_requested_quest_entity,
     parse_extraction_payload,
 )
 
@@ -191,6 +192,75 @@ def test_parse_extraction_payload_creates_quest_and_new_random_table() -> None:
     assert payload.random_tables[0].name == "Road rumors"
     assert len(payload.random_table_rows) == 2
     assert {row.table_client_id for row in payload.random_table_rows} == {payload.random_tables[0].client_id}
+
+
+def test_requested_quest_is_created_when_model_only_extracts_supporting_entities() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id": "elder", "type": "character", "name": "Старейшина"},
+            {"client_id": "stage-one", "type": "event", "name": "Набег гоблинов (Этап I)"}
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    result = ensure_requested_quest_entity(
+        payload,
+        intent_text="Создай квест с целью и наградой.",
+        source_text=(
+            '# КВЕСТОВЫЙ КРЮЧОК: "ПУЛЬС МЕДНОГО СЕРДЦА"\n\n'
+            "### Цель миссии\nНайти пропавших рабочих.\n\n"
+            "### Награда\nМедный кристалл."
+        ),
+    )
+
+    quests = [entity for entity in result.entities if "quest" in entity.tags]
+    assert len(quests) == 1
+    assert quests[0].type.value == "event"
+    assert quests[0].name == "Пульс медного сердца"
+    assert quests[0].summary == "Найти пропавших рабочих."
+    assert quests[0].attributes["module"] == "quest"
+    assert "quest" not in result.entities[1].tags
+
+
+def test_requested_quest_promotes_matching_event_instead_of_creating_duplicate() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {
+              "client_id": "lost-bell",
+              "type": "event",
+              "name": "The Lost Bell",
+              "summary": "Recover the bell before dawn."
+            }
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    result = ensure_requested_quest_entity(
+        payload,
+        intent_text="Create a quest.",
+        source_text="# The Lost Bell\n\n## Objective\nRecover the bell before dawn.",
+    )
+
+    assert len(result.entities) == 1
+    assert result.entities[0].tags == ["quest"]
+    assert result.entities[0].attributes["module"] == "quest"
+
+
+def test_russian_quest_tag_is_normalized() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"bell","type":"event","name":"Колокол","tags":["Квест"]}]}',
+        max_entities=12,
+    )
+
+    assert payload.entities[0].tags == ["quest"]
 
 
 def test_annotate_payload_with_source_excerpts_matches_relevant_sentences() -> None:

@@ -324,14 +324,20 @@
             <div class="panel stack" data-module-panel="journal">
               <div class="panel-head">
                 <h3 data-i18n="journal.title">Event journal</h3>
-                <span class="badge" data-i18n="entityType.event">Event</span>
+                <div class="inline-actions">
+                  <span class="badge" data-i18n="entityType.event">Event</span>
+                  <button id="addJournalEntryBtn" data-master-only="true" type="button" data-i18n="journal.add">Add event</button>
+                </div>
               </div>
               <div id="journalList" class="grid-list empty"></div>
             </div>
             <div class="panel stack" data-module-panel="quests">
               <div class="panel-head">
                 <h3 data-i18n="quest.title">Quest journal</h3>
-                <span class="badge">quest</span>
+                <div class="inline-actions">
+                  <span class="badge">quest</span>
+                  <button id="addQuestBtn" data-master-only="true" type="button" data-i18n="quest.add">Add quest</button>
+                </div>
               </div>
               <div id="questList" class="grid-list empty"></div>
             </div>
@@ -701,6 +707,10 @@
         <p class="eyebrow" data-i18n="roleGate.eyebrow">First launch</p>
         <h2 data-i18n="roleGate.title">How do you want to enter?</h2>
         <p class="muted" data-i18n="roleGate.body">Master sees all secrets. Player sees only public information.</p>
+        <label>
+          <span data-i18n="roleGate.masterToken">Master access key for LAN</span>
+          <input id="masterAccessToken" type="password" autocomplete="current-password" data-i18n-placeholder="roleGate.masterTokenPlaceholder" />
+        </label>
         <div class="role-choice-grid">
           <button type="button" data-role-choice="master">
             <strong data-i18n="role.master">Master</strong>
@@ -797,6 +807,6 @@
     </div>
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>
-    <script src="/app/app.js" type="module"></script>
+    <script src="/app/app.js?v=20260715.1" type="module"></script>
   </body>
 </html>

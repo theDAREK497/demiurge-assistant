@@ -1,12 +1,18 @@
 const apiBase = "/api";
+const masterTokenStorageKey = "worldbuilder.masterToken";
+
+captureMasterTokenFromFragment();
 
 export async function api(path, options = {}) {
+  const { headers: optionHeaders = {}, ...fetchOptions } = options;
+  const token = masterAccessToken();
   const response = await fetch(`${apiBase}${path}`, {
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {}),
+      ...(token ? { "X-Worldbuilder-Master-Token": token } : {}),
+      ...optionHeaders,
     },
-    ...options,
   });
 
   if (!response.ok) {
@@ -22,4 +28,26 @@ export async function api(path, options = {}) {
 
   if (response.status === 204) return null;
   return response.json();
+}
+
+function masterAccessToken() {
+  try {
+    return sessionStorage.getItem(masterTokenStorageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+function captureMasterTokenFromFragment() {
+  const params = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const token = params.get("master_token");
+  if (!token) return;
+  try {
+    sessionStorage.setItem(masterTokenStorageKey, token);
+  } catch {
+    return;
+  }
+  params.delete("master_token");
+  const nextHash = params.toString();
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ""}`);
 }

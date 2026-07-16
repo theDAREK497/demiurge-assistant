@@ -41,9 +41,10 @@ import {
   startCreateEntityWithType,
   testLlmConnection,
   uploadEntityImage,
-} from "./actions.js";
-import { $, toast, wrap } from "./dom.js";
-import { language, setLanguage, t } from "./i18n.js";
+} from "./actions.js?v=20260715.1";
+import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260715.1";
+import { $, toast, wrap } from "./dom.js?v=20260715.1";
+import { language, setLanguage, t } from "./i18n.js?v=20260715.1";
 import {
   activateModuleView,
   activateTab,
@@ -57,9 +58,9 @@ import {
   renderEntityFormMode,
   renderInviteLinks,
   renderModuleVisibility,
-} from "./render.js";
-import { defaultModuleSettings, state } from "./state.js";
-import { setTheme, theme } from "./theme.js";
+} from "./render.js?v=20260715.1";
+import { defaultModuleSettings, state } from "./state.js?v=20260715.1";
+import { setTheme, theme } from "./theme.js?v=20260715.1";
 
 function bindTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
@@ -70,6 +71,19 @@ function bindTabs() {
 }
 
 function bindEvents() {
+  window.addEventListener("unhandledrejection", (event) => {
+    event.preventDefault();
+    toast(event.reason?.message || t("common.unexpectedError"), "error");
+  });
+  document.addEventListener(
+    "error",
+    (event) => {
+      if (event.target instanceof HTMLImageElement) {
+        event.target.hidden = true;
+      }
+    },
+    true,
+  );
   $("worldForm").addEventListener("submit", wrap(createWorld));
   $("entityForm").addEventListener("submit", wrap(createEntity));
   $("relationshipForm").addEventListener("submit", wrap(createRelationship));
@@ -110,6 +124,8 @@ function bindEvents() {
   $("openMapPinEditor").addEventListener("click", openMapPinEditor);
   $("openMapLocationCreator").addEventListener("click", () => startCreateEntityWithType("location"));
   $("addTimelineEventBtn").addEventListener("click", () => startCreateEntityWithType("event"));
+  $("addJournalEntryBtn").addEventListener("click", () => startCreateEntityWithType("event"));
+  $("addQuestBtn").addEventListener("click", () => startCreateEntityWithType("event", ["quest"]));
   $("openDetectiveNodeEditor").addEventListener("click", openDetectiveNodeEditor);
   $("openDetectiveConnectionEditor").addEventListener("click", openDetectiveConnectionEditor);
   $("generateDetectiveBoard").addEventListener("click", wrap(generateDetectiveBoard));
@@ -185,6 +201,9 @@ function bindEvents() {
   });
   document.querySelectorAll("[data-role-choice]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.dataset.roleChoice === "master") {
+        setMasterAccessToken($("masterAccessToken").value);
+      }
       setViewerRole(button.dataset.roleChoice);
       $("roleGate").classList.add("hidden");
       wrap(loadWorldData)();
@@ -245,6 +264,7 @@ export async function boot() {
     bindEvents();
     initMarkdownToolbar();
     bootViewerRole();
+    $("masterAccessToken").value = masterAccessToken();
     bootModuleSettings();
     renderInviteLinks();
     $("contextPreview").textContent = t("context.empty");
@@ -259,7 +279,9 @@ export async function boot() {
     renderChatThreads();
     renderChat();
     await loadHealth();
-    await loadLlmConfig();
+    if ($("viewerRole").value === "master") {
+      await loadLlmConfig();
+    }
     await loadWorlds();
   } catch (error) {
     toast(`${t("boot.failed")}: ${error.message}`, "error");

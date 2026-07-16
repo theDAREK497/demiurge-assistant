@@ -10,7 +10,7 @@ The current milestone is a backend MVP:
 - wiki entities;
 - stable directed relationships between entities;
 - world rules;
-- master/player visibility filtering;
+- server-enforced master/player visibility filtering;
 - JSON import/export with stable UUID preservation;
 - OpenAI-compatible LLM adapter for LM Studio and similar providers;
 - persistent LLM provider settings with model roles;
@@ -29,8 +29,8 @@ start_worldbuilder.bat
 ```
 
 The starter asks for local/LAN mode, port, LM Studio base URL, and an optional
-model name. In LAN mode it binds to `0.0.0.0` and prints a player URL for your
-local network, assuming Windows Firewall and your router/network allow it.
+model name. In LAN mode it binds to `0.0.0.0`, creates a Master access key, and
+prints separate Player and private Master URLs.
 
 Manual start:
 
@@ -57,7 +57,9 @@ uvicorn worldbuilder_core.main:app --host 0.0.0.0 --port 8000
 ```
 
 Players then open `http://YOUR_LOCAL_IP:8000/app/` and choose Player on first
-entry.
+entry. A remote client cannot turn Player mode into Master mode by changing the
+URL or calling the API directly. For a manual LAN start, set
+`WORLDBUILDER_MASTER_TOKEN` if Master access is needed from another computer.
 
 ## LM Studio
 
@@ -92,6 +94,12 @@ Then call:
 ```powershell
 python -m pytest
 python -m compileall src tests
+ruff check src tests
+bandit -r src -q
+pip-audit --local --skip-editable
+cd frontend
+npm audit
+npm run build
 ```
 
 ## License
@@ -107,6 +115,7 @@ MIT. See [LICENSE](LICENSE).
 - Visual MVP: [docs/UI.md](docs/UI.md)
 - Write-back pipeline: [docs/WRITE_BACK.md](docs/WRITE_BACK.md)
 - Roadmap: [docs/ROADMAP.md](docs/ROADMAP.md)
+- Security and audit notes: [docs/SECURITY.md](docs/SECURITY.md)
 
 ## Design Direction
 

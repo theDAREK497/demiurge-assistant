@@ -63,6 +63,7 @@ async def extract_proposal_from_text(
             max_entities=max_entities,
             output_language=payload.output_language,
             model=payload.model or runtime_settings.model_for("extractor"),
+            intent_text=payload.intent_text,
         )
     except LLMProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

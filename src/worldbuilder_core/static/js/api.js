@@ -1,12 +1,39 @@
 const apiBase = "/api";
+const masterTokenStorageKey = "worldbuilder.masterToken";
+
+captureMasterTokenFromFragment();
+
+export function masterAccessToken() {
+  try {
+    return sessionStorage.getItem(masterTokenStorageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
+export function setMasterAccessToken(value) {
+  const token = String(value || "").trim();
+  try {
+    if (token) {
+      sessionStorage.setItem(masterTokenStorageKey, token);
+    } else {
+      sessionStorage.removeItem(masterTokenStorageKey);
+    }
+  } catch {
+    // The local browser session can still use trusted loopback access.
+  }
+}
 
 export async function api(path, options = {}) {
+  const token = masterAccessToken();
+  const { headers: optionHeaders = {}, ...fetchOptions } = options;
   const response = await fetch(`${apiBase}${path}`, {
+    ...fetchOptions,
     headers: {
       "Content-Type": "application/json",
-      ...(options.headers || {}),
+      ...(token ? { "X-Worldbuilder-Master-Token": token } : {}),
+      ...optionHeaders,
     },
-    ...options,
   });
 
   if (!response.ok) {
@@ -24,4 +51,16 @@ export async function api(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+function captureMasterTokenFromFragment() {
+  const rawHash = window.location.hash.replace(/^#/, "");
+  if (!rawHash) return;
+  const params = new URLSearchParams(rawHash);
+  const token = params.get("master_token");
+  if (!token) return;
+  setMasterAccessToken(token);
+  params.delete("master_token");
+  const nextHash = params.toString();
+  window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${nextHash ? `#${nextHash}` : ""}`);
 }

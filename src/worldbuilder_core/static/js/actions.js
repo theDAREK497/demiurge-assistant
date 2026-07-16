@@ -1,6 +1,6 @@
-import { api } from "./api.js";
-import { $, toast } from "./dom.js";
-import { language, t } from "./i18n.js";
+import { api } from "./api.js?v=20260715.1";
+import { $, toast } from "./dom.js?v=20260715.1";
+import { language, t } from "./i18n.js?v=20260715.1";
 import {
   createChatThreadFromMessages,
   deleteChatThread as deleteStoredChatThread,
@@ -10,7 +10,7 @@ import {
   selectedWorld,
   state,
   switchChatThread,
-} from "./state.js";
+} from "./state.js?v=20260715.1";
 import {
   activateTab,
   closeEntityDrawer,
@@ -30,9 +30,10 @@ import {
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
-} from "./render.js";
+} from "./render.js?v=20260715.1";
 
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
+let worldDataAbortController = null;
 
 export function splitTags(value) {
   return value
@@ -141,6 +142,9 @@ export async function loadWorlds() {
 }
 
 export async function loadWorldData() {
+  worldDataAbortController?.abort();
+  worldDataAbortController = new AbortController();
+  const { signal } = worldDataAbortController;
   if (!state.selectedWorldId) {
     state.entities = [];
     state.relationships = [];
@@ -158,18 +162,28 @@ export async function loadWorldData() {
     return;
   }
 
+  const worldId = state.selectedWorldId;
   const role = currentRole();
   const query = $("entitySearch").value.trim();
   const queryPart = query ? `&q=${encodeURIComponent(query)}` : "";
-  const [entities, relationships, rules, mapPins, randomTables, detectiveBoard, proposals] = await Promise.all([
-    api(`/worlds/${state.selectedWorldId}/entities?role=${role}${queryPart}`),
-    api(`/worlds/${state.selectedWorldId}/relationships?role=${role}`),
-    api(`/worlds/${state.selectedWorldId}/world-rules?role=${role}&active_only=false`),
-    api(`/worlds/${state.selectedWorldId}/map-pins?role=${role}`),
-    api(`/worlds/${state.selectedWorldId}/random-tables?role=${role}`),
-    api(`/worlds/${state.selectedWorldId}/detective-board?role=${role}`),
-    api(`/worlds/${state.selectedWorldId}/proposals`),
-  ]);
+  let results;
+  try {
+    results = await Promise.all([
+      api(`/worlds/${worldId}/entities?role=${role}${queryPart}`, { signal }),
+      api(`/worlds/${worldId}/relationships?role=${role}`, { signal }),
+      api(`/worlds/${worldId}/world-rules?role=${role}&active_only=false`, { signal }),
+      api(`/worlds/${worldId}/map-pins?role=${role}`, { signal }),
+      api(`/worlds/${worldId}/random-tables?role=${role}`, { signal }),
+      api(`/worlds/${worldId}/detective-board?role=${role}`, { signal }),
+      role === "master" ? api(`/worlds/${worldId}/proposals`, { signal }) : Promise.resolve([]),
+      role === "master" && !state.llmConfig ? api("/llm/config", { signal }) : Promise.resolve(null),
+    ]);
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    throw error;
+  }
+  if (signal.aborted || state.selectedWorldId !== worldId || currentRole() !== role) return;
+  const [entities, relationships, rules, mapPins, randomTables, detectiveBoard, proposals, llmConfig] = results;
   state.entities = entities;
   state.relationships = relationships;
   state.rules = rules;
@@ -178,6 +192,10 @@ export async function loadWorldData() {
   state.detectiveNodes = detectiveBoard.nodes;
   state.detectiveConnections = detectiveBoard.connections;
   state.proposals = proposals;
+  if (llmConfig) {
+    state.llmConfig = llmConfig;
+    renderLlmConfig();
+  }
   loadChatThreadsForContext(state.selectedWorldId, role);
   renderAllWorldData();
 }
@@ -250,11 +268,14 @@ export function startCreateEntity() {
   startCreateEntityWithType();
 }
 
-export function startCreateEntityWithType(entityType = "") {
+export function startCreateEntityWithType(entityType = "", initialTags = []) {
   resetEntityForm({ keepDrawerOpen: true });
   if (entityType && isSupportedEntityType(entityType)) {
     $("entityType").value = entityType;
   }
+  $("entityTags").value = Array.isArray(initialTags)
+    ? initialTags.map((tag) => String(tag).trim()).filter(Boolean).join(", ")
+    : "";
   openEntityDrawer();
   $("entityName").focus();
 }
@@ -970,12 +991,16 @@ export async function saveAssistantMessageToWiki(messageIndex) {
 
   toast(t("chat.savingMessage"));
   try {
+    const intentMessage = [...state.chatMessages.slice(0, messageIndex)]
+      .reverse()
+      .find((item) => item.role === "user");
     const proposal = await api(`/worlds/${state.selectedWorldId}/proposals/extract`, {
       method: "POST",
       body: JSON.stringify({
         role: currentRole(),
         output_language: language(),
         source_text: message.content,
+        intent_text: intentMessage?.content || null,
       }),
     });
     state.proposals = [proposal, ...state.proposals.filter((item) => item.id !== proposal.id)];

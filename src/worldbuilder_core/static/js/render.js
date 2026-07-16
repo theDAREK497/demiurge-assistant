@@ -1,6 +1,6 @@
-import { $, escapeHtml } from "./dom.js";
-import { selectedWorld, state } from "./state.js";
-import { language, t } from "./i18n.js";
+import { $, escapeHtml } from "./dom.js?v=20260715.1";
+import { selectedWorld, state } from "./state.js?v=20260715.1";
+import { language, t } from "./i18n.js?v=20260715.1";
 import {
   applyProposal,
   applySelectedProposal,
@@ -39,7 +39,7 @@ import {
   setDetectiveNodeDraft,
   setMapPinDraft,
   startCreateEntityWithType,
-} from "./actions.js";
+} from "./actions.js?v=20260715.1";
 
 export function activateTab(tabName) {
   const requestedTab = document.querySelector(`.tab[data-tab="${tabName}"]:not(.hidden)`);
@@ -66,6 +66,29 @@ export function currentRole() {
 
 function isMasterMode() {
   return currentRole() === "master";
+}
+
+function safeResourceUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+  } catch {
+    return "";
+  }
+}
+
+function renderImage(value, className, { lazy = false } = {}) {
+  const url = safeResourceUrl(value);
+  if (!url) return "";
+  return `<img class="${escapeHtml(className)}" src="${escapeHtml(url)}" alt=""${lazy ? ' loading="lazy"' : ""} />`;
+}
+
+function renderExternalLink(value, label, className = "") {
+  const url = safeResourceUrl(value);
+  if (!url) return "";
+  return `<a${className ? ` class="${escapeHtml(className)}"` : ""} href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
 }
 
 export function renderAllWorldData() {
@@ -167,7 +190,13 @@ export function renderInviteLinks() {
   if (!playerInput || !masterInput) return;
   const baseUrl = `${window.location.origin}/app/`;
   playerInput.value = `${baseUrl}?role=player`;
-  masterInput.value = `${baseUrl}?role=master`;
+  let token = "";
+  try {
+    token = sessionStorage.getItem("worldbuilder.masterToken") || "";
+  } catch {
+    // Loopback Master mode does not need a token.
+  }
+  masterInput.value = `${baseUrl}?role=master${token ? `#master_token=${encodeURIComponent(token)}` : ""}`;
 }
 
 export function renderEntityFormMode() {
@@ -321,7 +350,7 @@ export function renderEntities() {
     .map(
       (entity) => `
         <article class="item entity-card encyclopedia-card" data-open-entity="${entity.id}" role="button" tabindex="0">
-          ${entity.attributes?.image_url ? `<img class="entity-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />` : ""}
+          ${renderImage(entity.attributes?.image_url, "entity-image", { lazy: true })}
           <div class="item-top">
             <div>
               <div class="item-title">${escapeHtml(entity.name)}</div>
@@ -346,9 +375,14 @@ export function renderEntities() {
     )
     .join("");
 
+  bindEntityCardActions(list);
+}
+
+function bindEntityCardActions(list) {
   list.querySelectorAll("[data-open-entity]").forEach((card) => {
     card.addEventListener("click", () => openEntityReader(card.dataset.openEntity));
     card.addEventListener("keydown", (event) => {
+      if (event.target !== card) return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         openEntityReader(card.dataset.openEntity);
@@ -622,9 +656,9 @@ function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
   const related = state.relationships.filter(
     (relationship) => relationship.source_entity_id === entity.id || relationship.target_entity_id === entity.id,
   );
-  const imageHtml = entity.attributes?.image_url
-    ? `<img class="reader-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
-    : `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
+  const imageHtml =
+    renderImage(entity.attributes?.image_url, "reader-image") ||
+    `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
 
   // Breadcrumbs
   const breadcrumbsHtml = `
@@ -796,9 +830,9 @@ function renderDetectiveNodeReader() {
   const nodeConnections = state.detectiveConnections.filter(
     (connection) => connection.source_node_id === node.id || connection.target_node_id === node.id,
   );
-  const imageHtml = linkedEntity?.attributes?.image_url
-    ? `<img class="reader-image" src="${escapeHtml(linkedEntity.attributes.image_url)}" alt="" onerror="this.hidden=true" />`
-    : `<div class="reader-image placeholder">${escapeHtml(linkedEntity ? linkedEntity.name : t("detective.badge"))}</div>`;
+  const imageHtml =
+    renderImage(linkedEntity?.attributes?.image_url, "reader-image") ||
+    `<div class="reader-image placeholder">${escapeHtml(linkedEntity ? linkedEntity.name : t("detective.badge"))}</div>`;
 
   $("entityReaderContent").innerHTML = `
     ${renderReaderHeader({
@@ -831,10 +865,10 @@ function renderDetectiveNodeReader() {
             : ""
         }
         ${
-          node.evidence_url
+          safeResourceUrl(node.evidence_url)
             ? `<section class="reader-section">
                 <h3>${escapeHtml(t("detective.evidence"))}</h3>
-                <a class="reader-evidence-link" href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(node.evidence_url)}</a>
+                ${renderExternalLink(node.evidence_url, node.evidence_url, "reader-evidence-link")}
               </section>`
             : ""
         }
@@ -940,13 +974,21 @@ export function renderGraph() {
     view.textContent = t("entity.selectWorld");
     return;
   }
+  loadGraphPositions();
+  const activeEntityIds = new Set(state.entities.map((entity) => entity.id));
+  let removedStalePosition = false;
+  Object.keys(state.graphPositions).forEach((entityId) => {
+    if (!activeEntityIds.has(entityId)) {
+      delete state.graphPositions[entityId];
+      removedStalePosition = true;
+    }
+  });
+  if (removedStalePosition) saveGraphPositions();
   if (!state.entities.length) {
     view.className = "graph-view empty";
     view.textContent = t("graph.empty");
     return;
   }
-
-  loadGraphPositions();
 
   const width = 960;
   const height = 520;
@@ -1326,8 +1368,36 @@ function renderJournal() {
 function renderQuests() {
   const list = $("questList");
   if (!list) return;
-  const quests = state.entities.filter((entity) => entity.tags?.some((tag) => tag.toLowerCase() === "quest"));
+  const quests = state.entities.filter(isQuestEntity);
   renderEntityMiniList(list, quests, t("quest.empty"));
+}
+
+function isQuestEntity(entity) {
+  const explicitMarkers = [
+    ...(entity.tags || []),
+    entity.attributes?.module,
+    entity.attributes?.kind,
+    entity.attributes?.category,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLocaleLowerCase());
+  if (explicitMarkers.some((value) => /^(?:quest|mission|квест[а-яё]*|задание|мисси[а-яё]*)$/iu.test(value))) {
+    return true;
+  }
+  if (entity.type !== "event") return false;
+
+  const name = String(entity.name || "").trim();
+  const summary = String(entity.summary || "").trim();
+  if (/(?:^|[\s(\[:\-])(?:quest|mission|квест[а-яё]*|задание)(?:$|[\s)\]:\-])/iu.test(name)) {
+    return true;
+  }
+  if (/^(?:(?:quest|mission)\b|(?:квест[а-яё]*|задание)(?:$|[\s:.,;!?]))/iu.test(summary)) {
+    return true;
+  }
+
+  const description = String(entity.description || "").toLocaleLowerCase();
+  const structureMarkers = ["цель", "заказчик", "награда", "последствия провала", "objective", "quest giver", "reward", "failure"];
+  return structureMarkers.filter((marker) => description.includes(marker)).length >= 2;
 }
 
 function renderMaps() {
@@ -1337,13 +1407,7 @@ function renderMaps() {
   if (!list) return;
   const locations = state.entities.filter((entity) => entity.type === "location");
   if (summary) {
-    summary.textContent = `${locations.length} ${t("map.locationsLabel")} - ${state.mapPins.length} ${t("map.pins")}`;
-  }
-  if (summary) {
     summary.textContent = `${locations.length} ${t("map.locationsLabel")} · ${state.mapPins.length} ${t("map.pins")}`;
-  }
-  if (summary) {
-    summary.textContent = `${locations.length} ${t("map.locationsLabel")} - ${state.mapPins.length} ${t("map.pins")}`;
   }
   if (!locations.length) {
     list.className = "grid-list empty";
@@ -1359,9 +1423,8 @@ function renderMaps() {
         <article class="item entity-card map-card">
           <div class="map-image-wrap" data-map-image="${location.id}">
             ${
-              location.attributes?.image_url
-                ? `<img class="entity-image map-image" src="${escapeHtml(location.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />`
-                : `<div class="map-placeholder">${escapeHtml(t("map.noImage"))}</div>`
+              renderImage(location.attributes?.image_url, "entity-image map-image", { lazy: true }) ||
+              `<div class="map-placeholder">${escapeHtml(t("map.noImage"))}</div>`
             }
             <div class="map-card-banner">
               <div>
@@ -1387,7 +1450,13 @@ function renderMaps() {
           </div>
           <div class="map-card-actions">
             <button class="ghost" data-open-map-reader="${location.id}" type="button">${t("entity.open")}</button>
-            ${master ? `<button class="ghost" data-prepare-map-pin="${location.id}" type="button">${t("map.pinAdd")}</button>` : ""}
+            ${
+              master
+                ? `<button class="ghost" data-edit-entity="${location.id}" type="button">${t("entity.edit")}</button>
+                   <button class="ghost danger" data-delete-entity="${location.id}" type="button">${t("common.delete")}</button>
+                   <button class="ghost" data-prepare-map-pin="${location.id}" type="button">${t("map.pinAdd")}</button>`
+                : ""
+            }
           </div>
           ${
             pins.length
@@ -1429,6 +1498,12 @@ function renderMaps() {
   });
   list.querySelectorAll("[data-open-map-reader]").forEach((button) => {
     button.addEventListener("click", () => openMapReader(button.dataset.openMapReader));
+  });
+  list.querySelectorAll("[data-edit-entity]").forEach((button) => {
+    button.addEventListener("click", () => editEntity(button.dataset.editEntity));
+  });
+  list.querySelectorAll("[data-delete-entity]").forEach((button) => {
+    button.addEventListener("click", () => deleteEntity(button.dataset.deleteEntity));
   });
   list.querySelectorAll("[data-prepare-map-pin]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1632,7 +1707,7 @@ function renderDetectiveBoardLegacy() {
               <div class="item-title">${escapeHtml(node.title)}</div>
               <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
               ${node.note ? `<div class="item-body">${renderMarkdown(node.note)}</div>` : ""}
-              ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
+              ${renderExternalLink(node.evidence_url, t("detective.evidence"))}
               <div class="item-actions">
                 <button class="ghost" data-open-detective-node="${node.id}" type="button">${escapeHtml(t("entity.open"))}</button>
                 <button class="ghost" data-edit-detective-node="${node.id}" type="button">${escapeHtml(t("entity.edit"))}</button>
@@ -1696,20 +1771,31 @@ function renderEntityMiniList(list, entities, emptyText) {
     list.textContent = emptyText;
     return;
   }
+  const master = isMasterMode();
   list.className = "grid-list";
   list.innerHTML = entities
     .map(
       (entity) => `
-        <article class="item entity-card compact-card">
-          ${entity.attributes?.image_url ? `<img class="entity-image" src="${escapeHtml(entity.attributes.image_url)}" alt="" loading="lazy" onerror="this.hidden=true" />` : ""}
+        <article class="item entity-card compact-card" data-open-entity="${entity.id}" role="button" tabindex="0">
+          ${renderImage(entity.attributes?.image_url, "entity-image", { lazy: true })}
           <div class="item-title">${escapeHtml(entity.name)}</div>
           <div class="item-meta">${escapeHtml(t(`entityType.${entity.type}`))}${entity.attributes?.timeline_date ? ` - ${escapeHtml(entity.attributes.timeline_date)}` : ""}</div>
           <div class="item-body">${renderMarkdown(entity.summary || entity.description || t("common.noSummary"))}</div>
           ${entity.tags?.length ? `<div class="item-meta">${entity.tags.map(escapeHtml).join(", ")}</div>` : ""}
+          <div class="item-actions">
+            <button class="ghost" data-open-entity-button="${entity.id}" type="button">${t("entity.open")}</button>
+            ${
+              master
+                ? `<button class="ghost" data-edit-entity="${entity.id}" type="button">${t("entity.edit")}</button>
+                   <button class="ghost danger" data-delete-entity="${entity.id}" type="button">${t("common.delete")}</button>`
+                : ""
+            }
+          </div>
         </article>
       `,
     )
     .join("");
+  bindEntityCardActions(list);
 }
 
 function timelineSortKey(entity) {
@@ -1884,7 +1970,7 @@ function renderDetectiveBoard() {
               <div class="item-title">${escapeHtml(node.title)}</div>
               <div class="item-meta">${node.entity_id ? escapeHtml(entityName(node.entity_id)) : escapeHtml(t("detective.freeNote"))}${node.is_secret ? ` - ${escapeHtml(t("common.secretValue"))}` : ""}</div>
               ${node.note ? `<div class="item-body">${renderMarkdown(node.note)}</div>` : ""}
-              ${node.evidence_url ? `<a href="${escapeHtml(node.evidence_url)}" target="_blank" rel="noreferrer">${escapeHtml(t("detective.evidence"))}</a>` : ""}
+              ${renderExternalLink(node.evidence_url, t("detective.evidence"))}
               <div class="item-actions">
                 <button class="ghost" data-open-detective-node="${node.id}" type="button">${escapeHtml(t("entity.open"))}</button>
                 ${

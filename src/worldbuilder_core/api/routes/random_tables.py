@@ -1,7 +1,8 @@
-import random
+from random import SystemRandom
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import Select, select
+from sqlalchemy.orm import selectinload
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import RandomTable, RandomTableRow, ViewerRole, World
@@ -16,6 +17,7 @@ from worldbuilder_core.schemas import (
 )
 
 router = APIRouter(tags=["random tables"])
+random_source = SystemRandom()
 
 
 def ensure_world(session: DbSession, world_id: str) -> World:
@@ -54,7 +56,9 @@ def list_random_tables(
     role: ViewerRole = ViewerRole.master,
 ) -> list[RandomTableRead]:
     ensure_world(session, world_id)
-    stmt: Select[tuple[RandomTable]] = select(RandomTable).where(RandomTable.world_id == world_id)
+    stmt: Select[tuple[RandomTable]] = (
+        select(RandomTable).options(selectinload(RandomTable.rows)).where(RandomTable.world_id == world_id)
+    )
     if role == ViewerRole.player:
         stmt = stmt.where(RandomTable.is_secret.is_(False))
     tables = list(session.scalars(stmt.order_by(RandomTable.name.asc(), RandomTable.created_at.asc())))
@@ -126,7 +130,7 @@ def roll_random_table(
     if not rows:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Random table has no visible rows")
 
-    row = random.choices(rows, weights=[item.weight for item in rows], k=1)[0]
+    row = random_source.choices(rows, weights=[item.weight for item in rows], k=1)[0]
     return RandomTableRollRead(table_id=table.id, row=RandomTableRowRead.model_validate(row))
 
 

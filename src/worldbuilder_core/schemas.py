@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from worldbuilder_core.models import EntityType, ProposalStatus, VerificationStatus, ViewerRole
 
@@ -14,12 +15,12 @@ class ORMModel(BaseModel):
 
 class WorldCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=20_000)
 
 
 class WorldUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=20_000)
 
 
 class WorldRead(ORMModel):
@@ -38,12 +39,12 @@ class EntityBase(BaseModel):
     type: EntityType
     name: str = Field(min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
-    description: str | None = None
-    aliases: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
+    description: str | None = Field(default=None, max_length=100_000)
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    tags: list[str] = Field(default_factory=list, max_length=100)
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.verified
-    attributes: dict[str, Any] = Field(default_factory=dict)
+    attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
 
 
 class EntityCreate(EntityBase):
@@ -54,12 +55,12 @@ class EntityUpdate(BaseModel):
     type: EntityType | None = None
     name: str | None = Field(default=None, min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
-    description: str | None = None
-    aliases: list[str] | None = None
-    tags: list[str] | None = None
+    description: str | None = Field(default=None, max_length=100_000)
+    aliases: list[str] | None = Field(default=None, max_length=100)
+    tags: list[str] | None = Field(default=None, max_length=100)
     is_secret: bool | None = None
     status: VerificationStatus | None = None
-    attributes: dict[str, Any] | None = None
+    attributes: dict[str, Any] | None = Field(default=None, max_length=100)
 
 
 class EntityRead(EntityBase, ORMModel):
@@ -78,11 +79,11 @@ class RelationshipBase(BaseModel):
     target_entity_id: str
     type: str = Field(min_length=1, max_length=80)
     label: str | None = Field(default=None, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=50_000)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.verified
-    attributes: dict[str, Any] = Field(default_factory=dict)
+    attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
 
 
 class RelationshipCreate(RelationshipBase):
@@ -94,11 +95,11 @@ class RelationshipUpdate(BaseModel):
     target_entity_id: str | None = None
     type: str | None = Field(default=None, min_length=1, max_length=80)
     label: str | None = Field(default=None, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=50_000)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     is_secret: bool | None = None
     status: VerificationStatus | None = None
-    attributes: dict[str, Any] | None = None
+    attributes: dict[str, Any] | None = Field(default=None, max_length=100)
 
 
 class RelationshipRead(RelationshipBase, ORMModel):
@@ -114,9 +115,9 @@ class RelationshipSnapshot(RelationshipRead):
 
 class WorldRuleBase(BaseModel):
     priority: int = Field(default=3, ge=1, le=5)
-    condition: str = Field(min_length=1)
-    effect: str = Field(min_length=1)
-    tags: list[str] = Field(default_factory=list)
+    condition: str = Field(min_length=1, max_length=50_000)
+    effect: str = Field(min_length=1, max_length=50_000)
+    tags: list[str] = Field(default_factory=list, max_length=100)
     is_active: bool = True
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.verified
@@ -128,9 +129,9 @@ class WorldRuleCreate(WorldRuleBase):
 
 class WorldRuleUpdate(BaseModel):
     priority: int | None = Field(default=None, ge=1, le=5)
-    condition: str | None = Field(default=None, min_length=1)
-    effect: str | None = Field(default=None, min_length=1)
-    tags: list[str] | None = None
+    condition: str | None = Field(default=None, min_length=1, max_length=50_000)
+    effect: str | None = Field(default=None, min_length=1, max_length=50_000)
+    tags: list[str] | None = Field(default=None, max_length=100)
     is_active: bool | None = None
     is_secret: bool | None = None
     status: VerificationStatus | None = None
@@ -151,7 +152,7 @@ class MapPinBase(BaseModel):
     map_entity_id: str
     linked_entity_id: str | None = None
     title: str = Field(min_length=1, max_length=200)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
     x: float = Field(ge=0.0, le=1.0)
     y: float = Field(ge=0.0, le=1.0)
     is_secret: bool = False
@@ -165,7 +166,7 @@ class MapPinUpdate(BaseModel):
     map_entity_id: str | None = None
     linked_entity_id: str | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
     x: float | None = Field(default=None, ge=0.0, le=1.0)
     y: float | None = Field(default=None, ge=0.0, le=1.0)
     is_secret: bool | None = None
@@ -184,7 +185,7 @@ class MapPinSnapshot(MapPinRead):
 
 class RandomTableRowBase(BaseModel):
     label: str | None = Field(default=None, max_length=200)
-    result: str = Field(min_length=1)
+    result: str = Field(min_length=1, max_length=50_000)
     weight: int = Field(default=1, ge=1, le=1000)
     is_secret: bool = False
 
@@ -195,7 +196,7 @@ class RandomTableRowCreate(RandomTableRowBase):
 
 class RandomTableRowUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=200)
-    result: str | None = Field(default=None, min_length=1)
+    result: str | None = Field(default=None, min_length=1, max_length=50_000)
     weight: int | None = Field(default=None, ge=1, le=1000)
     is_secret: bool | None = None
 
@@ -213,7 +214,7 @@ class RandomTableRowSnapshot(RandomTableRowRead):
 
 class RandomTableBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=50_000)
     is_secret: bool = False
 
 
@@ -223,7 +224,7 @@ class RandomTableCreate(RandomTableBase):
 
 class RandomTableUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    description: str | None = None
+    description: str | None = Field(default=None, max_length=50_000)
     is_secret: bool | None = None
 
 
@@ -247,8 +248,8 @@ class RandomTableRollRead(BaseModel):
 class DetectiveBoardNodeBase(BaseModel):
     entity_id: str | None = None
     title: str = Field(min_length=1, max_length=200)
-    note: str | None = None
-    evidence_url: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
+    evidence_url: str | None = Field(default=None, max_length=2_048)
     x: float = Field(default=0.5, ge=0.0, le=1.0)
     y: float = Field(default=0.5, ge=0.0, le=1.0)
     is_secret: bool = False
@@ -261,8 +262,8 @@ class DetectiveBoardNodeCreate(DetectiveBoardNodeBase):
 class DetectiveBoardNodeUpdate(BaseModel):
     entity_id: str | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
-    note: str | None = None
-    evidence_url: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
+    evidence_url: str | None = Field(default=None, max_length=2_048)
     x: float | None = Field(default=None, ge=0.0, le=1.0)
     y: float | None = Field(default=None, ge=0.0, le=1.0)
     is_secret: bool | None = None
@@ -283,7 +284,7 @@ class DetectiveBoardConnectionBase(BaseModel):
     source_node_id: str
     target_node_id: str
     label: str | None = Field(default=None, max_length=200)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
     is_secret: bool = False
 
 
@@ -295,7 +296,7 @@ class DetectiveBoardConnectionUpdate(BaseModel):
     source_node_id: str | None = None
     target_node_id: str | None = None
     label: str | None = Field(default=None, max_length=200)
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=50_000)
     is_secret: bool | None = None
 
 
@@ -360,14 +361,14 @@ OutputLanguage = Literal["ru", "en"]
 
 class LLMMessage(BaseModel):
     role: LLMMessageRole
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=100_000)
 
 
 class LLMChatRequest(BaseModel):
-    messages: list[LLMMessage] = Field(min_length=1)
-    model: str | None = None
+    messages: list[LLMMessage] = Field(min_length=1, max_length=50)
+    model: str | None = Field(default=None, max_length=200)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0, le=1_000_000)
 
 
 class LLMUsage(BaseModel):
@@ -397,16 +398,27 @@ class LLMConfigRead(BaseModel):
 
 
 class LLMConfigUpdate(BaseModel):
-    base_url: str = Field(min_length=1)
-    default_model: str = Field(min_length=1)
-    chat_model: str | None = None
-    extractor_model: str | None = None
-    summarizer_model: str | None = None
-    critic_model: str | None = None
-    api_key: str | None = None
+    base_url: str = Field(min_length=1, max_length=2_048)
+    default_model: str = Field(min_length=1, max_length=200)
+    chat_model: str | None = Field(default=None, max_length=200)
+    extractor_model: str | None = Field(default=None, max_length=200)
+    summarizer_model: str | None = Field(default=None, max_length=200)
+    critic_model: str | None = Field(default=None, max_length=200)
+    api_key: str | None = Field(default=None, max_length=4_096)
     clear_api_key: bool = False
-    timeout_seconds: float = Field(gt=0)
+    timeout_seconds: float = Field(gt=0, le=600)
     max_entities_per_extract: int = Field(ge=1, le=50)
+
+    @field_validator("base_url")
+    @classmethod
+    def validate_base_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        parsed = urlsplit(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("base_url must be an HTTP or HTTPS URL")
+        if parsed.username or parsed.password:
+            raise ValueError("base_url must not contain credentials")
+        return normalized
 
 
 class WorldContextRead(BaseModel):
@@ -421,18 +433,18 @@ class WorldContextRead(BaseModel):
 
 
 class WorldLLMChatRequest(BaseModel):
-    messages: list[LLMMessage] = Field(min_length=1)
+    messages: list[LLMMessage] = Field(min_length=1, max_length=50)
     role: ViewerRole = ViewerRole.master
     output_language: OutputLanguage = "ru"
-    query: str | None = None
+    query: str | None = Field(default=None, max_length=2_000)
     max_entities: int = Field(default=12, ge=1, le=50)
     max_rules: int = Field(default=8, ge=0, le=25)
     max_relationships: int = Field(default=24, ge=0, le=100)
     save_to_wiki: bool = False
     max_extract_entities: int | None = Field(default=None, ge=1, le=50)
-    model: str | None = None
+    model: str | None = Field(default=None, max_length=200)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    max_tokens: int | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, gt=0, le=1_000_000)
 
 
 class WorldLLMChatResponse(BaseModel):
@@ -535,16 +547,17 @@ class ExtractionPayload(BaseModel):
 
 
 class ExtractionProposalCreate(BaseModel):
-    source_text: str = Field(min_length=1)
+    source_text: str = Field(min_length=1, max_length=200_000)
     payload: ExtractionPayload
 
 
 class ExtractionFromTextRequest(BaseModel):
-    source_text: str = Field(min_length=1)
+    source_text: str = Field(min_length=1, max_length=200_000)
+    intent_text: str | None = Field(default=None, min_length=1, max_length=20_000)
     role: ViewerRole = ViewerRole.master
     output_language: OutputLanguage = "ru"
-    query: str | None = None
-    model: str | None = None
+    query: str | None = Field(default=None, max_length=2_000)
+    model: str | None = Field(default=None, max_length=200)
     max_entities: int | None = Field(default=None, ge=1, le=50)
 
 
@@ -591,7 +604,7 @@ class RoleQuery(BaseModel):
 
 class AssetUploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=240)
-    content_base64: str = Field(min_length=1)
+    content_base64: str = Field(min_length=1, max_length=7_000_000)
     content_type: str = Field(min_length=1, max_length=120)
 
 

@@ -4,7 +4,7 @@ import { api } from "./api.js";
 const tabs = [
   ["wiki", "Вики"],
   ["graph", "Граф"],
-  ["timeline", "Таймлайн"],
+  ["timeline", "Хронология"],
   ["chat", "Чат"],
   ["settings", "Настройки"],
 ];
@@ -19,25 +19,33 @@ export function App() {
   const selectedWorld = worlds.find((world) => world.id === selectedWorldId) || null;
 
   useEffect(() => {
-    loadWorlds().catch((error) => setStatus(error.message));
+    const controller = new AbortController();
+    loadWorlds(controller.signal).catch((error) => {
+      if (error.name !== "AbortError") setStatus(error.message);
+    });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
-    if (!selectedWorldId) return;
-    loadWorldData(selectedWorldId).catch((error) => setStatus(error.message));
+    if (!selectedWorldId) return undefined;
+    const controller = new AbortController();
+    loadWorldData(selectedWorldId, controller.signal).catch((error) => {
+      if (error.name !== "AbortError") setStatus(error.message);
+    });
+    return () => controller.abort();
   }, [selectedWorldId]);
 
-  async function loadWorlds() {
-    const nextWorlds = await api("/worlds");
+  async function loadWorlds(signal) {
+    const nextWorlds = await api("/worlds", { signal });
     setWorlds(nextWorlds);
     setSelectedWorldId((current) => current || nextWorlds[0]?.id || null);
-    setStatus("Backend online");
+    setStatus("Сервер доступен");
   }
 
-  async function loadWorldData(worldId) {
+  async function loadWorldData(worldId, signal) {
     const [nextEntities, nextRelationships] = await Promise.all([
-      api(`/worlds/${worldId}/entities?role=master`),
-      api(`/worlds/${worldId}/relationships?role=master`),
+      api(`/worlds/${worldId}/entities?role=master`, { signal }),
+      api(`/worlds/${worldId}/relationships?role=master`, { signal }),
     ]);
     setEntities(nextEntities);
     setRelationships(nextRelationships);
@@ -78,7 +86,12 @@ export function App() {
       React.createElement(
         "header",
         { className: "topbar" },
-        React.createElement("div", null, React.createElement("p", { className: "eyebrow" }, "Выбранный мир"), React.createElement("h2", null, selectedWorld?.name || "Нет мира")),
+        React.createElement(
+          "div",
+          null,
+          React.createElement("p", { className: "eyebrow" }, "Выбранный мир"),
+          React.createElement("h2", null, selectedWorld?.name || "Нет мира"),
+        ),
         React.createElement(
           "nav",
           { className: "tabs" },
@@ -98,36 +111,62 @@ export function App() {
 
 function TabContent({ activeTab, entities, events, relationships }) {
   if (activeTab === "graph") {
-    return React.createElement("section", { className: "panel" }, React.createElement("h3", null, "Граф связей"), React.createElement("p", null, `${entities.length} сущностей, ${relationships.length} связей. Интерактивный граф переносится из vanilla UI следующим этапом.`));
+    return React.createElement(
+      "section",
+      { className: "panel" },
+      React.createElement("h3", null, "Граф связей"),
+      React.createElement("p", null, `${entities.length} сущностей, ${relationships.length} связей.`),
+    );
   }
   if (activeTab === "timeline") {
     return React.createElement(
       "section",
       { className: "panel stack" },
-      React.createElement("h3", null, "Таймлайн"),
-      events.length ? events.map((event) => React.createElement("article", { className: "card", key: event.id }, React.createElement("strong", null, event.name), React.createElement("p", null, event.summary || event.description || "Без описания"))) : React.createElement("p", { className: "muted" }, "Событий пока нет."),
+      React.createElement("h3", null, "Хронология"),
+      events.length
+        ? events.map((event) =>
+            React.createElement(
+              "article",
+              { className: "card", key: event.id },
+              React.createElement("strong", null, event.name),
+              React.createElement("p", null, event.summary || event.description || "Без описания"),
+            ),
+          )
+        : React.createElement("p", { className: "muted" }, "Событий пока нет."),
     );
   }
   if (activeTab === "chat") {
-    return React.createElement("section", { className: "panel" }, React.createElement("h3", null, "Чат"), React.createElement("p", null, "Чат и write-back pipeline уже работают в текущем /app/. Этот shell подготовлен для переноса UI на React."));
+    return React.createElement("section", { className: "panel" }, React.createElement("h3", null, "Чат"));
   }
   if (activeTab === "settings") {
-    return React.createElement("section", { className: "panel" }, React.createElement("h3", null, "Настройки"), React.createElement("p", null, "React/Vite dev server проксирует /api и /assets на FastAPI."));
+    return React.createElement("section", { className: "panel" }, React.createElement("h3", null, "Настройки"));
   }
   return React.createElement(
     "section",
     { className: "cards" },
-    entities.length ? entities.map((entity) => React.createElement(EntityCard, { entity, key: entity.id })) : React.createElement("p", { className: "muted" }, "Сущностей пока нет."),
+    entities.length
+      ? entities.map((entity) => React.createElement(EntityCard, { entity, key: entity.id }))
+      : React.createElement("p", { className: "muted" }, "Сущностей пока нет."),
   );
 }
 
 function EntityCard({ entity }) {
+  const imageUrl = safeImageUrl(entity.attributes?.image_url);
   return React.createElement(
     "article",
     { className: "card" },
-    entity.attributes?.image_url ? React.createElement("img", { alt: "", src: entity.attributes.image_url }) : null,
+    imageUrl ? React.createElement("img", { alt: "", src: imageUrl }) : null,
     React.createElement("strong", null, entity.name),
     React.createElement("span", { className: "muted" }, entity.type),
     React.createElement("p", null, entity.summary || entity.description || "Без описания"),
   );
+}
+
+function safeImageUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""), window.location.origin);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+  } catch {
+    return "";
+  }
 }

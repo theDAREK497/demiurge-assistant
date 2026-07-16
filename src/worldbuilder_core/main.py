@@ -21,19 +21,25 @@ from worldbuilder_core.api.routes import (
     worlds,
 )
 from worldbuilder_core.config import get_settings
-from worldbuilder_core.db import create_db_and_tables
+from worldbuilder_core.db import SessionLocal, create_db_and_tables
 from worldbuilder_core.schemas import HealthRead
+from worldbuilder_core.security import ApplicationSecurityMiddleware
+from worldbuilder_core.services.assets import cleanup_stale_orphaned_assets
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
+    with SessionLocal() as session:
+        cleanup_stale_orphaned_assets(session)
     yield
 
 
 def create_app(*, create_tables_on_startup: bool = True) -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, lifespan=lifespan if create_tables_on_startup else None)
+    app.state.worldbuilder_settings = settings
+    app.add_middleware(ApplicationSecurityMiddleware, settings=settings)
     static_dir = Path(__file__).parent / "static"
     upload_dir = Path(settings.upload_dir)
     upload_dir.mkdir(parents=True, exist_ok=True)

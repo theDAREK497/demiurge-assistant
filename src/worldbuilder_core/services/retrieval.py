@@ -1,5 +1,5 @@
 from sqlalchemy import Select, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from worldbuilder_core.models import Entity, RandomTable, RandomTableRow, Relationship, ViewerRole, World, WorldRule
 from worldbuilder_core.schemas import (
@@ -109,6 +109,7 @@ def _select_relationships(
 
     stmt: Select[tuple[Relationship]] = (
         select(Relationship)
+        .options(joinedload(Relationship.source_entity), joinedload(Relationship.target_entity))
         .where(
             Relationship.world_id == world_id,
             (Relationship.source_entity_id.in_(entity_ids)) | (Relationship.target_entity_id.in_(entity_ids)),
@@ -138,6 +139,7 @@ def _select_random_tables(
 ) -> list[RandomTable]:
     stmt: Select[tuple[RandomTable]] = (
         select(RandomTable)
+        .options(selectinload(RandomTable.rows))
         .where(RandomTable.world_id == world_id)
         .order_by(RandomTable.updated_at.desc(), RandomTable.name.asc())
         .limit(max_random_tables)

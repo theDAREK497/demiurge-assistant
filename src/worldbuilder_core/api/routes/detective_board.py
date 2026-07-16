@@ -2,6 +2,7 @@ from math import ceil, sqrt
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete, select
+from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import DetectiveBoardConnection, DetectiveBoardNode, Entity, ViewerRole, World
@@ -50,6 +51,7 @@ def get_detective_board(world_id: str, session: DbSession, role: ViewerRole = Vi
     nodes = list(
         session.scalars(
             select(DetectiveBoardNode)
+            .options(joinedload(DetectiveBoardNode.entity))
             .where(DetectiveBoardNode.world_id == world_id)
             .order_by(DetectiveBoardNode.created_at.asc(), DetectiveBoardNode.id.asc())
         )

@@ -1,3 +1,7 @@
+import re
+import unicodedata
+from difflib import SequenceMatcher
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -84,6 +88,7 @@ def _apply_extraction_proposal(
     payload = ExtractionPayload.model_validate(proposal.payload)
     if selection is not None:
         payload = _select_payload_items(payload, selection)
+    payload = sanitize_extraction_payload_for_world(session, proposal.world_id, payload)
     payload = dedupe_extraction_payload(payload)
     try:
         validate_payload_references(session, proposal.world_id, payload)
@@ -129,10 +134,12 @@ def sanitize_extraction_payload_for_world(
     payload: ExtractionPayload,
 ) -> ExtractionPayload:
     """Keep useful LLM output when individual references are invalid."""
-    valid_entity_ids = set(session.scalars(select(Entity.id).where(Entity.world_id == world_id)))
+    existing_entities = list(session.scalars(select(Entity).where(Entity.world_id == world_id)))
+    valid_entity_ids = {entity.id for entity in existing_entities}
     valid_table_ids = set(session.scalars(select(RandomTable.id).where(RandomTable.world_id == world_id)))
     used_client_ids = {entity.client_id for entity in payload.entities if entity.client_id}
     recovered_match_ids: dict[str, str] = {}
+    matched_client_ids: dict[str, str] = {}
     entities = []
 
     for index, entity in enumerate(payload.entities):
@@ -148,6 +155,20 @@ def sanitize_extraction_payload_for_world(
                 )
             )
             continue
+        if entity.match_entity_id is None:
+            existing_match = _find_single_similar_entity(existing_entities, entity)
+            if existing_match is not None:
+                aliases = _merge_list(entity.aliases, [entity.name]) if entity.name != existing_match.name else entity.aliases
+                if entity.client_id:
+                    matched_client_ids[entity.client_id] = existing_match.id
+                entity = entity.model_copy(
+                    update={
+                        "client_id": None,
+                        "match_entity_id": existing_match.id,
+                        "name": existing_match.name,
+                        "aliases": aliases,
+                    }
+                )
         entities.append(entity)
 
     client_ids = {entity.client_id for entity in entities if entity.client_id}
@@ -163,6 +184,16 @@ def sanitize_extraction_payload_for_world(
             updates.update(
                 target_entity_id=None,
                 target_client_id=recovered_match_ids[relationship.target_entity_id],
+            )
+        if relationship.source_client_id in matched_client_ids:
+            updates.update(
+                source_client_id=None,
+                source_entity_id=matched_client_ids[relationship.source_client_id],
+            )
+        if relationship.target_client_id in matched_client_ids:
+            updates.update(
+                target_client_id=None,
+                target_entity_id=matched_client_ids[relationship.target_client_id],
             )
         candidate = relationship.model_copy(update=updates) if updates else relationship
         source_valid = (
@@ -242,6 +273,15 @@ def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
     for draft in entities:
         key = _entity_key(draft)
         existing_index = by_key.get(key)
+        if existing_index is None:
+            existing_index = next(
+                (
+                    index
+                    for index, existing in enumerate(deduped)
+                    if _entities_likely_same(existing, draft)
+                ),
+                None,
+            )
         if existing_index is None:
             by_key[key] = len(deduped)
             deduped.append(draft)
@@ -362,13 +402,16 @@ def _random_table_row_key(draft) -> tuple:
 
 
 def _merge_entity_draft(current, incoming):
+    aliases = _merge_list(current.aliases, incoming.aliases)
+    if _normalized_entity_name(current.name) != _normalized_entity_name(incoming.name):
+        aliases = _merge_list(aliases, [incoming.name])
     return current.model_copy(
         update={
             "client_id": current.client_id or incoming.client_id,
             "source_excerpt": current.source_excerpt or incoming.source_excerpt,
             "summary": current.summary or incoming.summary,
             "description": current.description or incoming.description,
-            "aliases": _merge_list(current.aliases, incoming.aliases),
+            "aliases": aliases,
             "tags": _merge_list(current.tags, incoming.tags),
             "is_secret": current.is_secret or incoming.is_secret,
             "attributes": {**incoming.attributes, **current.attributes},
@@ -413,6 +456,215 @@ def _merge_random_table_row_draft(current, incoming):
 
 def _normalized_text(value: str) -> str:
     return " ".join(str(value or "").casefold().split())
+
+
+ROLE_NAME_TOKENS = {
+    "старейшин",
+    "глава",
+    "вожд",
+    "правител",
+    "хранител",
+    "elder",
+    "leader",
+    "chief",
+    "keeper",
+    "ruler",
+}
+GENERIC_NAME_TOKENS = {
+    "поселк",
+    "деревн",
+    "город",
+    "общин",
+    "местн",
+    "безымянн",
+    "village",
+    "settlement",
+    "town",
+    "community",
+    "local",
+    "unnamed",
+}
+DIRECTION_NAME_TOKENS = {
+    "north",
+    "south",
+    "east",
+    "west",
+    "northern",
+    "southern",
+    "eastern",
+    "western",
+    "северн",
+    "южн",
+    "восточн",
+    "западн",
+}
+DETAIL_STOPWORDS = {
+    "the",
+    "and",
+    "that",
+    "this",
+    "with",
+    "from",
+    "into",
+    "для",
+    "как",
+    "что",
+    "это",
+    "его",
+    "она",
+    "они",
+    "явля",
+    "котор",
+    "сво",
+    "при",
+    "или",
+    "без",
+}
+
+
+def _find_single_similar_entity(existing_entities: list[Entity], draft) -> Entity | None:
+    exact_candidates = [
+        entity
+        for entity in existing_entities
+        if any(
+            _normalized_entity_name(existing_name) == _normalized_entity_name(draft_name)
+            for existing_name in [entity.name, *(entity.aliases or [])]
+            for draft_name in [draft.name, *(draft.aliases or [])]
+        )
+    ]
+    if len(exact_candidates) == 1:
+        return exact_candidates[0]
+    candidates = [entity for entity in existing_entities if _entities_likely_same(entity, draft)]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _entities_likely_same(left, right) -> bool:
+    if str(left.type) != str(right.type):
+        return False
+
+    left_names = [left.name, *(getattr(left, "aliases", None) or [])]
+    right_names = [right.name, *(getattr(right, "aliases", None) or [])]
+    for left_name in left_names:
+        for right_name in right_names:
+            if _names_likely_same(left_name, right_name):
+                return True
+
+    left_name_tokens = set(_entity_name_tokens(left.name))
+    right_name_tokens = set(_entity_name_tokens(right.name))
+    shared_role_tokens = left_name_tokens & right_name_tokens & ROLE_NAME_TOKENS
+    has_generic_variant = bool((left_name_tokens | right_name_tokens) & GENERIC_NAME_TOKENS)
+    if not shared_role_tokens or not has_generic_variant:
+        return False
+
+    left_details = _entity_detail_tokens(left)
+    right_details = _entity_detail_tokens(right)
+    shared_details = left_details & right_details
+    detail_overlap = len(shared_details) / max(1, min(len(left_details), len(right_details)))
+    return len(shared_details) >= 3 and detail_overlap >= 0.22
+
+
+def _names_likely_same(left: str, right: str) -> bool:
+    left_normalized = _normalized_entity_name(left)
+    right_normalized = _normalized_entity_name(right)
+    if not left_normalized or not right_normalized:
+        return False
+    if left_normalized == right_normalized:
+        return True
+
+    left_base = _normalized_entity_name(re.sub(r"\([^)]*\)\s*$", "", left))
+    right_base = _normalized_entity_name(re.sub(r"\([^)]*\)\s*$", "", right))
+    if left_base and right_base and left_base == right_base:
+        return True
+
+    left_tokens = set(left_normalized.split())
+    right_tokens = set(right_normalized.split())
+    left_stemmed_tokens = set(_entity_name_tokens(left))
+    right_stemmed_tokens = set(_entity_name_tokens(right))
+    if (left_stemmed_tokens ^ right_stemmed_tokens) & DIRECTION_NAME_TOKENS:
+        return False
+    if len(left_stemmed_tokens) >= 2 and left_stemmed_tokens == right_stemmed_tokens:
+        return True
+    shorter_tokens, longer_tokens = sorted((left_tokens, right_tokens), key=len)
+    if (
+        len(shorter_tokens) >= 3
+        and shorter_tokens.issubset(longer_tokens)
+        and len(longer_tokens) - len(shorter_tokens) <= 3
+    ):
+        return True
+
+    ratio = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    return ratio >= 0.9
+
+
+def _entity_detail_tokens(entity) -> set[str]:
+    values = [
+        entity.name,
+        *(getattr(entity, "aliases", None) or []),
+        getattr(entity, "summary", None) or "",
+        getattr(entity, "description", None) or "",
+    ]
+    tokens = {_stem_entity_token(token) for token in re.findall(r"[^\W_]+", " ".join(values).casefold())}
+    return {token for token in tokens if len(token) >= 3 and token not in DETAIL_STOPWORDS}
+
+
+def _entity_name_tokens(value: str) -> list[str]:
+    return [_stem_entity_token(token) for token in _raw_entity_name_tokens(value)]
+
+
+def _raw_entity_name_tokens(value: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold().replace("ё", "е")
+    return re.findall(r"[^\W_]+", normalized)
+
+
+def _normalized_entity_name(value: str) -> str:
+    return " ".join(_raw_entity_name_tokens(value))
+
+
+def _stem_entity_token(token: str) -> str:
+    if re.fullmatch(r"[а-яё]+", token):
+        for suffix in (
+            "иями",
+            "ями",
+            "ами",
+            "ого",
+            "ему",
+            "ому",
+            "ыми",
+            "ими",
+            "иях",
+            "ах",
+            "ях",
+            "ой",
+            "ей",
+            "ий",
+            "ый",
+            "ая",
+            "яя",
+            "ое",
+            "ее",
+            "ые",
+            "ие",
+            "ов",
+            "ев",
+            "ам",
+            "ям",
+            "ом",
+            "ем",
+            "а",
+            "я",
+            "ы",
+            "и",
+            "е",
+            "у",
+            "ю",
+        ):
+            if token.endswith(suffix) and len(token) - len(suffix) >= 4:
+                return token[: -len(suffix)]
+    if token.endswith("ies") and len(token) > 5:
+        return f"{token[:-3]}y"
+    if token.endswith("s") and len(token) > 4:
+        return token[:-1]
+    return token
 
 
 def _apply_payload(

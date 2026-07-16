@@ -11,7 +11,7 @@ from worldbuilder_core.db import Base, get_session
 from worldbuilder_core.main import create_app
 
 
-def build_client() -> TestClient:
+def build_client(*, client_address: tuple[str, int] = ("testclient", 50000)) -> TestClient:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -29,7 +29,64 @@ def build_client() -> TestClient:
 
     app = create_app(create_tables_on_startup=False)
     app.dependency_overrides[get_session] = override_session
-    return TestClient(app)
+    return TestClient(app, client=client_address)
+
+
+def test_remote_player_cannot_escalate_to_master_api(monkeypatch) -> None:
+    trusted_client = build_client()
+    world_id = trusted_client.post("/api/worlds", json={"name": "Guarded Vale"}).json()["id"]
+    trusted_client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "concept", "name": "Public lore", "is_secret": False},
+    )
+    trusted_client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "concept", "name": "Master secret", "is_secret": True},
+    )
+    table_id = trusted_client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Public roll"},
+    ).json()["id"]
+    trusted_client.post(
+        f"/api/random-tables/{table_id}/rows",
+        json={"result": "Visible result"},
+    )
+
+    remote_player = TestClient(trusted_client.app, client=("192.0.2.20", 50000))
+    assert remote_player.get("/api/worlds", headers={"Host": "rebind.example"}).status_code == 400
+    assert remote_player.get("/api/worlds").status_code == 200
+    player_entities = remote_player.get(f"/api/worlds/{world_id}/entities?role=player")
+    assert player_entities.status_code == 200
+    assert [entity["name"] for entity in player_entities.json()] == ["Public lore"]
+    assert remote_player.post(f"/api/random-tables/{table_id}/roll?role=player").status_code == 200
+
+    assert remote_player.get(f"/api/worlds/{world_id}/entities?role=master").status_code == 403
+    assert remote_player.get(f"/api/worlds/{world_id}/entities").status_code == 403
+    assert remote_player.get("/api/llm/config").status_code == 403
+    assert remote_player.post("/api/worlds", json={"name": "Forbidden"}).status_code == 403
+
+    monkeypatch.setattr(trusted_client.app.state.worldbuilder_settings, "master_token", "correct-master-key")
+    remote_master = TestClient(
+        trusted_client.app,
+        client=("192.0.2.21", 50000),
+        headers={"X-Worldbuilder-Master-Token": "correct-master-key"},
+    )
+    master_entities = remote_master.get(f"/api/worlds/{world_id}/entities?role=master")
+    assert master_entities.status_code == 200
+    assert {entity["name"] for entity in master_entities.json()} == {"Public lore", "Master secret"}
+
+    app_response = trusted_client.get("/app/")
+    assert app_response.headers["x-content-type-options"] == "nosniff"
+    assert app_response.headers["cache-control"] == "no-store"
+    assert "script-src 'self'" in app_response.headers["content-security-policy"]
+
+    monkeypatch.setattr(trusted_client.app.state.worldbuilder_settings, "max_request_bytes", 128)
+    oversized = trusted_client.post(
+        "/api/worlds",
+        content=b"x" * 129,
+        headers={"Content-Type": "application/json"},
+    )
+    assert oversized.status_code == 413
 
 
 def test_world_entity_relationship_and_rule_flow() -> None:
@@ -502,7 +559,10 @@ def test_llm_config_can_be_persisted() -> None:
     assert clear_response.json()["has_api_key"] is False
 
 
-def test_image_asset_upload_and_serving() -> None:
+def test_image_asset_upload_and_serving(monkeypatch, tmp_path) -> None:
+    from worldbuilder_core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "upload_dir", str(tmp_path / "uploads"))
     client = build_client()
     image_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -526,6 +586,14 @@ def test_image_asset_upload_and_serving() -> None:
     assert asset_response.status_code == 200
     assert asset_response.content == image_bytes
 
+    world_id = client.post("/api/worlds", json={"name": "Asset cleanup"}).json()["id"]
+    entity_id = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Portrait owner", "attributes": {"image_url": payload["url"]}},
+    ).json()["id"]
+    assert client.delete(f"/api/entities/{entity_id}").status_code == 204
+    assert client.get(payload["url"]).status_code == 404
+
     unsupported_response = client.post(
         "/api/assets",
         json={
@@ -535,6 +603,16 @@ def test_image_asset_upload_and_serving() -> None:
         },
     )
     assert unsupported_response.status_code == 415
+
+    mismatched_response = client.post(
+        "/api/assets",
+        json={
+            "filename": "fake.png",
+            "content_type": "image/png",
+            "content_base64": base64.b64encode(b"<html>not an image</html>").decode("ascii"),
+        },
+    )
+    assert mismatched_response.status_code == 422
 
 
 def test_world_export_import_preserves_stable_ids() -> None:
@@ -903,6 +981,178 @@ def test_extraction_endpoint_keeps_valid_items_when_llm_references_are_noisy(mon
     assert payload["random_table_rows"] == []
 
 
+def test_extraction_matches_semantic_role_variant_to_existing_entity(monkeypatch) -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Copper Vale"}).json()["id"]
+    existing = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "character",
+            "name": "Старейшина Громоздкий",
+            "summary": "Заказчик миссии, лидер общины Медной долины.",
+            "description": "Пожилой лидер общины требует спасения пропавших рабочих.",
+        },
+    ).json()
+
+    class FakeExtractionLLMClient:
+        async def chat(self, request):
+            return LLMChatResponse(
+                model="fake-extractor",
+                message=LLMMessage(
+                    role="assistant",
+                    content="""
+                    {
+                      "entities": [
+                        {
+                          "client_id": "settlement-elder",
+                          "type": "character",
+                          "name": "Старейшина Поселка",
+                          "summary": "Старейшина местной общины просит спасти пропавших рабочих.",
+                          "description": "Представитель сообщества Медной долины и заказчик приключения."
+                        }
+                      ]
+                    }
+                    """,
+                ),
+                finish_reason="stop",
+            )
+
+    import worldbuilder_core.api.routes.proposals as proposals_route
+
+    monkeypatch.setattr(proposals_route, "build_llm_client", lambda *_, **__: FakeExtractionLLMClient())
+
+    proposal_response = client.post(
+        f"/api/worlds/{world_id}/proposals/extract",
+        json={"source_text": "Старейшина поселка просит спасти пропавших рабочих."},
+    )
+
+    assert proposal_response.status_code == 201
+    draft = proposal_response.json()["payload"]["entities"][0]
+    assert draft["match_entity_id"] == existing["id"]
+    assert draft["client_id"] is None
+    assert draft["name"] == "Старейшина Громоздкий"
+    assert "Старейшина Поселка" in draft["aliases"]
+
+    apply_response = client.post(f"/api/proposals/{proposal_response.json()['id']}/apply")
+    assert apply_response.status_code == 200
+    assert apply_response.json()["created_entities"] == 0
+    assert apply_response.json()["updated_entities"] == 1
+    entities = client.get(f"/api/worlds/{world_id}/entities").json()
+    assert len(entities) == 1
+    assert "Старейшина Поселка" in entities[0]["aliases"]
+
+
+def test_extraction_endpoint_guarantees_requested_quest_entity(monkeypatch) -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Quest Vale"}).json()["id"]
+    existing_quest = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "event",
+            "name": "Эхо старой шахты: Потерянный медный колокол",
+            "summary": "Приключение о пропавшем медном колоколе.",
+        },
+    ).json()
+
+    class FakeExtractionLLMClient:
+        async def chat(self, request):
+            return LLMChatResponse(
+                model="fake-extractor",
+                message=LLMMessage(
+                    role="assistant",
+                    content="""
+                    {
+                      "entities": [
+                        {"client_id": "elder", "type": "character", "name": "Старейшина"},
+                        {"client_id": "stage", "type": "event", "name": "Набег (Этап I)"}
+                      ]
+                    }
+                    """,
+                ),
+                finish_reason="stop",
+            )
+
+    import worldbuilder_core.api.routes.proposals as proposals_route
+
+    monkeypatch.setattr(proposals_route, "build_llm_client", lambda *_, **__: FakeExtractionLLMClient())
+
+    response = client.post(
+        f"/api/worlds/{world_id}/proposals/extract",
+        json={
+            "intent_text": "Создай квест.",
+            "source_text": (
+                '# КВЕСТ: "ПОТЕРЯННЫЙ МЕДНЫЙ КОЛОКОЛ"\n\n'
+                "### Цель\nВернуть колокол до рассвета."
+            ),
+        },
+    )
+
+    assert response.status_code == 201
+    quests = [entity for entity in response.json()["payload"]["entities"] if "quest" in entity["tags"]]
+    assert len(quests) == 1
+    assert quests[0]["name"] == "Эхо старой шахты: Потерянный медный колокол"
+    assert quests[0]["type"] == "event"
+    assert quests[0]["match_entity_id"] == existing_quest["id"]
+    assert "Потерянный медный колокол" in quests[0]["aliases"]
+
+
+def test_apply_does_not_merge_distinct_directional_entities() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Twin Gates"}).json()["id"]
+    client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "North Watchtower", "summary": "A gate watchtower."},
+    )
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "The South Watchtower is rebuilt.",
+            "payload": {
+                "entities": [
+                    {
+                        "client_id": "south-watchtower",
+                        "type": "location",
+                        "name": "South Watchtower",
+                        "summary": "A gate watchtower.",
+                    }
+                ]
+            },
+        },
+    ).json()
+
+    apply_response = client.post(f"/api/proposals/{proposal['id']}/apply")
+
+    assert apply_response.status_code == 200
+    assert apply_response.json()["created_entities"] == 1
+    assert len(client.get(f"/api/worlds/{world_id}/entities").json()) == 2
+
+
+def test_apply_does_not_merge_distinct_short_names_after_russian_stemming() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Short Names"}).json()["id"]
+    client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Мир", "summary": "Странник."},
+    )
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Мира пришла в город.",
+            "payload": {
+                "entities": [
+                    {"client_id": "mira", "type": "character", "name": "Мира", "summary": "Странница."}
+                ]
+            },
+        },
+    ).json()
+
+    apply_response = client.post(f"/api/proposals/{proposal['id']}/apply")
+
+    assert apply_response.status_code == 200
+    assert apply_response.json()["created_entities"] == 1
+    assert {entity["name"] for entity in client.get(f"/api/worlds/{world_id}/entities").json()} == {"Мир", "Мира"}
+
+
 def test_extraction_proposal_can_be_deleted() -> None:
     client = build_client()
     world_id = client.post("/api/worlds", json={"name": "Brief Draft"}).json()["id"]
@@ -1008,7 +1258,7 @@ def test_extraction_proposal_deduplicates_repeated_draft_items() -> None:
             "payload": {
                 "entities": [
                     {"client_id": "mira", "type": "character", "name": "Mira", "aliases": ["Cartographer"]},
-                    {"client_id": "mira-copy", "type": "character", "name": "Mira", "tags": ["scout"]},
+                    {"client_id": "mira-copy", "type": "character", "name": "Mira.", "tags": ["scout"]},
                     {"client_id": "brass-guild", "type": "faction", "name": "Brass Guild"},
                 ],
                 "relationships": [

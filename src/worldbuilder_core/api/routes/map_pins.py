@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import Select, select
+from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import Entity, EntityType, MapPin, ViewerRole, World
@@ -59,7 +60,11 @@ def list_map_pins(
     map_entity_id: str | None = None,
 ) -> list[MapPin]:
     ensure_world(session, world_id)
-    stmt: Select[tuple[MapPin]] = select(MapPin).where(MapPin.world_id == world_id)
+    stmt: Select[tuple[MapPin]] = (
+        select(MapPin)
+        .options(joinedload(MapPin.map_entity), joinedload(MapPin.linked_entity))
+        .where(MapPin.world_id == world_id)
+    )
     if map_entity_id:
         stmt = stmt.where(MapPin.map_entity_id == map_entity_id)
 

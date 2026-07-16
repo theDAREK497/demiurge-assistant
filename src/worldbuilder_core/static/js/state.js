@@ -8,6 +8,11 @@ export const defaultModuleSettings = {
   detectiveBoard: true,
 };
 
+const MAX_CHAT_THREADS = 30;
+const MAX_CHAT_MESSAGES_PER_THREAD = 80;
+const MAX_CHAT_MESSAGE_CHARS = 20_000;
+const MAX_CHAT_STORAGE_CHARS = 2_000_000;
+
 export const state = {
   worlds: [],
   selectedWorldId: null,
@@ -58,7 +63,7 @@ function makeChatThread(messages = []) {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     title: "",
-    messages: messages.map((message) => ({ role: message.role, content: message.content })),
+    messages: compactChatMessages(messages),
     createdAt: now,
     updatedAt: now,
   };
@@ -73,7 +78,24 @@ function deriveChatTitle(messages) {
 
 function saveChatThreadsForScope() {
   if (!state.chatStorageScope) return;
-  localStorage.setItem(state.chatStorageScope, JSON.stringify(state.chatThreads));
+  state.chatThreads = compactChatThreads(state.chatThreads, state.activeChatThreadId);
+  let serialized = JSON.stringify(state.chatThreads);
+  while (serialized.length > MAX_CHAT_STORAGE_CHARS && state.chatThreads.length > 1) {
+    const removableIndex = state.chatThreads.findLastIndex((thread) => thread.id !== state.activeChatThreadId);
+    if (removableIndex < 0) break;
+    state.chatThreads.splice(removableIndex, 1);
+    serialized = JSON.stringify(state.chatThreads);
+  }
+  const active = activeChatThread();
+  while (serialized.length > MAX_CHAT_STORAGE_CHARS && active?.messages.length > 1) {
+    active.messages.shift();
+    serialized = JSON.stringify(state.chatThreads);
+  }
+  try {
+    localStorage.setItem(state.chatStorageScope, serialized);
+  } catch (error) {
+    console.warn("Chat history could not be persisted", error);
+  }
 }
 
 export function loadChatThreadsForContext(worldId, role) {
@@ -91,7 +113,9 @@ export function loadChatThreadsForContext(worldId, role) {
   state.chatStorageScope = scope;
   try {
     const parsed = JSON.parse(localStorage.getItem(scope) || "[]");
-    state.chatThreads = Array.isArray(parsed) ? parsed.filter((thread) => Array.isArray(thread.messages)) : [];
+    state.chatThreads = Array.isArray(parsed)
+      ? compactChatThreads(parsed.filter((thread) => Array.isArray(thread.messages)), state.activeChatThreadId)
+      : [];
   } catch {
     state.chatThreads = [];
   }
@@ -118,7 +142,8 @@ export function activeChatThread() {
 export function persistActiveChatMessages() {
   const thread = activeChatThread();
   if (!thread) return;
-  thread.messages = state.chatMessages.map((message) => ({ role: message.role, content: message.content }));
+  thread.messages = compactChatMessages(state.chatMessages);
+  state.chatMessages = thread.messages.map((message) => ({ ...message }));
   thread.title = thread.title || deriveChatTitle(thread.messages);
   thread.updatedAt = new Date().toISOString();
   saveChatThreadsForScope();
@@ -179,4 +204,35 @@ export function deleteChatThread(threadId) {
   state.editingChatThreadId = null;
   saveChatThreadsForScope();
   return true;
+}
+
+function compactChatMessages(messages) {
+  return messages
+    .filter((message) => message && (message.role === "user" || message.role === "assistant"))
+    .slice(-MAX_CHAT_MESSAGES_PER_THREAD)
+    .map((message) => ({
+      role: message.role,
+      content: String(message.content || "").slice(0, MAX_CHAT_MESSAGE_CHARS),
+    }));
+}
+
+function compactChatThreads(threads, activeThreadId) {
+  const compacted = threads.slice(0, MAX_CHAT_THREADS).map((thread) => ({
+    id: String(thread.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    title: String(thread.title || "").slice(0, 80),
+    messages: compactChatMessages(thread.messages || []),
+    createdAt: String(thread.createdAt || new Date().toISOString()),
+    updatedAt: String(thread.updatedAt || thread.createdAt || new Date().toISOString()),
+  }));
+  if (activeThreadId && !compacted.some((thread) => thread.id === activeThreadId)) {
+    const active = threads.find((thread) => thread.id === activeThreadId);
+    if (active) {
+      compacted[MAX_CHAT_THREADS - 1] = {
+        ...active,
+        title: String(active.title || "").slice(0, 80),
+        messages: compactChatMessages(active.messages || []),
+      };
+    }
+  }
+  return compacted;
 }

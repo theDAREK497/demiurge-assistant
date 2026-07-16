@@ -4,6 +4,7 @@ from sqlalchemy import Select, select
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import Entity, EntityType, ViewerRole, World
 from worldbuilder_core.schemas import EntityCreate, EntityRead, EntityUpdate
+from worldbuilder_core.services.assets import cleanup_unreferenced_assets, entity_asset_url
 
 router = APIRouter(tags=["entities"])
 
@@ -66,12 +67,14 @@ def update_entity(entity_id: str, payload: EntityUpdate, session: DbSession) -> 
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
 
+    previous_asset_url = entity_asset_url(entity.attributes)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(entity, key, value)
 
     session.add(entity)
     session.commit()
     session.refresh(entity)
+    cleanup_unreferenced_assets(session, {previous_asset_url})
     return entity
 
 
@@ -80,6 +83,7 @@ def delete_entity(entity_id: str, session: DbSession) -> None:
     entity = session.get(Entity, entity_id)
     if entity is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
+    previous_asset_url = entity_asset_url(entity.attributes)
     session.delete(entity)
     session.commit()
-
+    cleanup_unreferenced_assets(session, {previous_asset_url})

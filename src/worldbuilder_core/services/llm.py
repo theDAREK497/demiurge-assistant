@@ -40,7 +40,10 @@ class OpenAICompatibleLLMClient:
                     json=payload,
                 )
         except httpx.HTTPError as exc:
-            raise LLMProviderError(f"LLM provider request failed: {exc}") from exc
+            detail = str(exc).strip() or exc.__class__.__name__
+            if isinstance(exc, httpx.TimeoutException):
+                detail = f"{detail} after {self.timeout_seconds:g} seconds"
+            raise LLMProviderError(f"LLM provider request failed: {detail}") from exc
 
         if response.status_code >= 400:
             raise LLMProviderError(f"LLM provider returned HTTP {response.status_code}: {response.text}")

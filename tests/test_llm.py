@@ -53,6 +53,21 @@ def test_openai_response_parser_rejects_malformed_payload() -> None:
         parse_openai_chat_response({"choices": []}, fallback_model="story-model")
 
 
+def test_openai_compatible_client_reports_timeout_type_and_limit() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://llm.test/v1",
+        default_model="story-model",
+        timeout_seconds=12,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="ReadTimeout after 12 seconds"):
+        asyncio.run(client.chat(LLMChatRequest(messages=[LLMMessage(role="user", content="Wait.")])))
+
+
 def test_openai_response_parser_accepts_multipart_message_content() -> None:
     response = parse_openai_chat_response(
         {

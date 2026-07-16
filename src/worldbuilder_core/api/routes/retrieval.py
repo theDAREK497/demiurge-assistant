@@ -6,7 +6,11 @@ from worldbuilder_core.schemas import ExtractionProposalCreate, ExtractionPropos
 from worldbuilder_core.services.extraction import ExtractionParseError, extract_payload_with_llm
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
-from worldbuilder_core.services.proposals import ProposalValidationError, create_extraction_proposal
+from worldbuilder_core.services.proposals import (
+    ProposalValidationError,
+    create_extraction_proposal,
+    sanitize_extraction_payload_for_world,
+)
 from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context
 from worldbuilder_core.services.world_chat import build_world_llm_request
 
@@ -76,7 +80,12 @@ async def chat_with_world_context(
                 max_entities=max_extract_entities,
                 output_language=payload.output_language,
                 model=payload.model or runtime_settings.model_for("extractor"),
+                intent_text=next(
+                    (message.content for message in reversed(payload.messages) if message.role == "user"),
+                    None,
+                ),
             )
+            extraction_payload = sanitize_extraction_payload_for_world(session, world_id, extraction_payload)
             proposal = ExtractionProposalRead.model_validate(
                 create_extraction_proposal(
                     session,

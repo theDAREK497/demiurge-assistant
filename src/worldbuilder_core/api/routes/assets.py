@@ -35,6 +35,8 @@ def upload_asset(payload: AssetUploadRequest) -> AssetUploadResponse:
         raise HTTPException(status_code=422, detail="Uploaded file is empty")
     if len(content) > MAX_ASSET_BYTES:
         raise HTTPException(status_code=413, detail="Uploaded file is larger than 5 MB")
+    if not _matches_image_signature(payload.content_type.lower(), content):
+        raise HTTPException(status_code=422, detail="Uploaded content does not match its image type")
 
     upload_dir = Path(get_settings().upload_dir).resolve()
     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -56,3 +58,15 @@ def upload_asset(payload: AssetUploadRequest) -> AssetUploadResponse:
 def _safe_stem(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_-]+", "-", value).strip("-_").lower()
     return normalized[:80] or "asset"
+
+
+def _matches_image_signature(content_type: str, content: bytes) -> bool:
+    if content_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if content_type == "image/gif":
+        return content.startswith((b"GIF87a", b"GIF89a"))
+    if content_type == "image/webp":
+        return len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    return False

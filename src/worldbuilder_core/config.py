@@ -14,6 +14,10 @@ class Settings(BaseModel):
     llm_model: str = "local-model"
     llm_timeout_seconds: float = 120.0
     max_entities_per_extract: int = 12
+    master_token: str | None = None
+    trust_local_master: bool = True
+    allowed_hosts: tuple[str, ...] = ("localhost", "testserver")
+    max_request_bytes: int = 10 * 1024 * 1024
 
 
 @lru_cache
@@ -28,4 +32,12 @@ def get_settings() -> Settings:
         llm_model=getenv("WORLDBUILDER_LLM_MODEL", defaults.llm_model),
         llm_timeout_seconds=float(getenv("WORLDBUILDER_LLM_TIMEOUT_SECONDS", str(defaults.llm_timeout_seconds))),
         max_entities_per_extract=int(getenv("WORLDBUILDER_MAX_ENTITIES_PER_EXTRACT", str(defaults.max_entities_per_extract))),
+        master_token=getenv("WORLDBUILDER_MASTER_TOKEN") or None,
+        trust_local_master=getenv("WORLDBUILDER_TRUST_LOCAL_MASTER", "true").strip().lower() in {"1", "true", "yes", "on"},
+        allowed_hosts=tuple(
+            host.strip().lower()
+            for host in getenv("WORLDBUILDER_ALLOWED_HOSTS", ",".join(defaults.allowed_hosts)).split(",")
+            if host.strip()
+        ),
+        max_request_bytes=int(getenv("WORLDBUILDER_MAX_REQUEST_BYTES", str(defaults.max_request_bytes))),
     )

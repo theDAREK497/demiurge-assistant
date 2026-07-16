@@ -41,6 +41,9 @@ echo   2 - LAN mode, players can connect by IP if firewall/port allows it
 set /p "WB_MODE=Mode [1]: "
 if "%WB_MODE%"=="2" (
   set "WB_HOST=0.0.0.0"
+  if "%WORLDBUILDER_MASTER_TOKEN%"=="" (
+    for /f "delims=" %%T in ('"%PY%" -c "import secrets; print(secrets.token_urlsafe(24))"') do set "WORLDBUILDER_MASTER_TOKEN=%%T"
+  )
 ) else (
   set "WB_HOST=127.0.0.1"
 )
@@ -70,6 +73,8 @@ if "%WB_HOST%"=="0.0.0.0" (
   if not "%WB_LAN_IP%"=="" (
     echo Player URL on LAN:
     echo   http://%WB_LAN_IP%:%WB_PORT%/app/?role=player
+    echo Remote Master URL - keep it private:
+    echo   http://%WB_LAN_IP%:%WB_PORT%/app/?role=master#master_token=%WORLDBUILDER_MASTER_TOKEN%
     echo If this IP looks wrong, run ipconfig and use your real Wi-Fi/Ethernet IPv4.
   )
   echo.

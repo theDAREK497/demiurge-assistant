@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import Select, select
+from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import Entity, Relationship, ViewerRole, World
@@ -53,7 +54,11 @@ def list_relationships(
     entity_id: str | None = None,
 ) -> list[Relationship]:
     ensure_world(session, world_id)
-    stmt: Select[tuple[Relationship]] = select(Relationship).where(Relationship.world_id == world_id)
+    stmt: Select[tuple[Relationship]] = (
+        select(Relationship)
+        .options(joinedload(Relationship.source_entity), joinedload(Relationship.target_entity))
+        .where(Relationship.world_id == world_id)
+    )
     if role == ViewerRole.player:
         stmt = stmt.where(Relationship.is_secret.is_(False))
     if entity_id is not None:
