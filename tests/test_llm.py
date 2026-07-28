@@ -48,6 +48,33 @@ def test_openai_compatible_client_chat_parses_response() -> None:
     assert response.usage.total_tokens == 20
 
 
+def test_openai_compatible_client_parses_embedding_batch() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://llm.test/v1/embeddings"
+        payload = json.loads(request.content)
+        assert payload == {"model": "embed-model", "input": ["one", "two"]}
+        return httpx.Response(
+            200,
+            json={
+                "model": "embed-model",
+                "data": [
+                    {"index": 1, "embedding": [0.0, 1.0]},
+                    {"index": 0, "embedding": [1.0, 0.0]},
+                ],
+            },
+        )
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://llm.test/v1",
+        default_model="embed-model",
+        timeout_seconds=10,
+        transport=httpx.MockTransport(handler),
+    )
+    model, vectors = asyncio.run(client.embeddings(["one", "two"]))
+    assert model == "embed-model"
+    assert vectors == [[1.0, 0.0], [0.0, 1.0]]
+
+
 def test_openai_response_parser_rejects_malformed_payload() -> None:
     with pytest.raises(LLMProviderError):
         parse_openai_chat_response({"choices": []}, fallback_model="story-model")

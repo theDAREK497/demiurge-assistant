@@ -1,4 +1,6 @@
 import base64
+from io import BytesIO
+from zipfile import ZIP_DEFLATED, ZipFile
 from collections.abc import Generator
 
 from fastapi.testclient import TestClient
@@ -30,6 +32,16 @@ def build_client(*, client_address: tuple[str, int] = ("testclient", 50000)) -> 
     app = create_app(create_tables_on_startup=False)
     app.dependency_overrides[get_session] = override_session
     return TestClient(app, client=client_address)
+
+
+def process_uploaded_document(client: TestClient, document_id: str) -> dict:
+    for _ in range(20):
+        response = client.post(f"/api/documents/{document_id}/process?batch_size=2")
+        assert response.status_code == 200, response.text
+        document = response.json()["document"]
+        if document["status"] == "ready":
+            return document
+    raise AssertionError("Document did not finish processing")
 
 
 def test_remote_player_cannot_escalate_to_master_api(monkeypatch) -> None:
@@ -88,6 +100,40 @@ def test_remote_player_cannot_escalate_to_master_api(monkeypatch) -> None:
     )
     assert oversized.status_code == 413
 
+
+def test_dynamic_entity_types_and_quest_statuses() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Configurable World"}).json()["id"]
+
+    types = client.get(f"/api/worlds/{world_id}/entity-types").json()
+    assert {item["key"] for item in types} >= {"character", "location", "event"}
+
+    custom_type = client.post(
+        f"/api/worlds/{world_id}/entity-types",
+        json={"name": "Era artifact", "color": "#123ABC"},
+    )
+    assert custom_type.status_code == 201
+    custom_type_payload = custom_type.json()
+    assert custom_type_payload["key"] == "era_artifact"
+
+    entity = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "creature_kind", "name": "Ash Drake"},
+    )
+    assert entity.status_code == 201
+    assert any(
+        item["key"] == "creature_kind"
+        for item in client.get(f"/api/worlds/{world_id}/entity-types").json()
+    )
+
+    statuses = client.get(f"/api/worlds/{world_id}/quest-statuses").json()
+    assert [item["key"] for item in statuses][:2] == ["backlog", "active"]
+    custom_status = client.post(
+        f"/api/worlds/{world_id}/quest-statuses",
+        json={"name": "Review", "color": "#ABCDEF"},
+    )
+    assert custom_status.status_code == 201
+    assert custom_status.json()["key"] == "review"
 
 def test_world_entity_relationship_and_rule_flow() -> None:
     client = build_client()
@@ -528,6 +574,7 @@ def test_llm_config_can_be_persisted() -> None:
             "extractor_model": "local-extractor",
             "summarizer_model": "",
             "critic_model": None,
+            "embedding_model": "local-embed",
             "api_key": "test-key",
             "timeout_seconds": 45,
             "max_entities_per_extract": 7,
@@ -539,6 +586,7 @@ def test_llm_config_can_be_persisted() -> None:
     assert payload["default_model"] == "local-default"
     assert payload["chat_model"] == "local-chat"
     assert payload["extractor_model"] == "local-extractor"
+    assert payload["embedding_model"] == "local-embed"
     assert payload["has_api_key"] is True
     assert payload["timeout_seconds"] == 45
     assert payload["max_entities_per_extract"] == 7
@@ -1614,3 +1662,203 @@ def test_world_chat_can_save_completion_to_wiki_proposal(monkeypatch) -> None:
     proposals = client.get(f"/api/worlds/{world_id}/proposals").json()
     assert len(proposals) == 1
     assert proposals[0]["payload"]["entities"][0]["name"] == "Nara"
+
+
+def test_large_document_pipeline_deduplicates_and_retrieves_chunks(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "Book World"}).json()["id"]
+    shared = ("obsidian sentinel guards the northern archive. " * 180).encode()
+
+    public_upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=chronicle.txt&is_secret=false",
+        content=shared + b"\n\nThe silver observatory is open to every traveler.",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert public_upload.status_code == 201, public_upload.text
+    public_document = process_uploaded_document(client, public_upload.json()["id"])
+    assert public_document["total_chunks"] > 1
+
+    secret_upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=sealed.txt&is_secret=true",
+        content=shared + b"\n\nsealedcipher belongs only to the master.",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert secret_upload.status_code == 201, secret_upload.text
+    secret_document = process_uploaded_document(client, secret_upload.json()["id"])
+    assert secret_document["duplicate_chunks"] >= 1
+
+    master_context = client.get(f"/api/worlds/{world_id}/context?role=master&q=sealedcipher")
+    assert master_context.status_code == 200
+    assert any(chunk["filename"] == "sealed.txt" for chunk in master_context.json()["document_chunks"])
+    assert "sealedcipher" in master_context.json()["context_text"]
+
+    player_context = client.get(f"/api/worlds/{world_id}/context?role=player&q=sealedcipher")
+    assert player_context.status_code == 200
+    assert player_context.json()["document_chunks"] == []
+    assert "sealedcipher" not in player_context.json()["context_text"]
+
+    listed = client.get(f"/api/worlds/{world_id}/documents")
+    assert {item["filename"] for item in listed.json()} == {"chronicle.txt", "sealed.txt"}
+    assert client.delete(f"/api/documents/{secret_document['id']}").status_code == 204
+
+
+def test_document_upload_rejects_duplicate_and_unsupported_file(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "Upload Guard"}).json()["id"]
+    payload = b"A unique source document."
+
+    first = client.post(f"/api/worlds/{world_id}/documents?filename=source.txt", content=payload)
+    assert first.status_code == 201
+    duplicate = client.post(f"/api/worlds/{world_id}/documents?filename=copy.txt", content=payload)
+    assert duplicate.status_code == 409
+    unsupported = client.post(f"/api/worlds/{world_id}/documents?filename=source.pdf", content=payload)
+    assert unsupported.status_code == 415
+
+
+def test_docx_document_is_extracted_without_optional_dependencies(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "DOCX World"}).json()["id"]
+    document_xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+      <w:body>
+        <w:p><w:r><w:t>The amber lighthouse watches the frozen coast.</w:t></w:r></w:p>
+        <w:p><w:r><w:t>Its keeper records every passing vessel.</w:t></w:r></w:p>
+      </w:body>
+    </w:document>"""
+    buffer = BytesIO()
+    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", document_xml)
+
+    upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=book.docx",
+        content=buffer.getvalue(),
+        headers={"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    )
+    assert upload.status_code == 201, upload.text
+    process_uploaded_document(client, upload.json()["id"])
+    context = client.get(f"/api/worlds/{world_id}/context?q=lighthouse")
+    assert "amber lighthouse" in context.json()["context_text"]
+
+
+def test_deleting_world_removes_document_files(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "Temporary Library"}).json()["id"]
+    upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=temporary.txt",
+        content=b"Temporary library content.",
+    )
+    assert upload.status_code == 201
+    process_uploaded_document(client, upload.json()["id"])
+    assert list(tmp_path.rglob("*"))
+
+    assert client.delete(f"/api/worlds/{world_id}").status_code == 204
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+def test_embedding_index_queues_and_cancels_worker_job(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "Vector World"}).json()["id"]
+    client.put(
+        "/api/llm/config",
+        json={
+            "base_url": "http://embedding.test/v1",
+            "default_model": "chat-model",
+            "embedding_model": "embed-model",
+            "timeout_seconds": 10,
+            "max_entities_per_extract": 12,
+        },
+    )
+    upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=vectors.txt",
+        content=b"Moon harbor is guarded by glass towers.",
+    )
+    process_uploaded_document(client, upload.json()["id"])
+
+    queued = client.post(f"/api/worlds/{world_id}/embeddings/process")
+    assert queued.status_code == 200, queued.text
+    job = queued.json()
+    assert job["status"] == "queued"
+    assert job["total_chunks"] == 1
+    assert client.post(f"/api/worlds/{world_id}/embeddings/process").json()["id"] == job["id"]
+    assert client.get(f"/api/embedding-jobs/{job['id']}").json()["status"] == "queued"
+
+    cleared = client.delete(f"/api/worlds/{world_id}/embeddings")
+    assert cleared.status_code == 200
+    assert cleared.json()["embedded_chunks"] == 0
+    assert client.get(f"/api/embedding-jobs/{job['id']}").json()["status"] == "cancelled"
+
+
+def test_document_extraction_endpoint_queues_one_active_job(tmp_path, monkeypatch) -> None:
+    client = build_client()
+    monkeypatch.setattr(client.app.state.worldbuilder_settings, "upload_dir", str(tmp_path))
+    world_id = client.post("/api/worlds", json={"name": "Extracted Book"}).json()["id"]
+    upload = client.post(
+        f"/api/worlds/{world_id}/documents?filename=quests.txt",
+        content=b"Quest: return the Moon Bell to the northern archive.",
+    )
+    document = process_uploaded_document(client, upload.json()["id"])
+
+    queued = client.post(f"/api/documents/{document['id']}/extract?output_language=en")
+    assert queued.status_code == 202, queued.text
+    job = queued.json()
+    assert job["status"] == "queued"
+    assert job["output_language"] == "en"
+    assert job["total_chunks"] == document["total_chunks"]
+    assert client.post(f"/api/documents/{document['id']}/extract").json()["id"] == job["id"]
+    assert client.get(f"/api/document-extraction-jobs/{job['id']}").json()["status"] == "queued"
+
+    listed = client.get(f"/api/worlds/{world_id}/document-extraction-jobs")
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [job["id"]]
+
+
+def test_relationship_tracks_strength_period_and_revision_history() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Living Graph"}).json()["id"]
+    source_id = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Mira"},
+    ).json()["id"]
+    target_id = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "faction", "name": "Archive"},
+    ).json()["id"]
+    created = client.post(
+        f"/api/worlds/{world_id}/relationships",
+        json={
+            "source_entity_id": source_id,
+            "target_entity_id": target_id,
+            "type": "member_of",
+            "confidence": 0.85,
+            "weight": 4.5,
+            "valid_from": "Year 315",
+            "evidence": "The archive register names Mira.",
+        },
+    )
+    assert created.status_code == 201, created.text
+    relationship_id = created.json()["id"]
+
+    updated = client.patch(
+        f"/api/relationships/{relationship_id}",
+        json={
+            "weight": 8,
+            "confidence": 1,
+            "valid_to": "Year 318",
+            "effective_at": "Year 317",
+            "change_note": "Mira became the archive keeper.",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["weight"] == 8
+    assert updated.json()["valid_to"] == "Year 318"
+
+    revisions = client.get(f"/api/worlds/{world_id}/relationship-revisions").json()
+    assert len(revisions) == 2
+    assert revisions[0]["effective_at"] == "Year 317"
+    assert revisions[0]["change_note"] == "Mira became the archive keeper."
+    assert revisions[1]["weight"] == 4.5

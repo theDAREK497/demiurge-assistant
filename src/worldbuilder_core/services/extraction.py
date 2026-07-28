@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from worldbuilder_core.models import EntityType, VerificationStatus
 from worldbuilder_core.schemas import ExtractedEntityDraft, ExtractionPayload, LLMChatRequest, LLMMessage
+from worldbuilder_core.services.world_configuration import normalize_key
 
 
 class ExtractionParseError(Exception):
@@ -36,6 +37,12 @@ ENTITY_TYPE_ALIASES = {
     "incident": "event",
     "clue": "clue",
     "hint": "clue",
+    "evidence": "clue",
+    "proof": "clue",
+    "lead": "clue",
+    "улика": "clue",
+    "доказательство": "clue",
+    "зацепка": "clue",
     "concept": "concept",
     "setting_element": "concept",
     "setting": "concept",
@@ -96,6 +103,7 @@ async def extract_payload_with_llm(
     output_language: str = "ru",
     model: str | None = None,
     intent_text: str | None = None,
+    truncate_excess_entities: bool = False,
 ) -> ExtractionPayload:
     extraction_request = build_extraction_request(
         source_text=source_text,
@@ -107,7 +115,11 @@ async def extract_payload_with_llm(
     )
     completion = await llm_client.chat(extraction_request)
     try:
-        payload = parse_extraction_payload(completion.message.content, max_entities=max_entities)
+        payload = parse_extraction_payload(
+            completion.message.content,
+            max_entities=max_entities,
+            truncate_excess_entities=truncate_excess_entities,
+        )
     except ExtractionParseError as first_error:
         repair_request = build_repair_request(
             original_request=extraction_request,
@@ -115,12 +127,17 @@ async def extract_payload_with_llm(
             error=str(first_error),
         )
         repaired_completion = await llm_client.chat(repair_request)
-        payload = parse_extraction_payload(repaired_completion.message.content, max_entities=max_entities)
+        payload = parse_extraction_payload(
+            repaired_completion.message.content,
+            max_entities=max_entities,
+            truncate_excess_entities=truncate_excess_entities,
+        )
     payload = ensure_requested_quest_entity(
         payload,
         source_text=source_text,
         intent_text=intent_text,
     )
+    payload = compact_extracted_entity_text(payload, source_text)
     return annotate_payload_with_source_excerpts(payload, source_text)
 
 
@@ -137,6 +154,8 @@ def build_extraction_request(
     return LLMChatRequest(
         model=model,
         temperature=0.0,
+        max_tokens=768,
+        response_format=_extraction_response_format(max_entities),
         messages=[
             LLMMessage(
                 role="system",
@@ -144,17 +163,30 @@ def build_extraction_request(
                     "You extract structured wiki updates for Worldbuilder Core. "
                     "Return only valid JSON matching this shape: "
                     '{"entities":[],"relationships":[],"world_rules":[],"random_tables":[],"random_table_rows":[],"notes":[]}. '
-                    "Entity types must be one of: character, location, faction, item, event, clue, concept. "
+                    "Prefer entity types character, location, faction, item, event, clue, concept. "
+                    "When none fits, create a concise stable snake_case entity type; it will be added to the world. "
                     "Never invent stable UUIDs. Use client_id for new entities, and use match_entity_id only "
                     "when the context gives an existing entity UUID. "
                     "Relationships must use source_client_id or source_entity_id, and target_client_id or "
                     "target_entity_id, plus a stable snake_case type and a readable label in the requested language. "
                     "World rules must use condition and effect strings. "
+                    "Create a separate entity for every distinct quest, event, and clue. A clue is concrete evidence, "
+                    "trace, document, testimony, anomaly, or fact that can lead to a conclusion; use type 'clue'. "
+                    "Never merge several events or quests into one entity and never copy the whole source text into "
+                    "an entity description. Keep each summary under 500 characters and each description focused only "
+                    "on that entity. "
                     "When the text describes a quest or mission, always create one primary event entity tagged 'quest'; "
                     "supporting locations, characters, and items do not replace the quest entity. "
+                    "For every event and quest, copy its explicit date, era, sequence marker, or order into "
+                    "attributes.timeline_date. Do not invent a date when none is stated. "
+                    "Every relationship must include confidence and weight. Confidence rubric: 1.0 only for an "
+                    "explicitly confirmed statement, 0.85 for a direct but contextual statement, 0.65 for a strong "
+                    "inference, 0.4 for a weak hypothesis. Weight is relationship strength from 0 to 10. Include "
+                    "valid_from, valid_to, and evidence when the text provides them. "
                     "For a new random table use random_tables with client_id, name, description, and is_secret. "
                     "Its rows must use table_client_id. For an existing table use table_id from context. "
                     "Never represent random tables or their rows as entities or relationships. "
+                    "Do not use LaTeX or dollar-delimited math. Write coordinates and symbols as plain text. "
                     f"Write all names, summaries, descriptions, world rule conditions/effects, and notes in {language_name}. "
                     f"Extract at most {max_entities} entities. "
                     "Use status 'unknown' when uncertain, otherwise use 'proposed'."
@@ -172,6 +204,131 @@ def build_extraction_request(
     )
 
 
+def _extraction_response_format(max_entities: int) -> dict:
+    string = {"type": "string", "maxLength": 500}
+    long_string = {"type": "string", "maxLength": 2_000}
+    boolean = {"type": "boolean"}
+    number = {"type": "number"}
+    string_array = {"type": "array", "items": string, "maxItems": 20}
+
+    def object_array(properties: dict, required: list[str], max_items: int) -> dict:
+        return {
+            "type": "array",
+            "maxItems": max_items,
+            "items": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
+            },
+        }
+
+    entity_attributes = {
+        "type": "object",
+        "properties": {
+            "timeline_date": string,
+            "module": string,
+            "quest_status": string,
+        },
+        "additionalProperties": False,
+    }
+    schema = {
+        "type": "object",
+        "properties": {
+            "entities": object_array(
+                {
+                    "client_id": string,
+                    "match_entity_id": string,
+                    "type": string,
+                    "name": string,
+                    "summary": string,
+                    "description": long_string,
+                    "aliases": string_array,
+                    "tags": string_array,
+                    "is_secret": boolean,
+                    "status": string,
+                    "attributes": entity_attributes,
+                },
+                ["type", "name"],
+                max_entities,
+            ),
+            "relationships": object_array(
+                {
+                    "source_client_id": string,
+                    "source_entity_id": string,
+                    "target_client_id": string,
+                    "target_entity_id": string,
+                    "type": string,
+                    "label": string,
+                    "description": long_string,
+                    "confidence": number,
+                    "weight": number,
+                    "valid_from": string,
+                    "valid_to": string,
+                    "evidence": long_string,
+                    "is_secret": boolean,
+                    "status": string,
+                },
+                ["type"],
+                12,
+            ),
+            "world_rules": object_array(
+                {
+                    "priority": {"type": "integer"},
+                    "condition": long_string,
+                    "effect": long_string,
+                    "tags": string_array,
+                    "is_active": boolean,
+                    "is_secret": boolean,
+                    "status": string,
+                },
+                ["condition", "effect"],
+                6,
+            ),
+            "random_tables": object_array(
+                {
+                    "client_id": string,
+                    "name": string,
+                    "description": long_string,
+                    "is_secret": boolean,
+                },
+                ["client_id", "name"],
+                4,
+            ),
+            "random_table_rows": object_array(
+                {
+                    "table_id": string,
+                    "table_client_id": string,
+                    "label": string,
+                    "result": long_string,
+                    "weight": {"type": "integer"},
+                    "is_secret": boolean,
+                },
+                ["result"],
+                12,
+            ),
+            "notes": {"type": "array", "items": long_string, "maxItems": 5},
+        },
+        "required": [
+            "entities",
+            "relationships",
+            "world_rules",
+            "random_tables",
+            "random_table_rows",
+            "notes",
+        ],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "json_schema",
+            "json_schema": {
+                "name": "worldbuilder_extraction",
+                "strict": False,
+                "schema": schema,
+        },
+    }
+
+
 def build_repair_request(
     *,
     original_request: LLMChatRequest,
@@ -181,6 +338,7 @@ def build_repair_request(
     return LLMChatRequest(
         model=original_request.model,
         temperature=0.0,
+        response_format=original_request.response_format,
         messages=[
             *original_request.messages,
             LLMMessage(role="assistant", content=broken_content),
@@ -197,13 +355,20 @@ def build_repair_request(
                     "Use random_tables for new tables and random_table_rows for entries. New rows must reference "
                     "a new table_client_id; existing rows must use only table_id values from context. "
                     "A quest must be an event entity with the tag 'quest'."
+                    " Split distinct quests, events, and clues into separate entities. Put explicit event dates in "
+                    "attributes.timeline_date. Relationship confidence must follow the 1.0/0.85/0.65/0.4 rubric."
                 ),
             ),
         ],
     )
 
 
-def parse_extraction_payload(content: str, *, max_entities: int) -> ExtractionPayload:
+def parse_extraction_payload(
+    content: str,
+    *,
+    max_entities: int,
+    truncate_excess_entities: bool = False,
+) -> ExtractionPayload:
     try:
         raw = json.loads(_extract_json_text(content))
         payload = ExtractionPayload.model_validate(_normalize_extraction_payload(raw))
@@ -211,6 +376,24 @@ def parse_extraction_payload(content: str, *, max_entities: int) -> ExtractionPa
         raise ExtractionParseError(str(exc)) from exc
 
     if len(payload.entities) > max_entities:
+        if truncate_excess_entities:
+            original_client_ids = {entity.client_id for entity in payload.entities if entity.client_id}
+            kept_entities = payload.entities[:max_entities]
+            kept_client_ids = {entity.client_id for entity in kept_entities if entity.client_id}
+            kept_relationships = [
+                relationship
+                for relationship in payload.relationships
+                if not (
+                    relationship.source_client_id in original_client_ids - kept_client_ids
+                    or relationship.target_client_id in original_client_ids - kept_client_ids
+                )
+            ]
+            return payload.model_copy(
+                update={
+                    "entities": kept_entities,
+                    "relationships": kept_relationships,
+                }
+            )
         raise ExtractionParseError(f"Extracted {len(payload.entities)} entities; maximum is {max_entities}")
     return payload
 
@@ -248,7 +431,7 @@ def ensure_requested_quest_entity(
             type=EntityType.event,
             name=title[:200],
             summary=_extract_quest_summary(source_text),
-            description=source_text,
+            description=_extract_quest_description(source_text),
             tags=["quest"],
             status=VerificationStatus.proposed,
             attributes={"module": "quest"},
@@ -351,6 +534,43 @@ def _extract_quest_summary(source_text: str) -> str | None:
         if clean and not QUEST_REQUEST_PATTERN.fullmatch(clean) and not clean.lower().startswith(("hello", "привет")):
             return clean[:500]
     return None
+
+
+def _extract_quest_description(source_text: str) -> str | None:
+    paragraphs = []
+    for paragraph in re.split(r"\n\s*\n", source_text):
+        clean = _strip_markdown(paragraph)
+        if not clean:
+            continue
+        paragraphs.append(clean)
+        if sum(len(item) for item in paragraphs) >= 1_500:
+            break
+    description = "\n\n".join(paragraphs).strip()
+    return description[:2_000] or None
+
+
+def compact_extracted_entity_text(
+    payload: ExtractionPayload,
+    source_text: str,
+) -> ExtractionPayload:
+    source_normalized = re.sub(r"\s+", " ", source_text).strip()
+    entities = []
+    for entity in payload.entities:
+        description = entity.description
+        limit = 2_500 if entity.type in {EntityType.event, EntityType.clue} else 8_000
+        if description:
+            normalized = re.sub(r"\s+", " ", description).strip()
+            copied_whole_source = (
+                len(source_normalized) > 2_000
+                and len(normalized) >= len(source_normalized) * 0.8
+                and normalized[:500] == source_normalized[:500]
+            )
+            if copied_whole_source:
+                description = entity.summary
+            elif len(description) > limit:
+                description = description[:limit].rsplit(" ", 1)[0].rstrip() + "..."
+        entities.append(entity.model_copy(update={"description": description}))
+    return payload.model_copy(update={"entities": entities})
 
 
 def _strip_markdown(value: str) -> str:
@@ -468,7 +688,11 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
         if not isinstance(raw_entity, dict):
             continue
 
-        name = _clean_string(raw_entity.get("name"))
+        name = _clean_string(raw_entity.get("name") or raw_entity.get("title"))
+        if not name:
+            summary_name = _clean_string(raw_entity.get("summary"))
+            if summary_name:
+                name = re.split(r"(?<=[.!?])\s", summary_name, maxsplit=1)[0][:200]
         if not name:
             continue
 
@@ -496,6 +720,21 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
         ) and "quest" not in tags:
             tags.append("quest")
 
+        attributes = _normalize_attributes(raw_entity.get("attributes"))
+        existing_timeline_date = _clean_optional_fact(attributes.get("timeline_date"))
+        if existing_timeline_date:
+            attributes["timeline_date"] = existing_timeline_date[:120]
+        else:
+            attributes.pop("timeline_date", None)
+        timeline_date = _clean_optional_fact(
+            raw_entity.get("timeline_date")
+            or raw_entity.get("date")
+            or raw_entity.get("event_date")
+            or raw_entity.get("time")
+        )
+        if timeline_date and "timeline_date" not in attributes:
+            attributes["timeline_date"] = timeline_date[:120]
+
         entity = {
             "client_id": client_id,
             "match_entity_id": match_entity_id,
@@ -507,7 +746,7 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
             "tags": tags,
             "is_secret": bool(raw_entity.get("is_secret", False)),
             "status": _normalize_status(raw_entity.get("status")),
-            "attributes": _normalize_attributes(raw_entity.get("attributes")),
+            "attributes": attributes,
         }
         entities.append(entity)
 
@@ -551,6 +790,7 @@ def _normalize_relationships(raw_relationships: object, entity_aliases: dict[str
         if (not source_client_id and not source_entity_id) or (not target_client_id and not target_entity_id):
             continue
 
+        attributes = _normalize_attributes(raw_relationship.get("attributes"))
         relationships.append(
             {
                 "source_client_id": source_client_id,
@@ -561,9 +801,23 @@ def _normalize_relationships(raw_relationships: object, entity_aliases: dict[str
                 "label": _clean_string(raw_relationship.get("label")),
                 "description": _clean_string(raw_relationship.get("description")),
                 "confidence": _normalize_confidence(raw_relationship.get("confidence")),
+                "weight": _normalize_relationship_weight(
+                    raw_relationship.get("weight") or attributes.get("weight")
+                ),
+                "valid_from": _clean_optional_fact(
+                    raw_relationship.get("valid_from") or attributes.get("valid_from")
+                ),
+                "valid_to": _clean_optional_fact(
+                    raw_relationship.get("valid_to") or attributes.get("valid_to")
+                ),
+                "evidence": _clean_optional_fact(
+                    raw_relationship.get("evidence")
+                    or raw_relationship.get("source_excerpt")
+                    or attributes.get("evidence")
+                ),
                 "is_secret": bool(raw_relationship.get("is_secret", False)),
                 "status": _normalize_status(raw_relationship.get("status")),
-                "attributes": _normalize_attributes(raw_relationship.get("attributes")),
+                "attributes": attributes,
             }
         )
 
@@ -809,15 +1063,25 @@ def annotate_payload_with_source_excerpts(payload: ExtractionPayload, source_tex
     for relationship in payload.relationships:
         source_label = entity_labels.get(relationship.source_client_id or "", relationship.source_entity_id or "")
         target_label = entity_labels.get(relationship.target_client_id or "", relationship.target_entity_id or "")
+        source_excerpt = (
+            relationship.source_excerpt
+            or _find_best_excerpt(
+                sentences,
+                [
+                    source_label,
+                    target_label,
+                    relationship.label or "",
+                    relationship.type,
+                    relationship.description or "",
+                ],
+            )
+            or fallback_excerpt
+        )
         relationships.append(
             relationship.model_copy(
                 update={
-                    "source_excerpt": relationship.source_excerpt
-                    or _find_best_excerpt(
-                        sentences,
-                        [source_label, target_label, relationship.label or "", relationship.type, relationship.description or ""],
-                    )
-                    or fallback_excerpt,
+                    "source_excerpt": source_excerpt,
+                    "evidence": relationship.evidence or source_excerpt,
                 }
             )
         )
@@ -870,7 +1134,7 @@ def _normalize_entity_type(raw_type: object) -> str:
     value = _clean_string(raw_type)
     if not value:
         return "concept"
-    return ENTITY_TYPE_ALIASES.get(value.lower(), "concept")
+    return ENTITY_TYPE_ALIASES.get(value.lower(), normalize_key(value))
 
 
 def _normalize_status(raw_status: object) -> str:
@@ -900,12 +1164,40 @@ def _normalize_confidence(raw_confidence: object) -> float:
     try:
         confidence = float(raw_confidence)
     except (TypeError, ValueError):
-        return 1.0
+        return 0.65
     return max(0.0, min(confidence, 1.0))
+
+
+def _normalize_relationship_weight(raw_weight: object) -> float:
+    try:
+        weight = float(raw_weight)
+    except (TypeError, ValueError):
+        return 1.0
+    return max(0.0, min(weight, 10.0))
 
 
 def _normalize_attributes(raw_attributes: object) -> dict:
     return dict(raw_attributes) if isinstance(raw_attributes, dict) else {}
+
+
+def _clean_optional_fact(value: object) -> str | None:
+    cleaned = _clean_string(value)
+    if not cleaned:
+        return None
+    if cleaned.casefold() in {
+        "-",
+        "—",
+        "n/a",
+        "none",
+        "null",
+        "unknown",
+        "not specified",
+        "не указано",
+        "неизвестно",
+        "нет",
+    }:
+        return None
+    return cleaned
 
 
 def _normalize_string_list(raw_values: object) -> list[str]:

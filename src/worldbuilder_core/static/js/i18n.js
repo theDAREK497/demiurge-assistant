@@ -44,7 +44,7 @@ function applyStaticTranslations() {
 }
 
 async function loadDictionary(lang) {
-  const response = await fetch(`/app/i18n/${lang}.json?v=20260715.1`, { cache: "no-store" });
+  const response = await fetch(`/app/i18n/${lang}.json?v=20260728.3`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Cannot load language file: ${lang}`);
   }

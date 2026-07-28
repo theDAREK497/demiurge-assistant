@@ -39,6 +39,17 @@ class OpenAICompatibleLLMClient:
                     headers=self._headers(),
                     json=payload,
                 )
+                if (
+                    response.status_code == 400
+                    and "response_format" in payload
+                    and "grammar" in response.text.casefold()
+                ):
+                    payload.pop("response_format", None)
+                    response = await client.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    )
         except httpx.HTTPError as exc:
             detail = str(exc).strip() or exc.__class__.__name__
             if isinstance(exc, httpx.TimeoutException):
@@ -54,6 +65,34 @@ class OpenAICompatibleLLMClient:
             raise LLMProviderError("LLM provider returned invalid JSON") from exc
 
         return parse_openai_chat_response(data, fallback_model=model)
+
+    async def embeddings(self, inputs: list[str], *, model: str | None = None) -> tuple[str, list[list[float]]]:
+        selected_model = model or self.default_model
+        if not inputs:
+            return selected_model, []
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
+                response = await client.post(
+                    f"{self.base_url}/embeddings",
+                    headers=self._headers(),
+                    json={"model": selected_model, "input": inputs},
+                )
+        except httpx.HTTPError as exc:
+            raise LLMProviderError(f"Embedding provider request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise LLMProviderError(f"Embedding provider returned HTTP {response.status_code}: {response.text}")
+        try:
+            payload = response.json()
+            rows = sorted(payload["data"], key=lambda row: row.get("index", 0))
+            vectors = [[float(value) for value in row["embedding"]] for row in rows]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LLMProviderError("Embedding provider returned malformed vectors") from exc
+        if len(vectors) != len(inputs) or any(not vector for vector in vectors):
+            raise LLMProviderError("Embedding provider returned an unexpected vector count")
+        dimensions = len(vectors[0])
+        if any(len(vector) != dimensions for vector in vectors):
+            raise LLMProviderError("Embedding vectors have inconsistent dimensions")
+        return str(payload.get("model") or selected_model), vectors
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

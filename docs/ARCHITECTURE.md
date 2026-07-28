@@ -28,10 +28,15 @@ Current route modules:
 - `worlds`;
 - `entities`;
 - `relationships`;
-- `world_rules`.
-- `import_export`.
-- `llm`.
-- `retrieval`.
+- `world_rules`;
+- `map_pins`;
+- `random_tables`;
+- `detective_board`;
+- `documents`;
+- `assets`;
+- `import_export`;
+- `llm`;
+- `retrieval`;
 - `proposals`.
 
 Shared application settings are stored separately from world data in
@@ -45,7 +50,17 @@ Top-level container for one campaign or fictional universe.
 
 ### Entity
 
-Wiki card with a stable UUID. Current supported types:
+Wiki card with a stable UUID. `Entity.type` is a normalized string. Built-in
+types remain `character`, `location`, `faction`, `item`, `event`, `clue`, and
+`concept`, but each world may add more.
+
+`EntityTypeDefinition` stores the world-local key, display name, color, order,
+and built-in flag. Unknown types arriving through an applied AI proposal are
+registered automatically.
+
+`QuestStatusDefinition` stores ordered, colored Kanban columns. Quest cards
+persist `quest_status` and `quest_order` in `Entity.attributes`; timeline cards
+persist `timeline_order` there as well.
 
 - `character`;
 - `location`;
@@ -90,6 +105,23 @@ Player mode must not reveal:
 - secret rules.
 
 Master mode can see everything.
+
+Visibility is also an authorization boundary. Remote Player requests can read
+only explicitly public role-aware routes and roll public random tables. Master
+reads, settings, exports, drafts, and all mutations require either trusted
+loopback access or `X-Worldbuilder-Master-Token`. The selected UI role alone is
+not accepted as authorization.
+
+## Runtime Safety
+
+- request bodies are capped before full parsing;
+- uploaded images are size, MIME, and signature checked;
+- generated upload files are removed when no card references them, and stale
+  abandoned uploads are cleaned after one day;
+- SQLite foreign-key enforcement is enabled on every connection;
+- relationship, map, random-table, and detective-board reads eager-load related
+  records to avoid N+1 query growth;
+- browser responses include CSP and common security headers.
 
 ## Verification Status
 
@@ -149,7 +181,68 @@ calling the OpenAI-compatible LLM adapter.
 When `save_to_wiki=true`, the endpoint also runs extraction over the assistant
 completion and stores the result as a pending proposal.
 
-Embeddings can be added later behind the same service interface.
+Imported knowledge sources participate in hybrid retrieval. Lexical matches are
+combined with cosine similarity from an OpenAI-compatible embedding endpoint.
+Indexing is resumable in bounded batches and falls back to lexical retrieval
+when no embedding model is configured or the provider is unavailable.
+
+The relationship graph is rendered by a locally bundled Cytoscape.js build.
+Node positions and viewport state are stored per world and viewer role. Current
+relationship confidence controls edge opacity; relationship weight controls
+edge width. Relationships also carry free-form world dates, evidence, and an
+append-only revision history.
+
+### Large Document Ingestion
+
+Master users can upload `.txt` and `.docx` sources as a raw streamed request.
+DOCX text is read with the standard library, so the pipeline has no optional
+Word dependency.
+
+```text
+streamed upload
+  -> source SHA-256 guard
+  -> resumable chunk manifest
+  -> batches of at most 500 chunks
+  -> normalized SHA-256 exact deduplication
+  -> conservative SimHash near-duplicate check
+  -> shared knowledge chunk + per-document position link
+  -> role-aware retrieval for chat
+```
+
+Each batch commits progress. Failed or paused work can resume without writing
+the completed positions again. Secret sources are never added to Player
+context. The local SQLite runtime is suitable for one-machine use; a
+Multi-worker deployment uses PostgreSQL, pgvector search, and an external job
+worker.
+
+After chunking, the master can enqueue bounded AI extraction:
+
+```text
+ready document
+  -> leased document_extraction_job
+  -> one source chunk per worker pass
+  -> structured extraction and world-aware matching
+  -> proposal-level deduplication
+  -> pending proposals for manual review
+```
+
+Extraction inherits source secrecy, retries the current chunk after provider or
+schema failures, and never applies results directly to the world.
+
+The production path now provides that split:
+
+```text
+FastAPI -> embedding_jobs/document_extraction_jobs <- AI worker(s)
+   |                                  |
+   +---------- PostgreSQL ------------+
+                + pgvector
+                + HNSW cosine index
+```
+
+Workers claim jobs with `FOR UPDATE SKIP LOCKED`. A lease and heartbeat allow a
+different worker to recover work after a crashed process. Provider failures are
+retried up to five times. SQLite keeps a single-machine fallback without
+`SKIP LOCKED` or a database vector index.
 
 ### Import/Export
 

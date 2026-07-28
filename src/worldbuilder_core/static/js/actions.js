@@ -1,6 +1,6 @@
-import { api } from "./api.js?v=20260715.1";
-import { $, toast } from "./dom.js?v=20260715.1";
-import { language, t } from "./i18n.js?v=20260715.1";
+import { api, apiRaw } from "./api.js?v=20260728.3";
+import { $, toast } from "./dom.js?v=20260728.3";
+import { language, t } from "./i18n.js?v=20260728.3";
 import {
   createChatThreadFromMessages,
   deleteChatThread as deleteStoredChatThread,
@@ -10,7 +10,7 @@ import {
   selectedWorld,
   state,
   switchChatThread,
-} from "./state.js?v=20260715.1";
+} from "./state.js?v=20260728.3";
 import {
   activateTab,
   closeEntityDrawer,
@@ -24,16 +24,18 @@ import {
   renderDetectiveNodeFormMode,
   renderEntityFormMode,
   renderLlmConfig,
+  renderDocuments,
   renderMapPinFormMode,
   renderRelationshipFormMode,
   renderRandomTableFormMode,
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
-} from "./render.js?v=20260715.1";
+} from "./render.js?v=20260728.3";
 
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 let worldDataAbortController = null;
+const documentExtractionPolling = {};
 
 export function splitTags(value) {
   return value
@@ -65,7 +67,7 @@ function normalizeStaticControlLabels() {
 }
 
 function isSupportedEntityType(value) {
-  return ["character", "location", "faction", "item", "event", "clue", "concept"].includes(value);
+  return state.entityTypes.some((definition) => definition.key === value);
 }
 
 export async function loadHealth() {
@@ -94,6 +96,7 @@ export async function saveLlmConfig(event) {
     extractor_model: $("llmExtractorModel").value.trim() || null,
     summarizer_model: $("llmSummarizerModel").value.trim() || null,
     critic_model: $("llmCriticModel").value.trim() || null,
+    embedding_model: $("llmEmbeddingModel").value.trim() || null,
     api_key: $("llmApiKey").value.trim() || null,
     clear_api_key: $("llmClearApiKey").checked,
     timeout_seconds: Number($("llmTimeout").value),
@@ -103,6 +106,10 @@ export async function saveLlmConfig(event) {
     method: "PUT",
     body: JSON.stringify(payload),
   });
+  if (state.selectedWorldId) {
+    state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embedding-status`);
+    renderDocuments();
+  }
   renderLlmConfig();
   toast(t("llm.saved"));
 }
@@ -147,13 +154,19 @@ export async function loadWorldData() {
   const { signal } = worldDataAbortController;
   if (!state.selectedWorldId) {
     state.entities = [];
+    state.entityTypes = [];
+    state.questStatuses = [];
     state.relationships = [];
+    state.relationshipRevisions = [];
     state.rules = [];
     state.mapPins = [];
     state.randomTables = [];
     state.detectiveNodes = [];
     state.detectiveConnections = [];
     state.proposals = [];
+    state.documents = [];
+    state.documentExtractionJobs = {};
+    state.embeddingStatus = null;
     state.selectedEntityId = null;
     state.selectedReaderType = null;
     state.selectedReaderSourceId = null;
@@ -171,11 +184,21 @@ export async function loadWorldData() {
     results = await Promise.all([
       api(`/worlds/${worldId}/entities?role=${role}${queryPart}`, { signal }),
       api(`/worlds/${worldId}/relationships?role=${role}`, { signal }),
+      role === "master"
+        ? api(`/worlds/${worldId}/relationship-revisions`, { signal })
+        : Promise.resolve([]),
       api(`/worlds/${worldId}/world-rules?role=${role}&active_only=false`, { signal }),
       api(`/worlds/${worldId}/map-pins?role=${role}`, { signal }),
       api(`/worlds/${worldId}/random-tables?role=${role}`, { signal }),
       api(`/worlds/${worldId}/detective-board?role=${role}`, { signal }),
+      api(`/worlds/${worldId}/entity-types?role=${role}`, { signal }),
+      api(`/worlds/${worldId}/quest-statuses?role=${role}`, { signal }),
       role === "master" ? api(`/worlds/${worldId}/proposals`, { signal }) : Promise.resolve([]),
+      role === "master" ? api(`/worlds/${worldId}/documents`, { signal }) : Promise.resolve([]),
+      role === "master"
+        ? api(`/worlds/${worldId}/document-extraction-jobs`, { signal })
+        : Promise.resolve([]),
+      role === "master" ? api(`/worlds/${worldId}/embedding-status`, { signal }) : Promise.resolve(null),
       role === "master" && !state.llmConfig ? api("/llm/config", { signal }) : Promise.resolve(null),
     ]);
   } catch (error) {
@@ -183,21 +206,189 @@ export async function loadWorldData() {
     throw error;
   }
   if (signal.aborted || state.selectedWorldId !== worldId || currentRole() !== role) return;
-  const [entities, relationships, rules, mapPins, randomTables, detectiveBoard, proposals, llmConfig] = results;
+  const [
+    entities,
+    relationships,
+    relationshipRevisions,
+    rules,
+    mapPins,
+    randomTables,
+    detectiveBoard,
+    entityTypes,
+    questStatuses,
+    proposals,
+    documents,
+    extractionJobs,
+    embeddingStatus,
+    llmConfig,
+  ] = results;
   state.entities = entities;
   state.relationships = relationships;
+  state.relationshipRevisions = relationshipRevisions;
   state.rules = rules;
   state.mapPins = mapPins;
   state.randomTables = randomTables;
   state.detectiveNodes = detectiveBoard.nodes;
   state.detectiveConnections = detectiveBoard.connections;
+  state.entityTypes = entityTypes;
+  state.questStatuses = questStatuses;
   state.proposals = proposals;
+  state.documents = documents;
+  state.documentExtractionJobs = Object.fromEntries(
+    extractionJobs.map((job) => [job.document_id, job]).reverse(),
+  );
+  state.embeddingStatus = embeddingStatus;
   if (llmConfig) {
     state.llmConfig = llmConfig;
     renderLlmConfig();
   }
   loadChatThreadsForContext(state.selectedWorldId, role);
   renderAllWorldData();
+  extractionJobs
+    .filter((job) => ["queued", "running"].includes(job.status))
+    .forEach((job) => monitorDocumentExtraction(job));
+}
+
+export async function uploadKnowledgeDocument(event) {
+  event.preventDefault();
+  if (!requireWorld()) return;
+  const input = $("documentFile");
+  const file = input.files?.[0];
+  if (!file) {
+    toast(t("documents.chooseFile"), "error");
+    return;
+  }
+  const params = new URLSearchParams({
+    filename: file.name,
+    is_secret: String($("documentSecret").checked),
+  });
+  const document = await apiRaw(`/worlds/${state.selectedWorldId}/documents?${params}`, {
+    method: "POST",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  state.documents.unshift(document);
+  input.value = "";
+  renderDocuments();
+  toast(t("documents.uploaded"));
+  await processKnowledgeDocument(document.id);
+}
+
+export async function processKnowledgeDocument(documentId) {
+  const worldId = state.selectedWorldId;
+  state.documentProcessing[documentId] = true;
+  renderDocuments();
+  try {
+    while (state.selectedWorldId === worldId && state.documentProcessing[documentId]) {
+      const result = await api(`/documents/${documentId}/process?batch_size=100`, { method: "POST" });
+      replaceDocument(result.document);
+      renderDocuments();
+      if (result.document.status === "ready" || result.processed_in_batch === 0) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    }
+  } finally {
+    delete state.documentProcessing[documentId];
+    renderDocuments();
+  }
+}
+
+export async function pauseKnowledgeDocument(documentId) {
+  state.documentProcessing[documentId] = false;
+  replaceDocument(await api(`/documents/${documentId}/pause`, { method: "POST" }));
+  renderDocuments();
+}
+
+export async function resumeKnowledgeDocument(documentId) {
+  replaceDocument(await api(`/documents/${documentId}/resume`, { method: "POST" }));
+  renderDocuments();
+  await processKnowledgeDocument(documentId);
+}
+
+export async function deleteKnowledgeDocument(documentId) {
+  const document = state.documents.find((item) => item.id === documentId);
+  if (!document || !window.confirm(t("documents.deleteConfirm", { name: document.filename }))) return;
+  state.documentProcessing[documentId] = false;
+  await api(`/documents/${documentId}`, { method: "DELETE" });
+  state.documents = state.documents.filter((item) => item.id !== documentId);
+  delete state.documentExtractionJobs[documentId];
+  renderDocuments();
+}
+
+export async function extractKnowledgeDocument(documentId) {
+  if (!requireWorld()) return;
+  const job = await api(
+    `/documents/${documentId}/extract?output_language=${encodeURIComponent(language())}`,
+    { method: "POST" },
+  );
+  state.documentExtractionJobs[documentId] = job;
+  renderDocuments();
+  toast(t("documents.extractionQueued"));
+  await monitorDocumentExtraction(job);
+}
+
+async function monitorDocumentExtraction(initialJob) {
+  if (documentExtractionPolling[initialJob.id]) return documentExtractionPolling[initialJob.id];
+  const worldId = state.selectedWorldId;
+  documentExtractionPolling[initialJob.id] = (async () => {
+    let job = initialJob;
+    while (
+      state.selectedWorldId === worldId &&
+      ["queued", "running"].includes(job.status)
+    ) {
+      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      job = await api(`/document-extraction-jobs/${job.id}`);
+      state.documentExtractionJobs[job.document_id] = job;
+      renderDocuments();
+    }
+    if (state.selectedWorldId !== worldId) return;
+    if (job.status === "completed") {
+      state.proposals = await api(`/worlds/${worldId}/proposals`);
+      toast(t("documents.extractionReady", { count: job.proposal_count }));
+    } else if (job.status === "failed") {
+      toast(job.error || t("documents.extractionFailed"), "error");
+    }
+  })().finally(() => {
+    delete documentExtractionPolling[initialJob.id];
+    renderDocuments();
+  });
+  return documentExtractionPolling[initialJob.id];
+}
+
+function replaceDocument(document) {
+  const index = state.documents.findIndex((item) => item.id === document.id);
+  if (index >= 0) state.documents[index] = document;
+  else state.documents.unshift(document);
+}
+
+export async function buildEmbeddingIndex() {
+  if (!requireWorld() || state.embeddingBusy) return;
+  state.embeddingBusy = true;
+  state.embeddingJob = null;
+  renderDocuments();
+  try {
+    let job = await api(`/worlds/${state.selectedWorldId}/embeddings/process?batch_size=16`, { method: "POST" });
+    state.embeddingJob = job;
+    while (state.embeddingBusy && !["completed", "failed", "cancelled"].includes(job.status)) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+      job = await api(`/embedding-jobs/${job.id}`);
+      state.embeddingJob = job;
+      renderDocuments();
+    }
+    if (job.status === "failed") throw new Error(job.error || t("embeddings.failed"));
+    state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embedding-status`);
+    toast(t("embeddings.ready"));
+  } finally {
+    state.embeddingBusy = false;
+    renderDocuments();
+  }
+}
+
+export async function clearEmbeddingIndex() {
+  if (!requireWorld() || !window.confirm(t("embeddings.clearConfirm"))) return;
+  state.embeddingBusy = false;
+  state.embeddingJob = null;
+  state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embeddings`, { method: "DELETE" });
+  renderDocuments();
 }
 
 export async function createWorld(event) {
@@ -226,11 +417,14 @@ export async function createEntity(event) {
   const attributes = {};
   const imageUrl = $("entityImageUrl").value.trim();
   const timelineDate = $("entityTimelineDate").value.trim();
+  const color = $("entityColor")?.value;
   if (imageUrl) attributes.image_url = imageUrl;
   if (timelineDate) attributes.timeline_date = timelineDate;
+  if (color) attributes.color = color;
   const mergedAttributes = { ...(existing?.attributes || {}), ...attributes };
   if (!imageUrl) delete mergedAttributes.image_url;
   if (!timelineDate) delete mergedAttributes.timeline_date;
+  if (!color) delete mergedAttributes.color;
 
   const payload = {
     type: $("entityType").value,
@@ -291,6 +485,7 @@ export function editEntity(entityId) {
   $("entityDescription").value = entity.description || "";
   $("entityImageUrl").value = entity.attributes?.image_url || "";
   $("entityTimelineDate").value = entity.attributes?.timeline_date || "";
+  if ($("entityColor")) $("entityColor").value = entity.attributes?.color || entityTypeColor(entity.type);
   $("entityTags").value = (entity.tags || []).join(", ");
   $("entitySecret").checked = Boolean(entity.is_secret);
   renderEntityFormMode();
@@ -301,10 +496,83 @@ export function editEntity(entityId) {
 export function resetEntityForm(options = {}) {
   state.editingEntityId = null;
   $("entityForm").reset();
+  if ($("entityColor")) $("entityColor").value = entityTypeColor($("entityType")?.value);
   renderEntityFormMode();
   if (!options.keepDrawerOpen) {
     closeEntityDrawer();
   }
+}
+
+function entityTypeColor(typeKey) {
+  return state.entityTypes.find((definition) => definition.key === typeKey)?.color || "#6B7280";
+}
+
+export async function createEntityType(event) {
+  event.preventDefault();
+  if (!requireWorld()) return;
+  await api(`/worlds/${state.selectedWorldId}/entity-types`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: $("entityTypeName").value.trim(),
+      color: $("entityTypeColor").value,
+    }),
+  });
+  $("entityTypeForm").reset();
+  $("entityTypeColor").value = "#6B7280";
+  await loadWorldData();
+}
+
+export async function updateEntityType(typeId, payload) {
+  await api(`/entity-types/${typeId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  await loadWorldData();
+}
+
+export async function deleteEntityType(typeId) {
+  if (!confirm(language() === "ru" ? "Удалить тип сущности?" : "Delete entity type?")) return;
+  await api(`/entity-types/${typeId}`, { method: "DELETE" });
+  await loadWorldData();
+}
+
+export async function createQuestStatus(event) {
+  event.preventDefault();
+  if (!requireWorld()) return;
+  await api(`/worlds/${state.selectedWorldId}/quest-statuses`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: $("questStatusName").value.trim(),
+      color: $("questStatusColor").value,
+    }),
+  });
+  $("questStatusForm").reset();
+  $("questStatusColor").value = "#6B7280";
+  await loadWorldData();
+}
+
+export async function updateQuestStatus(statusId, payload) {
+  await api(`/quest-statuses/${statusId}`, { method: "PATCH", body: JSON.stringify(payload) });
+  await loadWorldData();
+}
+
+export async function deleteQuestStatus(statusId) {
+  if (!confirm(language() === "ru" ? "Удалить статус? Квесты перейдут в первый оставшийся статус." : "Delete status? Quests will move to the first remaining status.")) return;
+  await api(`/quest-statuses/${statusId}`, { method: "DELETE" });
+  await loadWorldData();
+}
+
+export async function reorderEntities(entityIds, orderAttribute, statusKey = null) {
+  const updates = entityIds.map((entityId, index) => {
+    const entity = state.entities.find((item) => item.id === entityId);
+    if (!entity) return Promise.resolve();
+    const attributes = { ...(entity.attributes || {}), [orderAttribute]: index };
+    if (statusKey !== null) attributes.quest_status = statusKey;
+    entity.attributes = attributes;
+    return api(`/entities/${entityId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ attributes }),
+    });
+  });
+  await Promise.all(updates);
+  await loadWorldData();
 }
 
 export async function uploadEntityImage() {
@@ -350,6 +618,12 @@ export async function createRelationship(event) {
     label: $("relationshipLabel").value.trim() || null,
     description: $("relationshipDescription").value.trim() || null,
     confidence: Number($("relationshipConfidence").value),
+    weight: Number($("relationshipWeight").value),
+    valid_from: $("relationshipValidFrom").value.trim() || null,
+    valid_to: $("relationshipValidTo").value.trim() || null,
+    evidence: $("relationshipEvidence").value.trim() || null,
+    effective_at: $("relationshipEffectiveAt").value.trim() || null,
+    change_note: $("relationshipChangeNote").value.trim() || null,
     is_secret: $("relationshipSecret").checked,
   };
   if (state.editingRelationshipId) {
@@ -379,6 +653,12 @@ export function editRelationship(relationshipId) {
   $("relationshipLabel").value = relationship.label || "";
   $("relationshipDescription").value = relationship.description || "";
   $("relationshipConfidence").value = String(relationship.confidence);
+  $("relationshipWeight").value = String(relationship.weight ?? 1);
+  $("relationshipValidFrom").value = relationship.valid_from || "";
+  $("relationshipValidTo").value = relationship.valid_to || "";
+  $("relationshipEvidence").value = relationship.evidence || "";
+  $("relationshipEffectiveAt").value = relationship.valid_from || "";
+  $("relationshipChangeNote").value = "";
   $("relationshipSecret").checked = Boolean(relationship.is_secret);
   renderRelationshipFormMode();
   $("relationshipType").focus();
@@ -388,6 +668,7 @@ export function resetRelationshipForm() {
   state.editingRelationshipId = null;
   $("relationshipForm").reset();
   $("relationshipConfidence").value = "1";
+  $("relationshipWeight").value = "1";
   renderRelationshipFormMode();
 }
 

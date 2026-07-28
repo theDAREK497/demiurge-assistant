@@ -6,7 +6,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from worldbuilder_core.models import EntityType, ProposalStatus, VerificationStatus, ViewerRole
+from worldbuilder_core.models import ProposalStatus, VerificationStatus, ViewerRole
+from worldbuilder_core.services.world_configuration import normalize_key
 
 
 class ORMModel(BaseModel):
@@ -36,7 +37,7 @@ class WorldSnapshot(WorldRead):
 
 
 class EntityBase(BaseModel):
-    type: EntityType
+    type: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=100_000)
@@ -46,13 +47,18 @@ class EntityBase(BaseModel):
     status: VerificationStatus = VerificationStatus.verified
     attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
 
+    @field_validator("type", mode="before")
+    @classmethod
+    def validate_type(cls, value: str) -> str:
+        return normalize_key(value)
+
 
 class EntityCreate(EntityBase):
     pass
 
 
 class EntityUpdate(BaseModel):
-    type: EntityType | None = None
+    type: str | None = Field(default=None, min_length=1, max_length=80)
     name: str | None = Field(default=None, min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
     description: str | None = Field(default=None, max_length=100_000)
@@ -61,6 +67,11 @@ class EntityUpdate(BaseModel):
     is_secret: bool | None = None
     status: VerificationStatus | None = None
     attributes: dict[str, Any] | None = Field(default=None, max_length=100)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def validate_type(cls, value: str | None) -> str | None:
+        return normalize_key(value) if value is not None else None
 
 
 class EntityRead(EntityBase, ORMModel):
@@ -74,6 +85,82 @@ class EntitySnapshot(EntityRead):
     pass
 
 
+class EntityTypeDefinitionBase(BaseModel):
+    key: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str | None) -> str | None:
+        return normalize_key(value) if value else None
+
+
+class EntityTypeDefinitionCreate(EntityTypeDefinitionBase):
+    pass
+
+
+class EntityTypeDefinitionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    description: str | None = Field(default=None, max_length=500)
+    position: int | None = Field(default=None, ge=0)
+
+
+class EntityTypeDefinitionRead(ORMModel):
+    id: str
+    world_id: str
+    key: str
+    name: str
+    color: str
+    description: str | None
+    is_builtin: bool
+    position: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class EntityTypeDefinitionSnapshot(EntityTypeDefinitionRead):
+    pass
+
+
+class QuestStatusDefinitionBase(BaseModel):
+    key: str | None = Field(default=None, max_length=80)
+    name: str = Field(min_length=1, max_length=120)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str | None) -> str | None:
+        return normalize_key(value) if value else None
+
+
+class QuestStatusDefinitionCreate(QuestStatusDefinitionBase):
+    pass
+
+
+class QuestStatusDefinitionUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    color: str | None = Field(default=None, pattern=r"^#[0-9A-Fa-f]{6}$")
+    position: int | None = Field(default=None, ge=0)
+
+
+class QuestStatusDefinitionRead(ORMModel):
+    id: str
+    world_id: str
+    key: str
+    name: str
+    color: str
+    position: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class QuestStatusDefinitionSnapshot(QuestStatusDefinitionRead):
+    pass
+
+
 class RelationshipBase(BaseModel):
     source_entity_id: str
     target_entity_id: str
@@ -81,6 +168,10 @@ class RelationshipBase(BaseModel):
     label: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=50_000)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    weight: float = Field(default=1.0, ge=0.0, le=10.0)
+    valid_from: str | None = Field(default=None, max_length=120)
+    valid_to: str | None = Field(default=None, max_length=120)
+    evidence: str | None = Field(default=None, max_length=5_000)
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.verified
     attributes: dict[str, Any] = Field(default_factory=dict, max_length=100)
@@ -97,6 +188,12 @@ class RelationshipUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=50_000)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    weight: float | None = Field(default=None, ge=0.0, le=10.0)
+    valid_from: str | None = Field(default=None, max_length=120)
+    valid_to: str | None = Field(default=None, max_length=120)
+    evidence: str | None = Field(default=None, max_length=5_000)
+    effective_at: str | None = Field(default=None, max_length=120)
+    change_note: str | None = Field(default=None, max_length=500)
     is_secret: bool | None = None
     status: VerificationStatus | None = None
     attributes: dict[str, Any] | None = Field(default=None, max_length=100)
@@ -111,6 +208,24 @@ class RelationshipRead(RelationshipBase, ORMModel):
 
 class RelationshipSnapshot(RelationshipRead):
     pass
+
+
+class RelationshipRevisionRead(ORMModel):
+    id: str
+    relationship_id: str
+    source_entity_id: str
+    target_entity_id: str
+    type: str
+    effective_at: str | None
+    weight: float
+    confidence: float
+    valid_from: str | None
+    valid_to: str | None
+    label: str | None
+    description: str | None
+    evidence: str | None
+    change_note: str | None
+    created_at: datetime
 
 
 class WorldRuleBase(BaseModel):
@@ -340,6 +455,8 @@ class WorldExport(BaseModel):
     detective_board_nodes: list[DetectiveBoardNodeSnapshot] = Field(default_factory=list)
     detective_board_connections: list[DetectiveBoardConnectionSnapshot] = Field(default_factory=list)
     proposals: list[ExtractionProposalSnapshot] = Field(default_factory=list)
+    entity_types: list[EntityTypeDefinitionSnapshot] = Field(default_factory=list)
+    quest_statuses: list[QuestStatusDefinitionSnapshot] = Field(default_factory=list)
 
 
 class WorldImportResult(BaseModel):
@@ -369,6 +486,7 @@ class LLMChatRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0, le=1_000_000)
+    response_format: dict[str, Any] | None = None
 
 
 class LLMUsage(BaseModel):
@@ -391,6 +509,7 @@ class LLMConfigRead(BaseModel):
     extractor_model: str | None = None
     summarizer_model: str | None = None
     critic_model: str | None = None
+    embedding_model: str | None = None
     has_api_key: bool
     timeout_seconds: float
     max_entities_per_extract: int
@@ -404,6 +523,7 @@ class LLMConfigUpdate(BaseModel):
     extractor_model: str | None = Field(default=None, max_length=200)
     summarizer_model: str | None = Field(default=None, max_length=200)
     critic_model: str | None = Field(default=None, max_length=200)
+    embedding_model: str | None = Field(default=None, max_length=200)
     api_key: str | None = Field(default=None, max_length=4_096)
     clear_api_key: bool = False
     timeout_seconds: float = Field(gt=0, le=600)
@@ -429,7 +549,96 @@ class WorldContextRead(BaseModel):
     relationships: list[RelationshipRead] = Field(default_factory=list)
     world_rules: list[WorldRuleRead] = Field(default_factory=list)
     random_tables: list[RandomTableRead] = Field(default_factory=list)
+    document_chunks: list["KnowledgeChunkExcerpt"] = Field(default_factory=list)
     context_text: str
+
+
+class KnowledgeDocumentRead(ORMModel):
+    id: str
+    world_id: str
+    filename: str
+    media_type: str
+    sha256: str
+    status: str
+    is_secret: bool
+    total_chars: int
+    total_chunks: int
+    processed_chunks: int
+    duplicate_chunks: int
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class KnowledgeDocumentProcessResult(BaseModel):
+    document: KnowledgeDocumentRead
+    processed_in_batch: int
+    created_in_batch: int
+    duplicates_in_batch: int
+
+
+class KnowledgeChunkExcerpt(BaseModel):
+    chunk_id: str
+    document_id: str
+    filename: str
+    position: int
+    heading: str | None = None
+    content: str
+
+
+class EmbeddingIndexStatus(BaseModel):
+    world_id: str
+    model: str | None
+    total_chunks: int
+    embedded_chunks: int
+    pending_chunks: int
+    dimensions: int | None = None
+
+
+class EmbeddingBatchResult(BaseModel):
+    status: EmbeddingIndexStatus
+    processed_in_batch: int
+
+
+class EmbeddingJobRead(ORMModel):
+    id: str
+    world_id: str
+    model: str
+    status: str
+    batch_size: int
+    total_chunks: int
+    processed_chunks: int
+    attempts: int
+    max_attempts: int
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime | None
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentExtractionJobRead(ORMModel):
+    id: str
+    world_id: str
+    document_id: str
+    proposal_id: str | None
+    status: str
+    next_position: int
+    total_chunks: int
+    processed_chunks: int
+    current_segment: int
+    total_segments: int
+    proposal_count: int
+    output_language: str
+    attempts: int
+    max_attempts: int
+    lease_owner: str | None
+    lease_expires_at: datetime | None
+    heartbeat_at: datetime | None
+    error: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 class WorldLLMChatRequest(BaseModel):
@@ -458,7 +667,7 @@ class ExtractedEntityDraft(BaseModel):
     client_id: str | None = Field(default=None, min_length=1, max_length=80)
     match_entity_id: str | None = None
     source_excerpt: str | None = Field(default=None, max_length=240)
-    type: EntityType
+    type: str = Field(min_length=1, max_length=80)
     name: str = Field(min_length=1, max_length=200)
     summary: str | None = Field(default=None, max_length=500)
     description: str | None = None
@@ -467,6 +676,11 @@ class ExtractedEntityDraft(BaseModel):
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.proposed
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def validate_type(cls, value: str) -> str:
+        return normalize_key(value)
 
 
 class ExtractedRelationshipDraft(BaseModel):
@@ -478,7 +692,11 @@ class ExtractedRelationshipDraft(BaseModel):
     type: str = Field(min_length=1, max_length=80)
     label: str | None = Field(default=None, max_length=200)
     description: str | None = None
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.65, ge=0.0, le=1.0)
+    weight: float = Field(default=1.0, ge=0.0, le=10.0)
+    valid_from: str | None = Field(default=None, max_length=120)
+    valid_to: str | None = Field(default=None, max_length=120)
+    evidence: str | None = Field(default=None, max_length=5_000)
     is_secret: bool = False
     status: VerificationStatus = VerificationStatus.proposed
     attributes: dict[str, Any] = Field(default_factory=dict)

@@ -1,6 +1,6 @@
-import { $, escapeHtml } from "./dom.js?v=20260715.1";
-import { selectedWorld, state } from "./state.js?v=20260715.1";
-import { language, t } from "./i18n.js?v=20260715.1";
+import { $, escapeHtml } from "./dom.js?v=20260728.3";
+import { selectedWorld, state } from "./state.js?v=20260728.3";
+import { language, t } from "./i18n.js?v=20260728.3";
 import {
   applyProposal,
   applySelectedProposal,
@@ -9,6 +9,7 @@ import {
   changeChatThread,
   deleteChatMessage,
   deleteChatThread,
+  deleteEntityType,
   deleteDetectiveConnection,
   deleteDetectiveNode,
   deleteEntity,
@@ -19,6 +20,8 @@ import {
   deleteRule,
   deleteProposal,
   deleteWorld,
+  deleteKnowledgeDocument,
+  deleteQuestStatus,
   editChatMessage,
   editDetectiveConnection,
   editDetectiveNode,
@@ -27,19 +30,28 @@ import {
   editMapPin,
   editRandomTable,
   editRandomTableRow,
+  extractKnowledgeDocument,
   openMapPinEditor,
   persistDetectiveNodePosition,
   rejectProposal,
   renameChatThread,
   loadWorldData,
+  pauseKnowledgeDocument,
+  resumeKnowledgeDocument,
   rollRandomTable,
+  reorderEntities,
   saveChatMessageEdit,
   saveChatThreadRename,
   saveAssistantMessageToWiki,
   setDetectiveNodeDraft,
   setMapPinDraft,
   startCreateEntityWithType,
-} from "./actions.js?v=20260715.1";
+  updateEntityType,
+  updateQuestStatus,
+} from "./actions.js?v=20260728.3";
+
+let graphInstance = null;
+let graphViewportSaveTimer = null;
 
 export function activateTab(tabName) {
   const requestedTab = document.querySelector(`.tab[data-tab="${tabName}"]:not(.hidden)`);
@@ -51,6 +63,9 @@ export function activateTab(tabName) {
   document.querySelectorAll(".tab-panel").forEach((panel) => panel.classList.remove("active"));
   tab.classList.add("active");
   $(`tab-${tab.dataset.tab}`)?.classList.add("active");
+  if (tab.dataset.tab === "graph") {
+    window.setTimeout(() => renderGraph(), 0);
+  }
 }
 
 export function activateModuleView(moduleName) {
@@ -102,6 +117,8 @@ export function renderAllWorldData() {
   }
 
   renderEntities();
+  renderEntityTypeControls();
+  renderWorldConfiguration();
   renderRelationshipOptions();
   renderRelationshipFormMode();
   renderMapPinOptions();
@@ -110,6 +127,7 @@ export function renderAllWorldData() {
   renderRelationships();
   renderRules();
   renderProposals();
+  renderDocuments();
   renderGraph();
   renderTimeline();
   renderModules();
@@ -119,6 +137,81 @@ export function renderAllWorldData() {
   renderChatTemplates();
   renderChat();
   renderEntityReader();
+}
+
+function entityTypeDefinition(key) {
+  return state.entityTypes.find((definition) => definition.key === key);
+}
+
+function entityTypeLabel(key) {
+  const definition = entityTypeDefinition(key);
+  if (definition?.is_builtin) {
+    const translated = t(`entityType.${key}`);
+    if (translated !== `entityType.${key}`) return translated;
+  }
+  return definition?.name || key;
+}
+
+function entityColor(entity) {
+  const value = entity.attributes?.color || entityTypeDefinition(entity.type)?.color;
+  return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? value : "#6B7280";
+}
+
+function renderEntityTypeControls() {
+  const select = $("entityType");
+  const filters = $("categoryFilters");
+  if (state.entityTypeFilter !== "all" && !state.entityTypes.some((definition) => definition.key === state.entityTypeFilter)) {
+    state.entityTypeFilter = "all";
+  }
+  if (select) {
+    const selected = select.value;
+    select.innerHTML = state.entityTypes
+      .map((definition) => `<option value="${escapeHtml(definition.key)}">${escapeHtml(entityTypeLabel(definition.key))}</option>`)
+      .join("");
+    if (state.entityTypes.some((definition) => definition.key === selected)) select.value = selected;
+  }
+  if (filters) {
+    filters.innerHTML = `
+      <button class="category-filter ${state.entityTypeFilter === "all" ? "active" : ""}" data-filter="all" type="button">${escapeHtml(t("entityType.all"))}</button>
+      ${state.entityTypes
+        .map(
+          (definition) => `<button class="category-filter ${state.entityTypeFilter === definition.key ? "active" : ""}" data-filter="${escapeHtml(definition.key)}" type="button">
+            <span class="type-swatch" style="background:${escapeHtml(definition.color)}"></span>${escapeHtml(entityTypeLabel(definition.key))}
+          </button>`,
+        )
+        .join("")}`;
+    filters.querySelectorAll(".category-filter").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.entityTypeFilter = button.dataset.filter;
+        renderEntities();
+      });
+    });
+  }
+}
+
+function renderWorldConfiguration() {
+  const typeList = $("entityTypeList");
+  if (typeList) {
+    typeList.innerHTML = state.entityTypes
+      .map(
+        (definition) => `<div class="config-row">
+          <input data-type-name="${definition.id}" value="${escapeHtml(entityTypeLabel(definition.key))}" ${definition.is_builtin ? "readonly" : ""} />
+          <input data-type-color="${definition.id}" type="color" value="${escapeHtml(definition.color)}" title="${escapeHtml(definition.key)}" />
+          <code>${escapeHtml(definition.key)}</code>
+          <button class="ghost danger icon-button ${definition.is_builtin ? "hidden" : ""}" data-delete-type="${definition.id}" type="button" title="${language() === "ru" ? "Удалить тип" : "Delete type"}">×</button>
+        </div>`,
+      )
+      .join("");
+    typeList.querySelectorAll("[data-type-name]").forEach((input) => {
+      input.addEventListener("change", () => updateEntityType(input.dataset.typeName, { name: input.value.trim() }));
+    });
+    typeList.querySelectorAll("[data-type-color]").forEach((input) => {
+      input.addEventListener("change", () => updateEntityType(input.dataset.typeColor, { color: input.value }));
+    });
+    typeList.querySelectorAll("[data-delete-type]").forEach((button) => {
+      button.addEventListener("click", () => deleteEntityType(button.dataset.deleteType));
+    });
+  }
 }
 
 function renderRoleVisibility() {
@@ -264,6 +357,7 @@ export function renderLlmConfig() {
   $("llmExtractorModel").value = config.extractor_model || "";
   $("llmSummarizerModel").value = config.summarizer_model || "";
   $("llmCriticModel").value = config.critic_model || "";
+  $("llmEmbeddingModel").value = config.embedding_model || "";
   $("llmTimeout").value = config.timeout_seconds;
   $("llmMaxExtract").value = config.max_entities_per_extract;
   $("llmApiKey").value = "";
@@ -349,12 +443,12 @@ export function renderEntities() {
   list.innerHTML = filteredEntities
     .map(
       (entity) => `
-        <article class="item entity-card encyclopedia-card" data-open-entity="${entity.id}" role="button" tabindex="0">
+        <article class="item entity-card encyclopedia-card" data-open-entity="${entity.id}" role="button" tabindex="0" style="--entity-color:${escapeHtml(entityColor(entity))}">
           ${renderImage(entity.attributes?.image_url, "entity-image", { lazy: true })}
           <div class="item-top">
             <div>
               <div class="item-title">${escapeHtml(entity.name)}</div>
-              <div class="item-meta">${escapeHtml(t(`entityType.${entity.type}`))} - ${escapeHtml(entity.status)} - ${entity.is_secret ? t("common.secretValue") : t("common.public")}</div>
+              <div class="item-meta">${escapeHtml(entityTypeLabel(entity.type))} - ${escapeHtml(entity.status)} - ${entity.is_secret ? t("common.secretValue") : t("common.public")}</div>
             </div>
             <span class="badge">${escapeHtml(entity.id.slice(0, 8))}</span>
           </div>
@@ -496,7 +590,7 @@ function renderReaderHeader({ title, eyebrow, summary, badge, imageHtml }) {
 
 export function renderMarkdown(text) {
   if (!text) return "";
-  const lines = escapeHtml(text).replace(/\r\n/g, "\n").split("\n");
+  const lines = escapeHtml(normalizeGeneratedNotation(text)).replace(/\r\n/g, "\n").split("\n");
   const output = [];
   let listType = null;
   let inCode = false;
@@ -600,6 +694,20 @@ export function renderMarkdown(text) {
   return `<div class="md-content">${output.join("")}</div>`;
 }
 
+function normalizeGeneratedNotation(value) {
+  const simplify = (content) =>
+    content
+      .replace(/\\(?:mathbf|text|mathrm|operatorname)\{([^{}]*)\}/g, "$1")
+      .replace(/\\(?:left|right)/g, "")
+      .replace(/\\times/g, "×")
+      .replace(/\\(?:,|;|!|quad)/g, " ")
+      .replace(/[{}]/g, "")
+      .trim();
+  return String(value)
+    .replace(/\$([^$\n]+)\$/g, (_, content) => simplify(content))
+    .replace(/\\\(([^)\n]+)\\\)/g, (_, content) => simplify(content));
+}
+
 function parseMarkdownTableRow(line) {
   if (!line || !line.includes("|")) return null;
   const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
@@ -658,14 +766,14 @@ function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
   );
   const imageHtml =
     renderImage(entity.attributes?.image_url, "reader-image") ||
-    `<div class="reader-image placeholder">${escapeHtml(t(`entityType.${entity.type}`))}</div>`;
+    `<div class="reader-image placeholder">${escapeHtml(entityTypeLabel(entity.type))}</div>`;
 
   // Breadcrumbs
   const breadcrumbsHtml = `
     <nav class="reader-breadcrumbs" aria-label="Breadcrumb">
       <span class="breadcrumb-item clickable" data-breadcrumb-action="back-to-wiki">${escapeHtml(t("tabs.wiki"))}</span>
       <span class="breadcrumb-separator">/</span>
-      <span class="breadcrumb-item clickable" data-breadcrumb-action="filter-type" data-filter-type="${entity.type}">${escapeHtml(t(`entityType.${entity.type}`))}</span>
+      <span class="breadcrumb-item clickable" data-breadcrumb-action="filter-type" data-filter-type="${entity.type}">${escapeHtml(entityTypeLabel(entity.type))}</span>
       <span class="breadcrumb-separator">/</span>
       <span class="breadcrumb-item active">${escapeHtml(entity.name)}</span>
     </nav>
@@ -707,7 +815,7 @@ function renderEntityReaderLayout(entity, { extraSections = [] } = {}) {
     ${breadcrumbsHtml}
     ${renderReaderHeader({
       title: entity.name,
-      eyebrow: t(`entityType.${entity.type}`),
+      eyebrow: entityTypeLabel(entity.type),
       summary: entity.summary,
       badge: entity.is_secret ? t("common.secretValue") : t("common.public"),
       imageHtml,
@@ -837,7 +945,7 @@ function renderDetectiveNodeReader() {
   $("entityReaderContent").innerHTML = `
     ${renderReaderHeader({
       title: node.title,
-      eyebrow: linkedEntity ? t(`entityType.${linkedEntity.type}`) : t("detective.freeNote"),
+      eyebrow: linkedEntity ? entityTypeLabel(linkedEntity.type) : t("detective.freeNote"),
       summary: linkedEntity?.summary || node.note || "",
       badge: node.is_secret ? t("common.secretValue") : t("common.public"),
       imageHtml,
@@ -854,7 +962,7 @@ function renderDetectiveNodeReader() {
                 <article class="reader-subcard">
                   <div class="reader-card-head">
                     <strong>${escapeHtml(linkedEntity.name)}</strong>
-                    <span class="badge">${escapeHtml(t(`entityType.${linkedEntity.type}`))}</span>
+                    <span class="badge">${escapeHtml(entityTypeLabel(linkedEntity.type))}</span>
                   </div>
                   ${linkedEntity.summary ? `<div class="reader-card-body">${escapeHtml(linkedEntity.summary)}</div>` : ""}
                   <div class="reader-inline-actions">
@@ -969,6 +1077,207 @@ function bindEntityReaderActions() {
 export function renderGraph() {
   const view = $("graphView");
   if (!view) return;
+  if (!$("tab-graph")?.classList.contains("active")) return;
+  if (graphInstance) {
+    saveCytoscapeState();
+    graphInstance.destroy();
+    graphInstance = null;
+  }
+  if (!state.selectedWorldId || !state.entities.length) {
+    view.className = "graph-view empty";
+    view.textContent = state.selectedWorldId ? t("graph.empty") : t("entity.selectWorld");
+    return;
+  }
+  if (typeof window.cytoscape !== "function") {
+    view.className = "graph-view empty";
+    view.textContent = t("graph.libraryError");
+    return;
+  }
+
+  loadGraphPositions();
+  const activeEntityIds = new Set(state.entities.map((entity) => entity.id));
+  for (const entityId of Object.keys(state.graphPositions)) {
+    if (!activeEntityIds.has(entityId)) delete state.graphPositions[entityId];
+  }
+  const hasSavedLayout = state.entities.every((entity) => state.graphPositions[entity.id]);
+  const rootStyle = getComputedStyle(document.documentElement);
+  const textColor = rootStyle.getPropertyValue("--text").trim() || "#20242A";
+  const lineColor = rootStyle.getPropertyValue("--muted").trim() || "#65705F";
+  const panelColor = rootStyle.getPropertyValue("--panel").trim() || "#FFFFFF";
+  const viewport = loadGraphViewport();
+  const elements = [
+    ...state.entities.map((entity) => ({
+      group: "nodes",
+      data: {
+        id: entity.id,
+        label: entity.name,
+        type: entityTypeLabel(entity.type),
+        color: entityColor(entity),
+        summary: entity.summary || entity.description || t("common.noSummary"),
+      },
+      position: state.graphPositions[entity.id],
+    })),
+    ...state.relationships.map((relationship) => ({
+      group: "edges",
+      data: {
+        id: relationship.id,
+        source: relationship.source_entity_id,
+        target: relationship.target_entity_id,
+        label: relationshipDisplayLabel(relationship),
+        confidence: Number(relationship.confidence ?? 0.65),
+        weight: Number(relationship.weight ?? 1),
+        validFrom: relationship.valid_from || "",
+        validTo: relationship.valid_to || "",
+        evidence: relationship.evidence || relationship.description || "",
+      },
+    })),
+  ];
+
+  view.className = "graph-view";
+  view.innerHTML = '<div class="graph-tooltip hidden"></div>';
+  graphInstance = window.cytoscape({
+    container: view,
+    elements,
+    minZoom: 0.2,
+    maxZoom: 3.5,
+    wheelSensitivity: 0.18,
+    boxSelectionEnabled: false,
+    autoungrabify: !isMasterMode(),
+    zoom: viewport?.zoom,
+    pan: viewport?.pan,
+    style: [
+      {
+        selector: "node",
+        style: {
+          "background-color": "data(color)",
+          "border-color": panelColor,
+          "border-width": 3,
+          color: textColor,
+          label: "data(label)",
+          "font-size": 11,
+          "font-weight": 600,
+          height: 54,
+          "text-background-color": panelColor,
+          "text-background-opacity": 0.88,
+          "text-background-padding": 3,
+          "text-max-width": 100,
+          "text-outline-color": panelColor,
+          "text-outline-width": 1,
+          "text-valign": "bottom",
+          "text-wrap": "ellipsis",
+          width: 54,
+        },
+      },
+      {
+        selector: "node:selected",
+        style: {
+          "border-color": textColor,
+          "border-width": 5,
+        },
+      },
+      {
+        selector: "edge",
+        style: {
+          color: textColor,
+          "curve-style": "bezier",
+          "font-size": 10,
+          label: "data(label)",
+          "line-color": lineColor,
+          opacity: "mapData(confidence, 0, 1, 0.45, 1)",
+          "target-arrow-color": lineColor,
+          "target-arrow-shape": "triangle",
+          "text-background-color": panelColor,
+          "text-background-opacity": 0.82,
+          "text-background-padding": 2,
+          "text-outline-color": panelColor,
+          "text-outline-width": 1,
+          "text-rotation": "autorotate",
+          width: "mapData(weight, 0, 10, 1, 10)",
+        },
+      },
+      {
+        selector: "edge:selected",
+        style: {
+          "line-color": textColor,
+          "target-arrow-color": textColor,
+        },
+      },
+    ],
+    layout: hasSavedLayout
+      ? { name: "preset", fit: viewport == null, padding: 50 }
+      : {
+          name: "cose",
+          animate: false,
+          componentSpacing: 90,
+          fit: true,
+          idealEdgeLength: 120,
+          nodeOverlap: 24,
+          nodeRepulsion: 9000,
+          padding: 55,
+          randomize: true,
+        },
+  });
+
+  const tooltip = view.querySelector(".graph-tooltip");
+  const showTooltip = (target, html) => {
+    const position = target.renderedPosition();
+    tooltip.innerHTML = html;
+    tooltip.style.left = `${position.x + 18}px`;
+    tooltip.style.top = `${position.y + 18}px`;
+    tooltip.classList.remove("hidden");
+  };
+  graphInstance.on("mouseover", "node", (event) => {
+    const entity = state.entities.find((item) => item.id === event.target.id());
+    if (!entity) return;
+    const relatedCount = state.relationships.filter(
+      (item) => item.source_entity_id === entity.id || item.target_entity_id === entity.id,
+    ).length;
+    showTooltip(
+      event.target,
+      `<strong>${escapeHtml(entity.name)}</strong>
+       <span>${escapeHtml(entityTypeLabel(entity.type))}</span>
+       <p>${escapeHtml(entity.summary || entity.description || t("common.noSummary"))}</p>
+       <small>${escapeHtml(t("graph.relationshipCount", { count: relatedCount }))}</small>`,
+    );
+  });
+  graphInstance.on("mouseover", "edge", (event) => {
+    const relationship = state.relationships.find((item) => item.id === event.target.id());
+    if (!relationship) return;
+    const period = [relationship.valid_from, relationship.valid_to].filter(Boolean).join(" - ");
+    showTooltip(
+      event.target,
+      `<strong>${escapeHtml(relationshipDisplayLabel(relationship))}</strong>
+       <span>${escapeHtml(t("relationship.weightValue", { value: relationship.weight ?? 1 }))}</span>
+       <small>${escapeHtml(relationshipConfidenceText(relationship.confidence))}</small>
+       ${period ? `<small>${escapeHtml(t("relationship.period"))}: ${escapeHtml(period)}</small>` : ""}
+       ${relationship.evidence ? `<p>${escapeHtml(relationship.evidence)}</p>` : ""}`,
+    );
+  });
+  graphInstance.on("mouseout", "node, edge", () => tooltip.classList.add("hidden"));
+  graphInstance.on("tap", "node", (event) => openEntityReader(event.target.id()));
+  if (isMasterMode()) {
+    graphInstance.on("tap", "edge", (event) => editRelationship(event.target.id()));
+    graphInstance.on("dragfree", "node", saveCytoscapeState);
+  }
+  graphInstance.on("viewport", () => {
+    state.graphZoom = graphInstance.zoom();
+    if ($("zoomGraphReset")) $("zoomGraphReset").textContent = `${Math.round(state.graphZoom * 100)}%`;
+    window.clearTimeout(graphViewportSaveTimer);
+    graphViewportSaveTimer = window.setTimeout(saveCytoscapeState, 180);
+  });
+  graphInstance.one("layoutstop", saveCytoscapeState);
+  if ($("zoomGraphReset")) $("zoomGraphReset").textContent = `${Math.round(graphInstance.zoom() * 100)}%`;
+}
+
+function renderGraphLegacy() {
+  const view = $("graphView");
+  if (!view) return;
+  if ($("zoomGraphReset")) $("zoomGraphReset").textContent = `${Math.round(state.graphZoom * 100)}%`;
+  view.onwheel = (event) => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    zoomGraph(event.deltaY < 0 ? 0.2 : -0.2);
+  };
   if (!state.selectedWorldId) {
     view.className = "graph-view empty";
     view.textContent = t("entity.selectWorld");
@@ -1072,14 +1381,14 @@ export function renderGraph() {
     return `
       <g class="graph-node-group" data-node-index="${index}" style="cursor: grab; user-select: none;">
         <circle cx="${x}" cy="${y}" r="45"
-                style="fill: var(--panel); stroke: var(--accent); stroke-width: 3; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.15)); transition: stroke 0.2s, fill 0.2s;" />
+                style="fill: color-mix(in srgb, ${escapeHtml(entityColor(entity))} 22%, var(--panel)); stroke: ${escapeHtml(entityColor(entity))}; stroke-width: 3; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.15)); transition: stroke 0.2s, fill 0.2s;" />
         <foreignObject x="${x - 38}" y="${y - 38}" width="76" height="76" style="pointer-events: none;">
           <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; text-align: center; padding: 4px; overflow: hidden;">
             <div class="graph-node-name" style="font-size: 11px; font-weight: bold; color: var(--text); word-break: break-word; line-height: 1.15; max-height: 44px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;">
               ${escapeHtml(entity.name)}
             </div>
             <div style="font-size: 8px; color: var(--muted); text-transform: uppercase; margin-top: 2px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 68px;">
-              ${escapeHtml(t(`entityType.${entity.type}`))}
+              ${escapeHtml(entityTypeLabel(entity.type))}
             </div>
           </div>
         </foreignObject>
@@ -1088,7 +1397,7 @@ export function renderGraph() {
   }).join("");
 
   view.innerHTML = `
-    <svg viewBox="0 0 ${width} ${height}" style="width: 100%; height: 100%; overflow: visible;" role="img" aria-label="${escapeHtml(t("graph.title"))}">
+    <svg viewBox="0 0 ${width} ${height}" style="width: ${state.graphZoom * 100}%; max-width:none; height:auto; overflow: visible;" role="img" aria-label="${escapeHtml(t("graph.title"))}">
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
           <path d="M0,0 L0,6 L6,3 z" fill="var(--line)" />
@@ -1097,10 +1406,12 @@ export function renderGraph() {
       ${edgesHtml}
       ${nodesHtml}
     </svg>
+    <div class="graph-tooltip hidden"></div>
   `;
 
   // Attach interactive drag-and-drop and click events
   const svg = view.querySelector("svg");
+  const tooltip = view.querySelector(".graph-tooltip");
   let dragNode = null;
   let dragOffset = { x: 0, y: 0 };
 
@@ -1142,6 +1453,30 @@ export function renderGraph() {
     const index = Number(group.dataset.nodeIndex);
     const node = nodes[index];
     const circle = group.querySelector("circle");
+    group.addEventListener("pointerenter", () => {
+      const related = state.relationships.filter(
+        (item) => item.source_entity_id === node.entity.id || item.target_entity_id === node.entity.id,
+      );
+      tooltip.innerHTML = `<strong>${escapeHtml(node.entity.name)}</strong>
+        <span>${escapeHtml(entityTypeLabel(node.entity.type))}</span>
+        <p>${escapeHtml(node.entity.summary || node.entity.description || t("common.noSummary"))}</p>
+        <small>${language() === "ru" ? "Связей" : "Relationships"}: ${related.length}</small>
+        ${
+          related.length
+            ? `<ul>${related
+                .slice(0, 3)
+                .map((item) => `<li>${escapeHtml(relationshipDisplayLabel(item))}</li>`)
+                .join("")}</ul>`
+            : ""
+        }`;
+      tooltip.classList.remove("hidden");
+    });
+    group.addEventListener("pointermove", (event) => {
+      const bounds = view.getBoundingClientRect();
+      tooltip.style.left = `${event.clientX - bounds.left + view.scrollLeft + 14}px`;
+      tooltip.style.top = `${event.clientY - bounds.top + view.scrollTop + 14}px`;
+    });
+    group.addEventListener("pointerleave", () => tooltip.classList.add("hidden"));
 
     group.addEventListener("click", () => {
       if (group.dataset.dragged === "true") {
@@ -1204,8 +1539,8 @@ export function renderGraph() {
       if (dragNode !== node) return;
       dragNode = null;
       group.style.cursor = "grab";
-      circle.style.stroke = "var(--accent)";
-      circle.style.fill = "var(--panel)";
+      circle.style.stroke = entityColor(node.entity);
+      circle.style.fill = `color-mix(in srgb, ${entityColor(node.entity)} 22%, var(--panel))`;
       saveGraphPositions();
       if (group.hasPointerCapture?.(event.pointerId)) {
         group.releasePointerCapture(event.pointerId);
@@ -1217,12 +1552,44 @@ export function renderGraph() {
   });
 }
 
+export function zoomGraph(delta) {
+  if (!graphInstance) return;
+  const zoom = Math.max(0.2, Math.min(3.5, graphInstance.zoom() + delta));
+  graphInstance.zoom({
+    level: zoom,
+    renderedPosition: {
+      x: graphInstance.width() / 2,
+      y: graphInstance.height() / 2,
+    },
+  });
+}
+
 export function arrangeGraph() {
   const key = graphPositionStorageKey();
   if (key) localStorage.removeItem(key);
+  const viewportKey = graphViewportStorageKey();
+  if (viewportKey) localStorage.removeItem(viewportKey);
   state.graphPositions = {};
   state.graphPositionScope = key;
-  renderGraph();
+  if (!graphInstance) {
+    renderGraph();
+    return;
+  }
+  graphInstance
+    .layout({
+      name: "cose",
+      animate: true,
+      animationDuration: 350,
+      componentSpacing: 90,
+      fit: true,
+      idealEdgeLength: 120,
+      nodeOverlap: 24,
+      nodeRepulsion: 9000,
+      padding: 55,
+      randomize: true,
+      stop: saveCytoscapeState,
+    })
+    .run();
 }
 
 function applyForceDirectedLayout(nodes, edges, width, height) {
@@ -1326,7 +1693,15 @@ export function renderTimeline() {
   if (!list) return;
   const events = state.entities
     .filter((entity) => entity.type === "event")
-    .sort((left, right) => timelineSortKey(left).localeCompare(timelineSortKey(right), undefined, { numeric: true }));
+    .sort((left, right) => {
+      const leftOrder = Number(left.attributes?.timeline_order);
+      const rightOrder = Number(right.attributes?.timeline_order);
+      if (Number.isFinite(leftOrder) || Number.isFinite(rightOrder)) {
+        return (Number.isFinite(leftOrder) ? leftOrder : Number.MAX_SAFE_INTEGER)
+          - (Number.isFinite(rightOrder) ? rightOrder : Number.MAX_SAFE_INTEGER);
+      }
+      return timelineSortKey(left).localeCompare(timelineSortKey(right), undefined, { numeric: true });
+    });
   if (!events.length) {
     list.className = "timeline-list empty";
     list.textContent = t("timeline.empty");
@@ -1337,7 +1712,8 @@ export function renderTimeline() {
   list.innerHTML = events
     .map(
       (event) => `
-        <article class="timeline-item">
+        <article class="timeline-item" data-timeline-entity="${event.id}" draggable="${isMasterMode()}">
+          ${isMasterMode() ? '<span class="drag-handle" aria-hidden="true">⋮⋮</span>' : ""}
           <div class="timeline-date">${escapeHtml(event.attributes?.timeline_date || t("timeline.noDate"))}</div>
           <div class="item">
             <div class="item-title">${escapeHtml(event.name)}</div>
@@ -1348,6 +1724,33 @@ export function renderTimeline() {
       `,
     )
     .join("");
+  if (isMasterMode()) bindTimelineDrag(list);
+}
+
+function bindTimelineDrag(list) {
+  let draggedId = null;
+  list.querySelectorAll("[data-timeline-entity]").forEach((item) => {
+    item.addEventListener("dragstart", () => {
+      draggedId = item.dataset.timelineEntity;
+      item.classList.add("dragging");
+    });
+    item.addEventListener("dragend", () => item.classList.remove("dragging"));
+    item.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      const dragged = list.querySelector(`[data-timeline-entity="${draggedId}"]`);
+      if (!dragged || dragged === item) return;
+      const bounds = item.getBoundingClientRect();
+      list.insertBefore(dragged, event.clientY < bounds.top + bounds.height / 2 ? item : item.nextSibling);
+    });
+    item.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      draggedId = null;
+      await reorderEntities(
+        Array.from(list.querySelectorAll("[data-timeline-entity]")).map((node) => node.dataset.timelineEntity),
+        "timeline_order",
+      );
+    });
+  });
 }
 
 export function renderModules() {
@@ -1369,7 +1772,93 @@ function renderQuests() {
   const list = $("questList");
   if (!list) return;
   const quests = state.entities.filter(isQuestEntity);
-  renderEntityMiniList(list, quests, t("quest.empty"));
+  const statuses = state.questStatuses;
+  if (!statuses.length) {
+    list.className = "quest-board empty";
+    list.textContent = t("quest.empty");
+    return;
+  }
+  list.className = "quest-board";
+  list.innerHTML = statuses
+    .map((status) => {
+      const columnQuests = quests
+        .filter((quest) => (quest.attributes?.quest_status || statuses[0].key) === status.key)
+        .sort((left, right) => Number(left.attributes?.quest_order || 0) - Number(right.attributes?.quest_order || 0));
+      return `<section class="quest-column" data-quest-status="${escapeHtml(status.key)}" style="--status-color:${escapeHtml(status.color)}">
+        <header>
+          <div><span class="type-swatch" style="background:${escapeHtml(status.color)}"></span><strong>${escapeHtml(questStatusLabel(status))}</strong></div>
+          <span class="badge">${columnQuests.length}</span>
+          ${
+            isMasterMode()
+              ? `<input class="status-color-input" data-status-color="${status.id}" type="color" value="${escapeHtml(status.color)}" title="${language() === "ru" ? "Цвет статуса" : "Status color"}" />
+                 <button class="ghost danger icon-button" data-delete-status="${status.id}" type="button" title="${language() === "ru" ? "Удалить статус" : "Delete status"}">×</button>`
+              : ""
+          }
+        </header>
+        <div class="quest-column-body">
+          ${columnQuests
+            .map(
+              (quest) => `<article class="item entity-card quest-card" data-open-entity="${quest.id}" data-quest-entity="${quest.id}" draggable="${isMasterMode()}" style="--entity-color:${escapeHtml(entityColor(quest))}">
+                <div class="item-title">${escapeHtml(quest.name)}</div>
+                <div class="item-body">${renderMarkdown(quest.summary || quest.description || t("common.noSummary"))}</div>
+                ${quest.tags?.length ? `<div class="item-meta">${quest.tags.map(escapeHtml).join(", ")}</div>` : ""}
+              </article>`,
+            )
+            .join("")}
+        </div>
+      </section>`;
+    })
+    .join("");
+  bindEntityCardActions(list);
+  if (isMasterMode()) bindQuestBoard(list);
+}
+
+function questStatusLabel(status) {
+  const builtins = {
+    backlog: { ru: "Запланировано", en: "Backlog" },
+    active: { ru: "В работе", en: "Active" },
+    blocked: { ru: "Заблокировано", en: "Blocked" },
+    done: { ru: "Готово", en: "Done" },
+  };
+  return builtins[status.key]?.[language()] || status.name;
+}
+
+function bindQuestBoard(board) {
+  let draggedId = null;
+  board.querySelectorAll("[data-quest-entity]").forEach((card) => {
+    card.addEventListener("dragstart", (event) => {
+      draggedId = card.dataset.questEntity;
+      event.dataTransfer.effectAllowed = "move";
+      card.classList.add("dragging");
+    });
+    card.addEventListener("dragend", () => card.classList.remove("dragging"));
+  });
+  board.querySelectorAll("[data-quest-status]").forEach((column) => {
+    column.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      column.classList.add("drag-over");
+    });
+    column.addEventListener("dragleave", () => column.classList.remove("drag-over"));
+    column.addEventListener("drop", async (event) => {
+      event.preventDefault();
+      column.classList.remove("drag-over");
+      const card = board.querySelector(`[data-quest-entity="${draggedId}"]`);
+      if (!card) return;
+      column.querySelector(".quest-column-body").append(card);
+      await reorderEntities(
+        Array.from(column.querySelectorAll("[data-quest-entity]")).map((item) => item.dataset.questEntity),
+        "quest_order",
+        column.dataset.questStatus,
+      );
+      draggedId = null;
+    });
+  });
+  board.querySelectorAll("[data-status-color]").forEach((input) => {
+    input.addEventListener("change", () => updateQuestStatus(input.dataset.statusColor, { color: input.value }));
+  });
+  board.querySelectorAll("[data-delete-status]").forEach((button) => {
+    button.addEventListener("click", () => deleteQuestStatus(button.dataset.deleteStatus));
+  });
 }
 
 function isQuestEntity(entity) {
@@ -1776,10 +2265,10 @@ function renderEntityMiniList(list, entities, emptyText) {
   list.innerHTML = entities
     .map(
       (entity) => `
-        <article class="item entity-card compact-card" data-open-entity="${entity.id}" role="button" tabindex="0">
+        <article class="item entity-card compact-card" data-open-entity="${entity.id}" role="button" tabindex="0" style="--entity-color:${escapeHtml(entityColor(entity))}">
           ${renderImage(entity.attributes?.image_url, "entity-image", { lazy: true })}
           <div class="item-title">${escapeHtml(entity.name)}</div>
-          <div class="item-meta">${escapeHtml(t(`entityType.${entity.type}`))}${entity.attributes?.timeline_date ? ` - ${escapeHtml(entity.attributes.timeline_date)}` : ""}</div>
+          <div class="item-meta">${escapeHtml(entityTypeLabel(entity.type))}${entity.attributes?.timeline_date ? ` - ${escapeHtml(entity.attributes.timeline_date)}` : ""}</div>
           <div class="item-body">${renderMarkdown(entity.summary || entity.description || t("common.noSummary"))}</div>
           ${entity.tags?.length ? `<div class="item-meta">${entity.tags.map(escapeHtml).join(", ")}</div>` : ""}
           <div class="item-actions">
@@ -1862,9 +2351,47 @@ function saveGraphPositions() {
   localStorage.setItem(key, JSON.stringify(state.graphPositions));
 }
 
+function graphViewportStorageKey() {
+  return state.selectedWorldId ? `worldbuilder.graphViewport.${state.selectedWorldId}.${currentRole()}` : null;
+}
+
+function loadGraphViewport() {
+  const key = graphViewportStorageKey();
+  if (!key) return null;
+  try {
+    const viewport = JSON.parse(localStorage.getItem(key) || "null");
+    if (
+      viewport &&
+      Number.isFinite(viewport.zoom) &&
+      Number.isFinite(viewport.pan?.x) &&
+      Number.isFinite(viewport.pan?.y)
+    ) {
+      return viewport;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function saveCytoscapeState() {
+  if (!graphInstance || !state.selectedWorldId) return;
+  state.graphPositions = Object.fromEntries(
+    graphInstance.nodes().map((node) => [node.id(), node.position()]),
+  );
+  saveGraphPositions();
+  const viewportKey = graphViewportStorageKey();
+  if (viewportKey) {
+    localStorage.setItem(
+      viewportKey,
+      JSON.stringify({ zoom: graphInstance.zoom(), pan: graphInstance.pan() }),
+    );
+  }
+}
+
 export function renderRelationshipOptions() {
   const options = state.entities
-    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(t(`entityType.${entity.type}`))})</option>`)
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(entityTypeLabel(entity.type))})</option>`)
     .join("");
   $("relationshipSource").innerHTML = options;
   $("relationshipTarget").innerHTML = options;
@@ -1876,7 +2403,7 @@ export function renderMapPinOptions() {
     .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)}</option>`)
     .join("");
   const linkedOptions = state.entities
-    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(t(`entityType.${entity.type}`))})</option>`)
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(entityTypeLabel(entity.type))})</option>`)
     .join("");
   $("mapPinMapEntity").innerHTML = mapOptions;
   $("mapPinLinkedEntity").innerHTML = `<option value="">${escapeHtml(t("common.none"))}</option>${linkedOptions}`;
@@ -1891,7 +2418,7 @@ export function renderRandomTableOptions() {
 
 export function renderDetectiveOptions() {
   const entityOptions = state.entities
-    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(t(`entityType.${entity.type}`))})</option>`)
+    .map((entity) => `<option value="${entity.id}">${escapeHtml(entity.name)} (${escapeHtml(entityTypeLabel(entity.type))})</option>`)
     .join("");
   const nodeOptions = state.detectiveNodes
     .map((node) => `<option value="${node.id}">${escapeHtml(node.title)}</option>`)
@@ -2138,8 +2665,12 @@ export function renderRelationships() {
 
   list.className = "grid-list";
   list.innerHTML = state.relationships
-    .map(
-      (relationship) => `
+    .map((relationship) => {
+      const revisions = state.relationshipRevisions.filter(
+        (revision) => revision.relationship_id === relationship.id,
+      );
+      const period = [relationship.valid_from, relationship.valid_to].filter(Boolean).join(" - ");
+      return `
         <article class="item">
           <div class="item-top" style="display: flex; justify-content: space-between; align-items: center;">
             <div class="item-title">${escapeHtml(entityName(relationship.source_entity_id))} &rarr; ${escapeHtml(entityName(relationship.target_entity_id))}</div>
@@ -2148,11 +2679,39 @@ export function renderRelationships() {
               <button class="ghost danger" data-delete-relationship="${relationship.id}" type="button">${escapeHtml(t("common.delete"))}</button>
             </div>` : ""}
           </div>
-          <div class="item-meta">${escapeHtml(relationshipDisplayLabel(relationship))} - ${escapeHtml(relationshipConfidenceText(relationship.confidence))}</div>
+          <div class="item-meta">${escapeHtml(relationshipDisplayLabel(relationship))}</div>
+          <div class="relationship-metrics">
+            <span class="badge">${escapeHtml(relationshipConfidenceText(relationship.confidence))}</span>
+            <span class="badge">${escapeHtml(t("relationship.weightValue", { value: relationship.weight ?? 1 }))}</span>
+            ${period ? `<span class="badge">${escapeHtml(t("relationship.period"))}: ${escapeHtml(period)}</span>` : ""}
+          </div>
           ${relationship.description ? `<div class="item-body">${renderMarkdown(relationship.description)}</div>` : ""}
+          ${
+            relationship.evidence
+              ? `<div class="relationship-evidence"><strong>${escapeHtml(t("relationship.evidence"))}</strong>${renderMarkdown(relationship.evidence)}</div>`
+              : ""
+          }
+          ${
+            revisions.length
+              ? `<details class="relationship-history">
+                  <summary>${escapeHtml(t("relationship.historyCount", { count: revisions.length }))}</summary>
+                  <div class="relationship-history-list">
+                    ${revisions
+                      .map(
+                        (revision) => `<div>
+                          <strong>${escapeHtml(revision.effective_at || revision.created_at)}</strong>
+                          <span>${escapeHtml(t("relationship.weightValue", { value: revision.weight }))}; ${escapeHtml(relationshipConfidenceText(revision.confidence))}</span>
+                          ${revision.change_note ? `<small>${escapeHtml(revision.change_note)}</small>` : ""}
+                        </div>`,
+                      )
+                      .join("")}
+                  </div>
+                </details>`
+              : ""
+          }
         </article>
-      `,
-    )
+      `;
+    })
     .join("");
 
   list.querySelectorAll("[data-delete-relationship]").forEach((btn) => {
@@ -2257,6 +2816,138 @@ export function renderProposals() {
   });
 }
 
+export function renderDocuments() {
+  const list = $("documentList");
+  const indexStatus = $("embeddingIndexStatus");
+  const buildButton = $("buildEmbeddingIndex");
+  const clearButton = $("clearEmbeddingIndex");
+  const documentsTab = document.querySelector('.tab[data-tab="documents"]');
+  const activeExtraction = Object.values(state.documentExtractionJobs).some((job) =>
+    ["queued", "running"].includes(job.status),
+  );
+  if (documentsTab) {
+    documentsTab.classList.toggle("is-processing", activeExtraction || state.embeddingBusy);
+    documentsTab.setAttribute("aria-busy", String(activeExtraction || state.embeddingBusy));
+    documentsTab.title = activeExtraction ? t("documents.extractionInProgress") : "";
+  }
+  if (indexStatus) {
+    const status = state.embeddingStatus;
+    const baseStatus = status?.model
+      ? t("embeddings.status", {
+          model: status.model,
+          embedded: status.embedded_chunks,
+          total: status.total_chunks,
+          dimensions: status.dimensions || "?",
+        })
+      : t("embeddings.notConfigured");
+    const jobStatus = state.embeddingJob
+      ? ` ${t(`embeddings.job.${state.embeddingJob.status}`, {
+          processed: state.embeddingJob.processed_chunks,
+          total: state.embeddingJob.total_chunks,
+        })}`
+      : "";
+    indexStatus.textContent = `${baseStatus}${jobStatus}`;
+    buildButton.disabled = !status?.model || state.embeddingBusy || !status?.pending_chunks;
+    buildButton.textContent = state.embeddingBusy ? t("embeddings.processing") : t("embeddings.build");
+    clearButton.disabled = state.embeddingBusy || !status?.embedded_chunks;
+  }
+  if (!list) return;
+  if (!state.documents.length) {
+    list.className = "grid-list empty";
+    list.textContent = t("documents.empty");
+    return;
+  }
+  list.className = "grid-list";
+  list.innerHTML = state.documents
+    .map((document) => {
+      const percent = document.total_chunks
+        ? Math.round((document.processed_chunks / document.total_chunks) * 100)
+        : 0;
+      const processing = Boolean(state.documentProcessing[document.id]);
+      const canPause = processing || ["uploaded", "chunking"].includes(document.status);
+      const canResume = ["paused", "failed"].includes(document.status);
+      const extractionJob = state.documentExtractionJobs[document.id];
+      const extractionPercent = extractionJob?.total_chunks
+        ? Math.round((extractionJob.processed_chunks / extractionJob.total_chunks) * 100)
+        : 0;
+      return `
+        <article class="item document-item">
+          <div class="item-top">
+            <div>
+              <div class="item-title">${escapeHtml(document.filename)}</div>
+              <div class="item-meta">${escapeHtml(t(`documents.status.${document.status}`))} - ${percent}%</div>
+            </div>
+            <span class="badge">${document.is_secret ? t("common.secretValue") : t("common.public")}</span>
+          </div>
+          <progress value="${document.processed_chunks}" max="${Math.max(document.total_chunks, 1)}"></progress>
+          <div class="item-body muted">${t("documents.stats", {
+            processed: document.processed_chunks,
+            total: document.total_chunks,
+            duplicates: document.duplicate_chunks,
+          })}</div>
+          ${document.error ? `<div class="item-body danger">${escapeHtml(document.error)}</div>` : ""}
+          ${
+            extractionJob
+              ? `<div class="item-body document-extraction-progress ${["queued", "running"].includes(extractionJob.status) ? "active" : ""}">
+                  <div class="item-meta">${escapeHtml(
+                    t(`documents.extraction.${extractionJob.status}`, {
+                      processed: extractionJob.processed_chunks,
+                      total: extractionJob.total_chunks,
+                      count: extractionJob.proposal_count,
+                    }),
+                  )}</div>
+                  <progress value="${extractionJob.processed_chunks}" max="${Math.max(extractionJob.total_chunks, 1)}"></progress>
+                  <div class="item-meta">${extractionPercent}%</div>
+                  ${
+                    extractionJob.status === "running" && extractionJob.total_segments
+                      ? `<div class="item-meta">${escapeHtml(
+                          t("documents.extractionSegment", {
+                            current: extractionJob.current_segment,
+                            total: extractionJob.total_segments,
+                          }),
+                        )}</div>`
+                      : ""
+                  }
+                  ${extractionJob.error ? `<div class="danger">${escapeHtml(extractionJob.error)}</div>` : ""}
+                </div>`
+              : ""
+          }
+          <div class="item-actions">
+            ${canPause ? `<button class="ghost" data-pause-document="${document.id}" type="button">${t("documents.pause")}</button>` : ""}
+            ${canResume ? `<button data-resume-document="${document.id}" type="button">${t("documents.resume")}</button>` : ""}
+            ${
+              document.status === "ready" && (!extractionJob || extractionJob.status === "failed")
+                ? `<button data-extract-document="${document.id}" type="button">${t("documents.extract")}</button>`
+                : ""
+            }
+            ${
+              extractionJob?.proposal_count
+                ? `<button class="ghost" data-open-document-proposals type="button">${t("documents.openDrafts")}</button>`
+                : ""
+            }
+            <button class="ghost danger" data-delete-document="${document.id}" type="button">${t("common.delete")}</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+  list.querySelectorAll("[data-pause-document]").forEach((button) => {
+    button.addEventListener("click", () => pauseKnowledgeDocument(button.dataset.pauseDocument));
+  });
+  list.querySelectorAll("[data-resume-document]").forEach((button) => {
+    button.addEventListener("click", () => resumeKnowledgeDocument(button.dataset.resumeDocument));
+  });
+  list.querySelectorAll("[data-delete-document]").forEach((button) => {
+    button.addEventListener("click", () => deleteKnowledgeDocument(button.dataset.deleteDocument));
+  });
+  list.querySelectorAll("[data-extract-document]").forEach((button) => {
+    button.addEventListener("click", () => extractKnowledgeDocument(button.dataset.extractDocument));
+  });
+  list.querySelectorAll("[data-open-document-proposals]").forEach((button) => {
+    button.addEventListener("click", () => activateTab("proposals"));
+  });
+}
+
 function renderProposalReview(proposal) {
   const disabled = proposal.status !== "pending" ? "disabled" : "";
   const sections = [
@@ -2264,7 +2955,7 @@ function renderProposalReview(proposal) {
       title: t("proposal.entities"),
       kind: "entity",
       items: proposal.payload.entities.map((entity) => ({
-        summary: `${t(`entityType.${entity.type}`)}: ${entity.name}${entity.summary ? ` - ${entity.summary}` : ""}`,
+        summary: `${entityTypeLabel(entity.type)}: ${entity.name}${entity.summary ? ` - ${entity.summary}` : ""}`,
         excerpt: entity.source_excerpt || "",
         intent: entityReviewIntent(entity),
         changes: entityReviewChanges(entity),
@@ -2277,6 +2968,13 @@ function renderProposalReview(proposal) {
       items: proposal.payload.relationships.map((relationship) => ({
         summary: `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationshipDisplayLabel(relationship)}`,
         excerpt: relationship.source_excerpt || "",
+        changes: [
+          relationshipConfidenceText(relationship.confidence),
+          t("relationship.weightValue", { value: relationship.weight ?? 1 }),
+          relationship.valid_from || relationship.valid_to
+            ? `${t("relationship.period")}: ${[relationship.valid_from, relationship.valid_to].filter(Boolean).join(" - ")}`
+            : "",
+        ].filter(Boolean),
       })),
     },
     {
@@ -2477,7 +3175,7 @@ function formatEntityTypeValue(value) {
   if (!value) {
     return t("common.none");
   }
-  return t(`entityType.${value}`);
+  return entityTypeLabel(value);
 }
 
 function formatSecretValue(value) {

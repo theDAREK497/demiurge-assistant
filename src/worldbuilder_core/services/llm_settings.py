@@ -18,6 +18,7 @@ class LLMRuntimeSettings:
     extractor_model: str | None
     summarizer_model: str | None
     critic_model: str | None
+    embedding_model: str | None
     timeout_seconds: float
     max_entities_per_extract: int
     persisted: bool
@@ -28,6 +29,7 @@ class LLMRuntimeSettings:
             "extractor": self.extractor_model,
             "summarizer": self.summarizer_model,
             "critic": self.critic_model,
+            "embedding": self.embedding_model,
         }.get(role)
         return model or self.default_model
 
@@ -45,6 +47,7 @@ def get_llm_runtime_settings(session: Session) -> LLMRuntimeSettings:
         extractor_model=_optional_string_value(value.get("extractor_model")),
         summarizer_model=_optional_string_value(value.get("summarizer_model")),
         critic_model=_optional_string_value(value.get("critic_model")),
+        embedding_model=_optional_string_value(value.get("embedding_model")),
         timeout_seconds=float(value.get("timeout_seconds") or defaults.llm_timeout_seconds),
         max_entities_per_extract=int(value.get("max_entities_per_extract") or defaults.max_entities_per_extract),
         persisted=stored is not None,
@@ -67,6 +70,7 @@ def save_llm_runtime_settings(session: Session, payload: LLMConfigUpdate) -> LLM
         "extractor_model": _clean_optional(payload.extractor_model),
         "summarizer_model": _clean_optional(payload.summarizer_model),
         "critic_model": _clean_optional(payload.critic_model),
+        "embedding_model": _clean_optional(payload.embedding_model),
         "timeout_seconds": payload.timeout_seconds,
         "max_entities_per_extract": payload.max_entities_per_extract,
     }
@@ -89,6 +93,7 @@ def llm_config_read(runtime: LLMRuntimeSettings) -> LLMConfigRead:
         extractor_model=runtime.extractor_model,
         summarizer_model=runtime.summarizer_model,
         critic_model=runtime.critic_model,
+        embedding_model=runtime.embedding_model,
         has_api_key=bool(runtime.api_key),
         timeout_seconds=runtime.timeout_seconds,
         max_entities_per_extract=runtime.max_entities_per_extract,

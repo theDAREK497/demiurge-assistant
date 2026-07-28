@@ -35,7 +35,7 @@ The main world model currently includes:
 - master/player visibility filtering;
 - extraction proposals for AI write-back.
 
-Supported entity types:
+Every world starts with these entity types:
 
 - `character`
 - `location`
@@ -44,6 +44,10 @@ Supported entity types:
 - `event`
 - `clue`
 - `concept`
+
+Entity types are now world configuration, not a closed enum. A Master can add
+types and set their colors in Settings. Extraction may also introduce a concise
+new type key; applying the proposal registers it automatically.
 
 ## Stable User Flow
 
@@ -72,10 +76,13 @@ The `/app/` UI already supports:
 - full-screen journal-style reading view for wiki cards, map locations, and
   detective board nodes;
 - drawer-based card create/edit flow;
-- graph view;
-- timeline view;
+- graph view with saved layout, zoom, type/card colors, and entity hover details;
+- drag-and-drop timeline view with persisted manual order;
 - journal / quest / maps module views;
+- quest Kanban with drag-and-drop cards and configurable world statuses;
 - focused Modules workspace that shows one mini-section at a time;
+- direct open/create/edit/delete actions for Event, Quest, and Location cards
+  inside their module views;
 - persistent map pins with title, note, linked card, normalized coordinates,
   Master/Player filtering, and export/import support;
 - random tables with weighted rows, roll results, Master/Player filtering, and
@@ -100,15 +107,21 @@ The `/app/` UI already supports:
   Russian or English world text consistently;
 - review/apply/reject for extracted changes;
 - duplicate cleanup for extracted draft entities, relationships, world rules,
-  random-table rows, and notes before proposals are stored;
+  random-table rows, and notes before proposals are stored; close entity-name
+  variants are reconciled with one unambiguous existing card and retained as
+  aliases;
 - read-only Player mode that hides Master-only settings and editing tools while
-  still using backend visibility filters;
+  using server-enforced visibility and Master authorization;
 - editable relationships with readable confidence levels;
 - force-directed relationship graph layout, manual rebuilding, and saved node
   positions in browser storage per world and role;
 - confirmed world deletion;
 - import/export;
 - LAN-friendly starter flow through `start_worldbuilder.bat`.
+- generated private LAN Master links with token-based API access;
+- bounded chat history, abortable stale world requests, image signature checks,
+  orphan upload cleanup, request size limits, and SQLite foreign-key checks;
+- dependency lock/audit for the React shell on Vite 8.
 
 ## Important Recent Fixes
 
@@ -152,7 +165,9 @@ Recent chat UX improvements:
 - user and assistant messages can be edited or deleted locally;
 - Markdown supports headings through level six, emphasis, dividers, lists,
   quotes, code, and aligned pipe tables in chat and draft review;
-- quest requests explicitly extract a primary Event card tagged `quest`;
+- quest requests carry the original user intent into extraction and
+  deterministically produce one primary Event card tagged `quest`, even when
+  the model returns only locations, characters, items, or quest stages;
 - newly described random tables are extracted as tables and rows rather than
   relationships;
 - chat history is restored and rendered after a page reload;
@@ -167,6 +182,16 @@ Roadmap items still intentionally open:
 - richer detective board layout/editing beyond whole-board AI generation;
 - continued polish of non-technical, friendly UX;
 - richer React migration if and when `/app/` stops being enough.
+- optional encryption-at-rest for persisted third-party LLM API keys.
+- embeddings are configurable through the LLM settings and imported books use hybrid retrieval when indexed;
+- production mode uses PostgreSQL + pgvector HNSW and an external leased worker;
+- ready imported sources can be extracted chunk-by-chunk by the leased AI worker;
+- extracted facts are deduplicated into pending proposals, inherit source secrecy,
+  and remain review-only until the master applies them.
+- Cytoscape.js 3.33.4 is bundled locally under its MIT license for graph
+  layout, zoom, pan, node dragging, and weighted relationship rendering.
+- relationships have confidence, 0-10 weight, validity period, evidence, and
+  revision history; extraction uses structured JSON output when supported.
 
 ## How To Run
 

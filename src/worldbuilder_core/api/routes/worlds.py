@@ -5,6 +5,8 @@ from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import World
 from worldbuilder_core.schemas import WorldCreate, WorldRead, WorldUpdate
 from worldbuilder_core.services.assets import cleanup_unreferenced_assets, world_asset_urls
+from worldbuilder_core.services.document_ingestion import cleanup_document_paths, world_document_paths
+from worldbuilder_core.services.world_configuration import ensure_world_configuration
 
 router = APIRouter(prefix="/worlds", tags=["worlds"])
 
@@ -13,6 +15,8 @@ router = APIRouter(prefix="/worlds", tags=["worlds"])
 def create_world(payload: WorldCreate, session: DbSession) -> World:
     world = World(**payload.model_dump())
     session.add(world)
+    session.flush()
+    ensure_world_configuration(session, world.id)
     session.commit()
     session.refresh(world)
     return world
@@ -52,6 +56,8 @@ def delete_world(world_id: str, session: DbSession) -> None:
     if world is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found")
     asset_urls = world_asset_urls(session, world_id)
+    document_paths = world_document_paths(session, world_id)
     session.delete(world)
     session.commit()
     cleanup_unreferenced_assets(session, asset_urls)
+    cleanup_document_paths(document_paths)

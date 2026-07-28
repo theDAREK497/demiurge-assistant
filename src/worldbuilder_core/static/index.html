@@ -80,6 +80,7 @@
           <button class="tab" data-tab="rules" data-master-only="true" type="button" data-i18n="tabs.rules">Rules</button>
           <button class="tab" data-tab="chat" data-master-only="true" type="button" data-i18n="tabs.chat">Chat</button>
           <button class="tab" data-tab="proposals" data-master-only="true" type="button" data-i18n="tabs.proposals">Proposals</button>
+          <button class="tab" data-tab="documents" data-master-only="true" type="button" data-i18n="tabs.documents">Sources</button>
           <button class="tab" data-tab="graph" data-module-tab="graph" type="button" data-i18n="tabs.graph">Graph</button>
           <button class="tab" data-tab="timeline" data-module-tab="timeline" type="button" data-i18n="tabs.timeline">Timeline</button>
           <button class="tab" data-tab="modules" data-module-tab="modules" type="button" data-i18n="tabs.modules">Modules</button>
@@ -144,6 +145,38 @@
                 <input id="relationshipConfidence" type="number" min="0" max="1" step="0.05" value="1" required />
                 <small class="muted" data-i18n="relationship.confidenceHint">1 means explicit or confirmed; 0 means a weak hypothesis.</small>
               </label>
+              <label>
+                <span data-i18n="relationship.weightLabel">Strength (0-10)</span>
+                <input id="relationshipWeight" type="number" min="0" max="10" step="0.25" value="1" required />
+                <small class="muted" data-i18n="relationship.weightHint">Controls edge thickness and relationship influence.</small>
+              </label>
+              <div class="form-grid">
+                <label>
+                  <span data-i18n="relationship.validFrom">Active from</span>
+                  <input id="relationshipValidFrom" type="text" placeholder="Year 315 / Chapter 2" />
+                </label>
+                <label>
+                  <span data-i18n="relationship.validTo">Active until</span>
+                  <input id="relationshipValidTo" type="text" placeholder="Year 318 / present" />
+                </label>
+              </div>
+              <label>
+                <span data-i18n="relationship.evidence">Evidence</span>
+                <textarea id="relationshipEvidence" rows="2"></textarea>
+              </label>
+              <details class="panel-lite">
+                <summary data-i18n="relationship.historyChange">Record change in history</summary>
+                <div class="stack disclosure-body">
+                  <label>
+                    <span data-i18n="relationship.effectiveAt">Change date</span>
+                    <input id="relationshipEffectiveAt" type="text" />
+                  </label>
+                  <label>
+                    <span data-i18n="relationship.changeNote">Why it changed</span>
+                    <input id="relationshipChangeNote" type="text" />
+                  </label>
+                </div>
+              </details>
               <label class="check">
                 <input id="relationshipSecret" type="checkbox" />
                 <span data-i18n="common.secret">Secret</span>
@@ -272,6 +305,9 @@
                 <p class="muted" data-i18n="graph.hint">Shows visible wiki entities and relationships for the selected role.</p>
               </div>
               <div class="inline-actions">
+                <button id="zoomGraphOut" class="ghost icon-button" type="button" title="Zoom out">−</button>
+                <button id="zoomGraphReset" class="ghost" type="button" title="Reset zoom">100%</button>
+                <button id="zoomGraphIn" class="ghost icon-button" type="button" title="Zoom in">+</button>
                 <button id="arrangeGraph" class="ghost" type="button" data-i18n="graph.arrange" data-i18n-title="graph.arrangeTitle">Arrange</button>
                 <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
@@ -339,7 +375,12 @@
                   <button id="addQuestBtn" data-master-only="true" type="button" data-i18n="quest.add">Add quest</button>
                 </div>
               </div>
-              <div id="questList" class="grid-list empty"></div>
+              <form id="questStatusForm" class="compact-create-row" data-master-only="true">
+                <input id="questStatusName" type="text" required maxlength="120" placeholder="Новый статус" />
+                <input id="questStatusColor" type="color" value="#6B7280" title="Цвет статуса" />
+                <button type="submit">Добавить статус</button>
+              </form>
+              <div id="questList" class="quest-board empty"></div>
             </div>
             <div class="panel stack" data-module-panel="maps">
               <div class="panel-head">
@@ -550,6 +591,38 @@
           </div>
         </section>
 
+        <section id="tab-documents" class="tab-panel">
+          <div class="panel stack">
+            <div class="panel-head">
+              <div>
+                <h3 data-i18n="documents.title">Knowledge sources</h3>
+                <p class="muted" data-i18n="documents.hint">Upload TXT or DOCX. Processing can be paused and resumed.</p>
+              </div>
+            </div>
+            <form id="documentUploadForm" class="compact-create-row document-upload">
+              <input id="documentFile" type="file" accept=".txt,.docx,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required />
+              <label class="check">
+                <input id="documentSecret" type="checkbox" />
+                <span data-i18n="common.secret">Secret</span>
+              </label>
+              <button type="submit" data-i18n="documents.upload">Upload</button>
+            </form>
+            <div class="panel-lite">
+              <div class="panel-head">
+                <div>
+                  <strong data-i18n="embeddings.title">Semantic index</strong>
+                  <p id="embeddingIndexStatus" class="muted"></p>
+                </div>
+                <div class="inline-actions">
+                  <button id="buildEmbeddingIndex" type="button" data-i18n="embeddings.build">Build index</button>
+                  <button id="clearEmbeddingIndex" class="ghost danger" type="button" data-i18n="embeddings.clear">Clear</button>
+                </div>
+              </div>
+            </div>
+            <div id="documentList" class="grid-list empty"></div>
+          </div>
+        </section>
+
         <section id="tab-context" class="tab-panel">
           <div class="panel stack">
             <div class="panel-head">
@@ -565,6 +638,20 @@
         </section>
 
         <section id="tab-settings" class="tab-panel">
+          <div class="panel stack" data-master-only="true">
+            <div class="panel-head">
+              <div>
+                <h3>Типы сущностей</h3>
+                <p class="muted">Имя и цвет применяются к карточкам и графу.</p>
+              </div>
+            </div>
+            <form id="entityTypeForm" class="compact-create-row">
+              <input id="entityTypeName" type="text" required maxlength="120" placeholder="Новый тип" />
+              <input id="entityTypeColor" type="color" value="#6B7280" title="Цвет типа" />
+              <button type="submit">Добавить тип</button>
+            </form>
+            <div id="entityTypeList" class="config-list"></div>
+          </div>
           <form id="llmSettingsForm" class="panel stack settings-form">
             <div class="panel-head">
               <div>
@@ -597,6 +684,10 @@
               <label>
                 <span data-i18n="llm.criticModel">Critic model</span>
                 <input id="llmCriticModel" type="text" data-i18n-placeholder="llm.futureRolePlaceholder" />
+              </label>
+              <label>
+                <span data-i18n="llm.embeddingModel">Embedding model</span>
+                <input id="llmEmbeddingModel" type="text" placeholder="text-embedding-model" />
               </label>
               <label>
                 <span data-i18n="llm.timeout">Timeout seconds</span>
@@ -778,6 +869,10 @@
             <input id="entityTimelineDate" type="text" data-i18n-placeholder="entity.timelineDatePlaceholder" />
           </label>
           <label>
+            <span>Цвет карточки</span>
+            <input id="entityColor" type="color" value="#6B7280" />
+          </label>
+          <label>
             <span data-i18n="common.tags">Tags</span>
             <input id="entityTags" type="text" data-i18n-placeholder="common.tagsPlaceholder" />
           </label>
@@ -807,6 +902,7 @@
     </div>
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>
-    <script src="/app/app.js?v=20260715.1" type="module"></script>
+    <script src="/app/vendor/cytoscape/cytoscape.min.js?v=3.33.4"></script>
+    <script src="/app/app.js?v=20260728.3" type="module"></script>
   </body>
 </html>

@@ -53,6 +53,28 @@ export async function api(path, options = {}) {
   return response.json();
 }
 
+export async function apiRaw(path, options = {}) {
+  const token = masterAccessToken();
+  const { headers: optionHeaders = {}, ...fetchOptions } = options;
+  const response = await fetch(`${apiBase}${path}`, {
+    ...fetchOptions,
+    headers: {
+      ...(token ? { "X-Worldbuilder-Master-Token": token } : {}),
+      ...optionHeaders,
+    },
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      detail = (await response.json()).detail || detail;
+    } catch {
+      detail = await response.text();
+    }
+    throw new Error(detail);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
 function captureMasterTokenFromFragment() {
   const rawHash = window.location.hash.replace(/^#/, "");
   if (!rawHash) return;

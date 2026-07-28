@@ -16,6 +16,8 @@ from worldbuilder_core.models import (
     World,
     WorldRule,
 )
+from worldbuilder_core.services.world_configuration import ensure_entity_type
+from worldbuilder_core.services.relationship_history import build_relationship_revision
 from worldbuilder_core.schemas import ExtractionPayload, ExtractionProposalCreate, ProposalApplyResult, ProposalItemSelection
 
 
@@ -43,6 +45,8 @@ def create_extraction_proposal(
     session: Session,
     world_id: str,
     payload: ExtractionProposalCreate,
+    *,
+    commit: bool = True,
 ) -> ExtractionProposal:
     if session.get(World, world_id) is None:
         raise ProposalWorldNotFoundError(f"World {world_id!r} not found")
@@ -56,8 +60,11 @@ def create_extraction_proposal(
         status=ProposalStatus.pending,
     )
     session.add(proposal)
-    session.commit()
-    session.refresh(proposal)
+    if commit:
+        session.commit()
+        session.refresh(proposal)
+    else:
+        session.flush()
     return proposal
 
 
@@ -676,6 +683,7 @@ def _apply_payload(
     client_entity_ids: dict[str, str] = {}
 
     for draft in payload.entities:
+        ensure_entity_type(session, proposal.world_id, draft.type)
         entity = None
         if draft.match_entity_id is not None:
             entity = _ensure_entity_in_world(session, proposal.world_id, draft.match_entity_id)
@@ -709,11 +717,17 @@ def _apply_payload(
             label=draft.label,
             description=draft.description,
             confidence=draft.confidence,
+            weight=draft.weight,
+            valid_from=draft.valid_from,
+            valid_to=draft.valid_to,
+            evidence=draft.evidence,
             is_secret=draft.is_secret,
             status=draft.status,
             attributes=draft.attributes,
         )
         session.add(relationship)
+        session.flush()
+        session.add(build_relationship_revision(relationship))
         result.created_relationships += 1
 
     for draft in payload.world_rules:

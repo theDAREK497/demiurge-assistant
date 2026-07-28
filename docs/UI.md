@@ -39,11 +39,14 @@ Current UI coverage:
 - first-entry Master/Player role choice saved in the browser;
 - rich wiki cards with optional image URL/path and timeline date metadata;
 - image upload for entity and map/location cards;
-- relationship graph view;
-- timeline view for Event entities;
-- event journal, quest journal, and maps/location module views;
+- relationship graph view with zoom, hover details, entity colors, and saved
+  node positions;
+- drag-and-drop timeline view for Event entities;
+- event journal, quest Kanban, and maps/location module views;
 - focused Modules workspace with one active mini-section at a time instead of
   one noisy all-modules grid;
+- open Event, Quest, and Location cards in the shared full-screen reader and
+  create, edit, or delete them directly from their module view;
 - detective board with evidence nodes, connection lines, empty-board AI
   generation, and confirmed whole-board deletion;
 - collapsible editors for maps, random tables, detective board, and advanced
@@ -54,7 +57,7 @@ Current UI coverage:
 - configure persistent LLM provider settings;
 - send world-aware chat messages;
 - keep local browser chat history in separate branches per world and viewer
-  role;
+  role, with bounded storage and canceled stale world requests;
 - insert prepared chat prompt templates for base card types and enabled modules;
 - render Markdown, including aligned pipe tables, in chat answers, drafts,
   wiki cards, and module prose;
@@ -82,7 +85,8 @@ A React/Vite shell now lives in:
 - `frontend/`
 
 It is a migration target, not the primary manual-testing UI yet. Run the stable
-FastAPI UI at `/app/` for current end-to-end testing with LM Studio.
+FastAPI UI at `/app/` for current end-to-end testing with LM Studio. Its
+dependency tree is locked and builds with Vite 8.
 
 ## Frontend Structure
 
@@ -160,13 +164,21 @@ The Windows starter can do this interactively. Players open:
 http://YOUR_LOCAL_IP:8000/app/
 ```
 
+In LAN mode the starter also prints a private Master URL. It carries the
+generated Master token in the URL fragment (`#master_token=...`), which is not
+sent in the HTTP request or server log. Keep that URL private.
+
 On first entry they choose Master or Player. The selected role is stored in
 `localStorage` as `worldbuilder.viewerRole`.
 
 The visible selector is no longer a normal dropdown in the top bar. Users enter
 through the role choice modal, and can reopen it with the mode switch button.
 Player mode hides Master-only settings, write-back, backup, and editing tools;
-public data is still fetched through role-aware backend APIs.
+public data is fetched through role-aware backend APIs. The backend rejects
+remote Master reads and all mutations unless the request has the Master token.
+Loopback access is trusted by default so local development stays simple. Behind
+a reverse proxy, set `WORLDBUILDER_TRUST_LOCAL_MASTER=false` and configure a
+Master token explicitly.
 
 ## Worldbuilder Views
 
@@ -175,6 +187,13 @@ The first module views reuse existing entities:
 - image-backed wiki cards use `entity.attributes.image_url`;
 - timeline sorting uses Event entities and `entity.attributes.timeline_date`;
 - quests are entities tagged `quest`;
+- quest columns come from world-level status definitions; dragging persists
+  `quest_status` and `quest_order`;
+- timeline dragging persists `timeline_order`;
+- entity card colors override their type color through
+  `entity.attributes.color`;
+- the quest journal also recognizes older Event cards whose summary explicitly
+  identifies them as a quest, so pre-fix cards remain visible;
 - maps use Location entities with optional images;
 - persistent map pins store title, note, linked card, normalized coordinates,
   and secret/public visibility.

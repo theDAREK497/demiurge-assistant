@@ -1,12 +1,16 @@
+import json
+
 import pytest
 
 from worldbuilder_core.services.extraction import (
     ExtractionParseError,
     annotate_payload_with_source_excerpts,
     build_extraction_request,
+    compact_extracted_entity_text,
     ensure_requested_quest_entity,
     parse_extraction_payload,
 )
+from worldbuilder_core.schemas import ExtractionPayload
 
 
 def test_parse_extraction_payload_accepts_plain_json() -> None:
@@ -27,6 +31,25 @@ def test_parse_extraction_payload_accepts_plain_json() -> None:
     assert payload.entities[0].client_id == "mira"
     assert payload.entities[0].status == "proposed"
     assert payload.notes == ["clean"]
+
+
+def test_parse_extraction_payload_recovers_missing_entity_name() -> None:
+    payload = parse_extraction_payload(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "type": "clue",
+                        "summary": "Blue seal points to Mira. It was found in the archive.",
+                    }
+                ]
+            }
+        ),
+        max_entities=12,
+    )
+
+    assert payload.entities[0].name == "Blue seal points to Mira."
+    assert payload.entities[0].type == "clue"
 
 
 def test_parse_extraction_payload_accepts_json_fence() -> None:
@@ -69,6 +92,27 @@ def test_parse_extraction_payload_enforces_entity_limit() -> None:
         parse_extraction_payload(str(content).replace("'", '"'), max_entities=1)
 
 
+def test_parse_extraction_payload_can_truncate_excess_entities() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id": "kept", "type": "clue", "name": "Kept clue"},
+            {"client_id": "removed", "type": "clue", "name": "Removed clue"}
+          ],
+          "relationships": [
+            {"source_client_id": "kept", "target_client_id": "removed", "type": "points_to"}
+          ]
+        }
+        """,
+        max_entities=1,
+        truncate_excess_entities=True,
+    )
+
+    assert [entity.client_id for entity in payload.entities] == ["kept"]
+    assert payload.relationships == []
+
+
 def test_parse_extraction_payload_normalizes_llm_styled_output() -> None:
     payload = parse_extraction_payload(
         """
@@ -95,9 +139,9 @@ def test_parse_extraction_payload_normalizes_llm_styled_output() -> None:
     )
 
     assert len(payload.entities) == 4
-    assert payload.entities[1].type.value == "faction"
-    assert payload.entities[2].type.value == "item"
-    assert payload.entities[3].type.value == "concept"
+    assert payload.entities[1].type == "faction"
+    assert payload.entities[2].type == "item"
+    assert payload.entities[3].type == "concept"
     assert payload.entities[1].client_id != payload.entities[2].client_id
     assert len(payload.relationships) == 1
     assert payload.relationships[0].source_client_id == payload.entities[1].client_id
@@ -106,6 +150,15 @@ def test_parse_extraction_payload_normalizes_llm_styled_output() -> None:
     assert payload.world_rules[0].condition == "The Extraction Mandate"
     assert payload.world_rules[0].effect == "Corporate output overrides everything."
     assert payload.notes == ["Industrial island."]
+
+
+def test_parse_extraction_payload_keeps_new_dynamic_entity_type() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"deity","type":"forgotten_deity","name":"The Sleeper"}]}',
+        max_entities=12,
+    )
+
+    assert payload.entities[0].type == "forgotten_deity"
 
 
 def test_parse_extraction_payload_normalizes_random_table_rows() -> None:
@@ -161,6 +214,50 @@ def test_build_extraction_request_can_request_english_output() -> None:
     assert "in English" in request.messages[0].content
 
 
+def test_extraction_promotes_clues_dates_and_relationship_strength() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id":"seal","type":"evidence","name":"Blue seal"},
+            {"client_id":"fire","type":"event","name":"Archive fire","date":"Year 315"}
+          ],
+          "relationships": [
+            {"source_client_id":"seal","target_client_id":"fire","type":"points_to","weight":7}
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert payload.entities[0].type == "clue"
+    assert payload.entities[1].attributes["timeline_date"] == "Year 315"
+    assert payload.relationships[0].confidence == 0.65
+    assert payload.relationships[0].weight == 7
+
+
+def test_compact_extracted_entity_text_drops_copied_full_chat() -> None:
+    source = "Quest briefing. " * 500
+    payload = ExtractionPayload.model_validate(
+        {
+            "entities": [
+                {
+                    "client_id": "quest",
+                    "type": "event",
+                    "name": "Briefing",
+                    "summary": "Recover the archive key.",
+                    "description": source,
+                    "tags": ["quest"],
+                }
+            ]
+        }
+    )
+
+    compacted = compact_extracted_entity_text(payload, source)
+
+    assert compacted.entities[0].description == "Recover the archive key."
+
+
 def test_parse_extraction_payload_creates_quest_and_new_random_table() -> None:
     payload = parse_extraction_payload(
         """
@@ -186,7 +283,7 @@ def test_parse_extraction_payload_creates_quest_and_new_random_table() -> None:
     )
 
     assert len(payload.entities) == 1
-    assert payload.entities[0].type.value == "event"
+    assert payload.entities[0].type == "event"
     assert "quest" in payload.entities[0].tags
     assert len(payload.random_tables) == 1
     assert payload.random_tables[0].name == "Road rumors"
@@ -219,7 +316,7 @@ def test_requested_quest_is_created_when_model_only_extracts_supporting_entities
 
     quests = [entity for entity in result.entities if "quest" in entity.tags]
     assert len(quests) == 1
-    assert quests[0].type.value == "event"
+    assert quests[0].type == "event"
     assert quests[0].name == "Пульс медного сердца"
     assert quests[0].summary == "Найти пропавших рабочих."
     assert quests[0].attributes["module"] == "quest"

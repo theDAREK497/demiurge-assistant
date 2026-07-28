@@ -11,14 +11,14 @@ from worldbuilder_core.services.proposals import (
     create_extraction_proposal,
     sanitize_extraction_payload_for_world,
 )
-from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context
+from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context_with_embeddings
 from worldbuilder_core.services.world_chat import build_world_llm_request
 
 router = APIRouter(tags=["retrieval"])
 
 
 @router.get("/worlds/{world_id}/context", response_model=WorldContextRead)
-def get_world_context(
+async def get_world_context(
     world_id: str,
     session: DbSession,
     role: ViewerRole = ViewerRole.master,
@@ -28,7 +28,7 @@ def get_world_context(
     max_relationships: int = Query(default=24, ge=0, le=100),
 ) -> WorldContextRead:
     try:
-        return build_world_context(
+        return await build_world_context_with_embeddings(
             session,
             world_id,
             role=role,
@@ -48,7 +48,7 @@ async def chat_with_world_context(
     session: DbSession,
 ) -> WorldLLMChatResponse:
     try:
-        context = build_world_context(
+        context = await build_world_context_with_embeddings(
             session,
             world_id,
             role=payload.role,

@@ -106,6 +106,32 @@ npm run build
 
 MIT. See [LICENSE](LICENSE).
 
+## PostgreSQL + pgvector
+
+Copy `.env.example` to `.env`, set strong `POSTGRES_PASSWORD` and
+`WORLDBUILDER_MASTER_TOKEN` values, and set
+`WORLDBUILDER_EMBEDDING_DIMENSIONS` to the number of floats returned by the
+configured embedding model. BGE-M3 returns `1024`; this must match the fixed
+pgvector column size.
+
+```powershell
+docker compose up --build -d
+```
+
+Open `http://127.0.0.1:8000/app/?role=master#master_token=YOUR_TOKEN`.
+The stack starts PostgreSQL/pgvector, FastAPI, and a separate AI worker. It
+builds embeddings and extracts ready document chunks into reviewable drafts.
+
+For local SQLite development, start the API normally and run
+`start_embedding_worker.bat` in a second terminal before building the semantic
+index or extracting document drafts.
+
+Database diagnostics:
+
+```powershell
+python -m worldbuilder_core.check_database
+```
+
 ## Project Notes
 
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)

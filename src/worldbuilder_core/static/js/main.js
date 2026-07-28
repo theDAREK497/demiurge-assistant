@@ -1,12 +1,16 @@
 import {
   buildContext,
+  buildEmbeddingIndex,
   branchChatThread,
   createEntity,
+  createEntityType,
   createManualProposal,
   saveMapPin,
   createRelationship,
   createRule,
+  createQuestStatus,
   createWorld,
+  clearEmbeddingIndex,
   deleteDetectiveBoard,
   deleteEntity,
   deleteDetectiveNode,
@@ -41,10 +45,11 @@ import {
   startCreateEntityWithType,
   testLlmConnection,
   uploadEntityImage,
-} from "./actions.js?v=20260715.1";
-import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260715.1";
-import { $, toast, wrap } from "./dom.js?v=20260715.1";
-import { language, setLanguage, t } from "./i18n.js?v=20260715.1";
+  uploadKnowledgeDocument,
+} from "./actions.js?v=20260728.3";
+import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260728.3";
+import { $, toast, wrap } from "./dom.js?v=20260728.3";
+import { language, setLanguage, t } from "./i18n.js?v=20260728.3";
 import {
   activateModuleView,
   activateTab,
@@ -58,9 +63,10 @@ import {
   renderEntityFormMode,
   renderInviteLinks,
   renderModuleVisibility,
-} from "./render.js?v=20260715.1";
-import { defaultModuleSettings, state } from "./state.js?v=20260715.1";
-import { setTheme, theme } from "./theme.js?v=20260715.1";
+  zoomGraph,
+} from "./render.js?v=20260728.3";
+import { defaultModuleSettings, state } from "./state.js?v=20260728.3";
+import { setTheme, theme } from "./theme.js?v=20260728.3";
 
 function bindTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
@@ -86,6 +92,8 @@ function bindEvents() {
   );
   $("worldForm").addEventListener("submit", wrap(createWorld));
   $("entityForm").addEventListener("submit", wrap(createEntity));
+  $("entityTypeForm").addEventListener("submit", wrap(createEntityType));
+  $("questStatusForm").addEventListener("submit", wrap(createQuestStatus));
   $("relationshipForm").addEventListener("submit", wrap(createRelationship));
   $("ruleForm").addEventListener("submit", wrap(createRule));
   $("mapPinForm").addEventListener("submit", wrap(saveMapPin));
@@ -97,6 +105,9 @@ function bindEvents() {
   $("manualProposalForm").addEventListener("submit", wrap(createManualProposal));
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
+  $("documentUploadForm").addEventListener("submit", wrap(uploadKnowledgeDocument));
+  $("buildEmbeddingIndex").addEventListener("click", wrap(buildEmbeddingIndex));
+  $("clearEmbeddingIndex").addEventListener("click", wrap(clearEmbeddingIndex));
   $("cancelEntityEdit").addEventListener("click", resetEntityForm);
   $("cancelRelationshipEdit").addEventListener("click", resetRelationshipForm);
   $("openEntityDrawer").addEventListener("click", startCreateEntity);
@@ -131,6 +142,10 @@ function bindEvents() {
   $("generateDetectiveBoard").addEventListener("click", wrap(generateDetectiveBoard));
   $("deleteDetectiveBoard").addEventListener("click", wrap(deleteDetectiveBoard));
   $("entityImageFile").addEventListener("change", wrap(uploadEntityImage));
+  $("entityType").addEventListener("change", (event) => {
+    const definition = state.entityTypes.find((item) => item.key === event.target.value);
+    if (definition && $("entityColor")) $("entityColor").value = definition.color;
+  });
 
   // Responsive mobile sidebar listeners
   const toggleBtn = $("toggleSidebarMobile");
@@ -157,6 +172,12 @@ function bindEvents() {
   $("refreshProposals").addEventListener("click", wrap(loadWorldData));
   $("refreshGraph").addEventListener("click", wrap(loadWorldData));
   $("arrangeGraph").addEventListener("click", arrangeGraph);
+  $("zoomGraphOut").addEventListener("click", () => zoomGraph(-0.2));
+  $("zoomGraphReset").addEventListener("click", () => {
+    state.graphZoom = 1;
+    zoomGraph(0);
+  });
+  $("zoomGraphIn").addEventListener("click", () => zoomGraph(0.2));
   $("refreshTimeline").addEventListener("click", wrap(loadWorldData));
   $("refreshContext").addEventListener("click", wrap(buildContext));
   $("refreshLlmConfig").addEventListener("click", wrap(loadLlmConfig));

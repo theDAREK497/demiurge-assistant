@@ -1,0 +1,48 @@
+services:
+  database:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: worldbuilder
+      POSTGRES_USER: worldbuilder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - worldbuilder_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worldbuilder -d worldbuilder"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: .
+    environment: &worldbuilder_environment
+      WORLDBUILDER_DATABASE_URL: postgresql+psycopg://worldbuilder:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@database:5432/worldbuilder
+      WORLDBUILDER_UPLOAD_DIR: /data/uploads
+      WORLDBUILDER_LLM_BASE_URL: http://host.docker.internal:1234/v1
+      WORLDBUILDER_EMBEDDING_DIMENSIONS: ${WORLDBUILDER_EMBEDDING_DIMENSIONS:-1024}
+      WORLDBUILDER_TRUST_LOCAL_MASTER: "false"
+      WORLDBUILDER_MASTER_TOKEN: ${WORLDBUILDER_MASTER_TOKEN:?Set WORLDBUILDER_MASTER_TOKEN in .env}
+      WORLDBUILDER_ALLOWED_HOSTS: localhost,127.0.0.1
+    ports:
+      - "8000:8000"
+    volumes:
+      - worldbuilder_uploads:/data/uploads
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ai-worker:
+    build: .
+    command: ["python", "-m", "worldbuilder_core.embedding_worker"]
+    environment: *worldbuilder_environment
+    volumes:
+      - worldbuilder_uploads:/data/uploads
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  worldbuilder_postgres:
+  worldbuilder_uploads:

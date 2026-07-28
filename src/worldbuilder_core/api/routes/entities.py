@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import Select, select
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import Entity, EntityType, ViewerRole, World
+from worldbuilder_core.models import Entity, ViewerRole, World
 from worldbuilder_core.schemas import EntityCreate, EntityRead, EntityUpdate
 from worldbuilder_core.services.assets import cleanup_unreferenced_assets, entity_asset_url
+from worldbuilder_core.services.world_configuration import ensure_entity_type
 
 router = APIRouter(tags=["entities"])
 
@@ -25,6 +26,7 @@ def ensure_visible(entity: Entity | None, role: ViewerRole) -> Entity:
 @router.post("/worlds/{world_id}/entities", response_model=EntityRead, status_code=status.HTTP_201_CREATED)
 def create_entity(world_id: str, payload: EntityCreate, session: DbSession) -> Entity:
     ensure_world(session, world_id)
+    ensure_entity_type(session, world_id, payload.type)
     entity = Entity(world_id=world_id, **payload.model_dump())
     session.add(entity)
     session.commit()
@@ -37,7 +39,7 @@ def list_entities(
     world_id: str,
     session: DbSession,
     role: ViewerRole = ViewerRole.master,
-    type: EntityType | None = None,
+    type: str | None = None,
     q: str | None = None,
     tag: str | None = Query(default=None),
 ) -> list[Entity]:
@@ -68,6 +70,8 @@ def update_entity(entity_id: str, payload: EntityUpdate, session: DbSession) -> 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Entity not found")
 
     previous_asset_url = entity_asset_url(entity.attributes)
+    if payload.type is not None:
+        ensure_entity_type(session, entity.world_id, payload.type)
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(entity, key, value)
 

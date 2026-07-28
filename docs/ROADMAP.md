@@ -12,6 +12,7 @@ Status: started.
 - [x] CRUD for directed relationships.
 - [x] CRUD for world rules.
 - [x] Master/player visibility filtering.
+- [x] Server-enforced remote Master authorization for LAN play.
 - [x] Basic API test.
 
 ## Milestone 2: Import/Export
@@ -46,7 +47,8 @@ Status: started.
 - [x] Add role-aware context filtering.
 - [x] Add first RAG context endpoint.
 - [x] Add first world-aware LLM chat endpoint.
-- Later: add embeddings and vector search.
+- [x] Add embeddings and vector search.
+- [x] Retrieve bounded excerpts from imported TXT/DOCX chunks.
 
 ## Milestone 5: Write-Back Pipeline
 
@@ -84,8 +86,12 @@ Status: started.
 - [x] First-entry Master/Player role choice.
 - [x] Richer wiki cards with image URL and timeline metadata.
 - [x] Relationship graph view.
-- [x] Timeline view.
+- [x] Graph zoom, hover details, saved positions, and entity colors.
+- [x] Timeline view with persisted drag-and-drop ordering.
 - [x] First journal/quest/map UI views over existing entities.
+- [x] Dynamic world entity types with user/AI creation and color settings.
+- [x] Quest Kanban with drag-and-drop and configurable statuses.
+- [x] Open/create/edit/delete entity cards from module views.
 - [x] React/Vite shell.
 - [x] Rich entity card editing.
 - [x] Fine-grained proposal review panel.
@@ -93,6 +99,7 @@ Status: started.
 - [x] Network-play polish and player invite screen.
 - [x] Friendlier chat write-back UX.
 - [x] Toggleable UI sections/modules.
+- [x] Security headers, request limits, upload validation, and dependency audit.
 
 ## Milestone 7: Worldbuilder Modules
 
@@ -107,3 +114,18 @@ Status: started.
 - [x] AI-suggested random table rows through draft proposals.
 - Map drawing and richer map editing tools.
 - Richer detective board layout/editing and AI-suggested clues.
+
+## Milestone 8: Large Knowledge Sources
+
+- [x] Stream TXT/DOCX uploads without multipart/base64 overhead.
+- [x] Persist resumable document and chunk progress.
+- [x] Exact and conservative near-duplicate chunk detection.
+- [x] Pause, resume, delete, and progress UI.
+- [x] Role-aware source excerpts in chat context.
+- [x] Configure an embedding model and resumable batch indexing.
+- [x] Add hybrid lexical and cosine-similarity retrieval with safe fallback.
+- [x] Move embedding batches to an external leased worker.
+- [x] Move production retrieval to PostgreSQL + pgvector HNSW.
+- [x] Add background job leasing, retries, and heartbeat state.
+- [ ] Add Prometheus/OpenTelemetry worker metrics and alerting.
+- [x] Add bounded AI extraction from source chunks into review proposals.

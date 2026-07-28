@@ -8,10 +8,12 @@ from worldbuilder_core.models import (
     DetectiveBoardConnection,
     DetectiveBoardNode,
     Entity,
+    EntityTypeDefinition,
     ExtractionProposal,
     MapPin,
     RandomTable,
     RandomTableRow,
+    QuestStatusDefinition,
     Relationship,
     World,
     WorldRule,
@@ -20,17 +22,20 @@ from worldbuilder_core.schemas import (
     DetectiveBoardConnectionSnapshot,
     DetectiveBoardNodeSnapshot,
     EntitySnapshot,
+    EntityTypeDefinitionSnapshot,
     ExtractionProposalSnapshot,
     ExportMetadata,
     MapPinSnapshot,
     RandomTableRowSnapshot,
     RandomTableSnapshot,
+    QuestStatusDefinitionSnapshot,
     RelationshipSnapshot,
     WorldExport,
     WorldImportResult,
     WorldRuleSnapshot,
     WorldSnapshot,
 )
+from worldbuilder_core.services.world_configuration import ensure_world_configuration
 
 EXPORT_SCHEMA_VERSION = "worldbuilder.snapshot.v1"
 
@@ -56,6 +61,21 @@ def export_world(session: Session, world_id: str) -> WorldExport:
     if world is None:
         raise WorldNotFoundError(f"World {world_id!r} not found")
 
+    ensure_world_configuration(session, world_id)
+    entity_types = list(
+        session.scalars(
+            select(EntityTypeDefinition)
+            .where(EntityTypeDefinition.world_id == world_id)
+            .order_by(EntityTypeDefinition.position, EntityTypeDefinition.id)
+        )
+    )
+    quest_statuses = list(
+        session.scalars(
+            select(QuestStatusDefinition)
+            .where(QuestStatusDefinition.world_id == world_id)
+            .order_by(QuestStatusDefinition.position, QuestStatusDefinition.id)
+        )
+    )
     entities = list(
         session.scalars(select(Entity).where(Entity.world_id == world_id).order_by(Entity.created_at.asc(), Entity.id.asc()))
     )
@@ -124,6 +144,8 @@ def export_world(session: Session, world_id: str) -> WorldExport:
             exported_at=datetime.now(UTC),
         ),
         world=WorldSnapshot.model_validate(world),
+        entity_types=[EntityTypeDefinitionSnapshot.model_validate(item) for item in entity_types],
+        quest_statuses=[QuestStatusDefinitionSnapshot.model_validate(item) for item in quest_statuses],
         entities=[EntitySnapshot.model_validate(entity) for entity in entities],
         relationships=[RelationshipSnapshot.model_validate(relationship) for relationship in relationships],
         world_rules=[WorldRuleSnapshot.model_validate(rule) for rule in rules],
@@ -151,6 +173,13 @@ def import_world(session: Session, snapshot: WorldExport, *, replace_existing: b
     world = World(**snapshot.world.model_dump())
     session.add(world)
     session.flush()
+
+    for definition in snapshot.entity_types:
+        session.add(EntityTypeDefinition(**definition.model_dump()))
+    for definition in snapshot.quest_statuses:
+        session.add(QuestStatusDefinition(**definition.model_dump()))
+    if not snapshot.entity_types or not snapshot.quest_statuses:
+        ensure_world_configuration(session, world.id)
 
     for entity_data in snapshot.entities:
         session.add(Entity(**entity_data.model_dump()))

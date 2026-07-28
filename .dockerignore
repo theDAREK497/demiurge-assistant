@@ -1,0 +1,8 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+worldbuilder.sqlite3
+worldbuilder_uploads
+*.log

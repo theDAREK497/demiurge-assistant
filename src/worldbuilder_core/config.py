@@ -18,6 +18,8 @@ class Settings(BaseModel):
     trust_local_master: bool = True
     allowed_hosts: tuple[str, ...] = ("localhost", "testserver")
     max_request_bytes: int = 10 * 1024 * 1024
+    max_document_bytes: int = 50 * 1024 * 1024
+    embedding_dimensions: int = 768
 
 
 @lru_cache
@@ -40,4 +42,8 @@ def get_settings() -> Settings:
             if host.strip()
         ),
         max_request_bytes=int(getenv("WORLDBUILDER_MAX_REQUEST_BYTES", str(defaults.max_request_bytes))),
+        max_document_bytes=int(getenv("WORLDBUILDER_MAX_DOCUMENT_BYTES", str(defaults.max_document_bytes))),
+        embedding_dimensions=int(
+            getenv("WORLDBUILDER_EMBEDDING_DIMENSIONS", str(defaults.embedding_dimensions))
+        ),
     )

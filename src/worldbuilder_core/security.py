@@ -19,7 +19,7 @@ class ApplicationSecurityMiddleware:
     """Protect Master APIs, cap request bodies, and add browser security headers."""
 
     _public_player_reads = (
-        re.compile(r"^/worlds/[^/]+/(?:entities|relationships|world-rules|map-pins|random-tables|detective-board|context)/?$").fullmatch,
+        re.compile(r"^/worlds/[^/]+/(?:entities|relationships|world-rules|map-pins|random-tables|detective-board|context|entity-types|quest-statuses)/?$").fullmatch,
         re.compile(r"^/(?:entities|relationships|world-rules|map-pins|random-tables)/[^/]+/?$").fullmatch,
     )
     _public_world_read = re.compile(r"^/worlds(?:/[^/]+)?/?$").fullmatch
@@ -46,6 +46,7 @@ class ApplicationSecurityMiddleware:
             await send(message)
 
         headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        body_limit = self._body_limit(scope)
         if not self._has_allowed_host(headers):
             await self._reject(scope, receive, secure_send, 400, "Invalid Host header")
             return
@@ -53,7 +54,7 @@ class ApplicationSecurityMiddleware:
         content_length = headers.get(b"content-length")
         if content_length:
             try:
-                if int(content_length) > self.settings.max_request_bytes:
+                if int(content_length) > body_limit:
                     await self._reject(scope, receive, secure_send, 413, "Request body is too large")
                     return
             except ValueError:
@@ -71,7 +72,7 @@ class ApplicationSecurityMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received_bytes += len(message.get("body", b""))
-                if received_bytes > self.settings.max_request_bytes:
+                if received_bytes > body_limit:
                     raise RequestBodyTooLargeError
             return message
 
@@ -81,6 +82,15 @@ class ApplicationSecurityMiddleware:
             if response_started:
                 raise
             await self._reject(scope, receive, secure_send, 413, "Request body is too large")
+
+    def _body_limit(self, scope: Scope) -> int:
+        path = scope.get("path", "")
+        relative_path = path[len(self.api_prefix) :] if path.startswith(self.api_prefix) else path
+        is_document_upload = (
+            scope.get("method", "GET").upper() == "POST"
+            and re.fullmatch(r"/worlds/[^/]+/documents/?", relative_path) is not None
+        )
+        return self.settings.max_document_bytes if is_document_upload else self.settings.max_request_bytes
 
     def _requires_master(self, scope: Scope) -> bool:
         path = scope.get("path", "")

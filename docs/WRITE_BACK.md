@@ -82,7 +82,10 @@ The backend:
 - validates the JSON with Pydantic;
 - removes repeated draft entities, relationships, world rules, random-table
   rows, and notes before storing the proposal;
-- extracts quest requests as a primary Event entity tagged `quest`;
+- forwards the original user request into extraction and guarantees a primary
+  Event entity tagged `quest` when a quest was requested;
+- reconciles unambiguous near-duplicate entity names with existing cards and
+  stores the generated name variant as an alias;
 - separates newly described random tables and their rows from relationships;
 - recovers invalid invented match IDs as new draft entities when possible and
   drops dangling relationships or unknown table rows instead of failing the

@@ -3,8 +3,14 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import Entity, Relationship, ViewerRole, World
-from worldbuilder_core.schemas import RelationshipCreate, RelationshipRead, RelationshipUpdate
+from worldbuilder_core.models import Entity, Relationship, RelationshipRevision, ViewerRole, World
+from worldbuilder_core.schemas import (
+    RelationshipCreate,
+    RelationshipRead,
+    RelationshipRevisionRead,
+    RelationshipUpdate,
+)
+from worldbuilder_core.services.relationship_history import build_relationship_revision
 
 router = APIRouter(tags=["relationships"])
 
@@ -41,6 +47,8 @@ def create_relationship(world_id: str, payload: RelationshipCreate, session: DbS
 
     relationship = Relationship(world_id=world_id, **payload.model_dump())
     session.add(relationship)
+    session.flush()
+    session.add(build_relationship_revision(relationship))
     session.commit()
     session.refresh(relationship)
     return relationship
@@ -75,6 +83,25 @@ def list_relationships(
     return relationships
 
 
+@router.get(
+    "/worlds/{world_id}/relationship-revisions",
+    response_model=list[RelationshipRevisionRead],
+)
+def list_relationship_revisions(
+    world_id: str,
+    session: DbSession,
+) -> list[RelationshipRevision]:
+    ensure_world(session, world_id)
+    return list(
+        session.scalars(
+            select(RelationshipRevision)
+            .join(Relationship, Relationship.id == RelationshipRevision.relationship_id)
+            .where(Relationship.world_id == world_id)
+            .order_by(RelationshipRevision.created_at.desc())
+        )
+    )
+
+
 @router.get("/relationships/{relationship_id}", response_model=RelationshipRead)
 def get_relationship(
     relationship_id: str,
@@ -95,6 +122,8 @@ def update_relationship(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
 
     data = payload.model_dump(exclude_unset=True)
+    effective_at = data.pop("effective_at", None)
+    change_note = data.pop("change_note", None)
     source_id = data.get("source_entity_id", relationship.source_entity_id)
     target_id = data.get("target_entity_id", relationship.target_entity_id)
     ensure_entity_in_world(session, source_id, relationship.world_id)
@@ -104,6 +133,14 @@ def update_relationship(
         setattr(relationship, key, value)
 
     session.add(relationship)
+    session.flush()
+    session.add(
+        build_relationship_revision(
+            relationship,
+            effective_at=effective_at or relationship.valid_from,
+            change_note=change_note,
+        )
+    )
     session.commit()
     session.refresh(relationship)
     return relationship
