@@ -1,16 +1,20 @@
-import { api, apiRaw } from "./api.js?v=20260728.3";
-import { $, toast } from "./dom.js?v=20260728.3";
-import { language, t } from "./i18n.js?v=20260728.3";
+import { api, apiRaw } from "./api.js?v=20260804.2";
+import { $, toast } from "./dom.js?v=20260804.2";
+import { language, t } from "./i18n.js?v=20260804.2";
 import {
+  addAssistantRun,
+  clearAssistantRuns as clearStoredAssistantRuns,
   createChatThreadFromMessages,
   deleteChatThread as deleteStoredChatThread,
+  loadAssistantRunsForWorld,
   loadChatThreadsForContext,
   persistActiveChatMessages,
   renameChatThread as renameStoredChatThread,
   selectedWorld,
   state,
   switchChatThread,
-} from "./state.js?v=20260728.3";
+  updateAssistantRun,
+} from "./state.js?v=20260804.2";
 import {
   activateTab,
   closeEntityDrawer,
@@ -18,6 +22,7 @@ import {
   currentRole,
   openEntityDrawer,
   renderAllWorldData,
+  renderAssistant,
   renderChat,
   renderChatThreads,
   renderDetectiveConnectionFormMode,
@@ -31,7 +36,7 @@ import {
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
-} from "./render.js?v=20260728.3";
+} from "./render.js?v=20260804.2";
 
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 let worldDataAbortController = null;
@@ -74,11 +79,16 @@ export async function loadHealth() {
   try {
     const response = await fetch("/health");
     if (!response.ok) throw new Error("Health check failed");
+    const health = await response.json();
     $("apiStatus").textContent = t("status.online");
     $("apiStatus").className = "status-pill ok";
+    $("apiStatus").title = health.local_worker_enabled
+      ? t("status.localWorkerActive")
+      : t("status.externalWorker");
   } catch {
     $("apiStatus").textContent = t("status.offline");
     $("apiStatus").className = "status-pill fail";
+    $("apiStatus").title = "";
   }
 }
 
@@ -109,6 +119,7 @@ export async function saveLlmConfig(event) {
   if (state.selectedWorldId) {
     state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embedding-status`);
     renderDocuments();
+    await refreshWorldDataQuietly();
   }
   renderLlmConfig();
   toast(t("llm.saved"));
@@ -167,10 +178,12 @@ export async function loadWorldData() {
     state.documents = [];
     state.documentExtractionJobs = {};
     state.embeddingStatus = null;
+    state.worldDataLoadedAt = Date.now();
     state.selectedEntityId = null;
     state.selectedReaderType = null;
     state.selectedReaderSourceId = null;
     loadChatThreadsForContext(null, currentRole());
+    loadAssistantRunsForWorld(null);
     renderAllWorldData();
     return;
   }
@@ -238,11 +251,14 @@ export async function loadWorldData() {
     extractionJobs.map((job) => [job.document_id, job]).reverse(),
   );
   state.embeddingStatus = embeddingStatus;
+  state.worldDataLoadedAt = Date.now();
   if (llmConfig) {
     state.llmConfig = llmConfig;
     renderLlmConfig();
   }
   loadChatThreadsForContext(state.selectedWorldId, role);
+  loadAssistantRunsForWorld(state.selectedWorldId);
+  reconcileAssistantSourceRuns();
   renderAllWorldData();
   extractionJobs
     .filter((job) => ["queued", "running"].includes(job.status))
@@ -289,6 +305,7 @@ export async function processKnowledgeDocument(documentId) {
   } finally {
     delete state.documentProcessing[documentId];
     renderDocuments();
+    await refreshWorldDataQuietly(worldId);
   }
 }
 
@@ -296,6 +313,7 @@ export async function pauseKnowledgeDocument(documentId) {
   state.documentProcessing[documentId] = false;
   replaceDocument(await api(`/documents/${documentId}/pause`, { method: "POST" }));
   renderDocuments();
+  await refreshWorldDataQuietly();
 }
 
 export async function resumeKnowledgeDocument(documentId) {
@@ -312,6 +330,7 @@ export async function deleteKnowledgeDocument(documentId) {
   state.documents = state.documents.filter((item) => item.id !== documentId);
   delete state.documentExtractionJobs[documentId];
   renderDocuments();
+  await refreshWorldDataQuietly();
 }
 
 export async function extractKnowledgeDocument(documentId) {
@@ -326,6 +345,23 @@ export async function extractKnowledgeDocument(documentId) {
   await monitorDocumentExtraction(job);
 }
 
+export async function pauseDocumentExtraction(jobId) {
+  const job = await api(`/document-extraction-jobs/${jobId}/pause`, { method: "POST" });
+  state.documentExtractionJobs[job.document_id] = job;
+  renderDocuments();
+  renderAssistant();
+  toast(t("documents.extractionPaused"));
+}
+
+export async function resumeDocumentExtraction(jobId) {
+  const job = await api(`/document-extraction-jobs/${jobId}/resume`, { method: "POST" });
+  state.documentExtractionJobs[job.document_id] = job;
+  renderDocuments();
+  renderAssistant();
+  toast(t("documents.extractionResumed"));
+  await monitorDocumentExtraction(job);
+}
+
 async function monitorDocumentExtraction(initialJob) {
   if (documentExtractionPolling[initialJob.id]) return documentExtractionPolling[initialJob.id];
   const worldId = state.selectedWorldId;
@@ -335,23 +371,241 @@ async function monitorDocumentExtraction(initialJob) {
       state.selectedWorldId === worldId &&
       ["queued", "running"].includes(job.status)
     ) {
-      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      await new Promise((resolve) => window.setTimeout(resolve, documentExtractionPollDelay(job)));
       job = await api(`/document-extraction-jobs/${job.id}`);
       state.documentExtractionJobs[job.document_id] = job;
+      reconcileAssistantSourceRuns();
       renderDocuments();
+      renderAssistant();
     }
     if (state.selectedWorldId !== worldId) return;
     if (job.status === "completed") {
-      state.proposals = await api(`/worlds/${worldId}/proposals`);
+      await refreshWorldDataQuietly(worldId);
       toast(t("documents.extractionReady", { count: job.proposal_count }));
     } else if (job.status === "failed") {
+      await refreshWorldDataQuietly(worldId);
       toast(job.error || t("documents.extractionFailed"), "error");
+    } else {
+      await refreshWorldDataQuietly(worldId);
     }
   })().finally(() => {
     delete documentExtractionPolling[initialJob.id];
     renderDocuments();
   });
   return documentExtractionPolling[initialJob.id];
+}
+
+function documentExtractionPollDelay(job) {
+  if (job.pause_requested) return 3_000;
+  if (job.status === "running") return 5_000;
+  if (job.retry_at) {
+    const remaining = new Date(job.retry_at).getTime() - Date.now();
+    return Math.max(3_000, Math.min(remaining, 10_000));
+  }
+  return 7_500;
+}
+
+async function refreshWorldDataQuietly(worldId = state.selectedWorldId) {
+  if (!worldId || state.selectedWorldId !== worldId) return;
+  try {
+    await loadWorldData();
+  } catch (error) {
+    console.warn("World data refresh failed", error);
+  }
+}
+
+export function selectAssistantScenario(scenario) {
+  if (!["source", "audit", "adventure"].includes(scenario) || state.assistantBusy) return;
+  state.assistantScenario = scenario;
+  $("assistantConfirm").checked = false;
+  renderAssistant();
+}
+
+export function clearAssistantHistory() {
+  if (!state.assistantRuns.length || !confirm(t("assistant.clearConfirm"))) return;
+  clearStoredAssistantRuns();
+  renderAssistant();
+}
+
+export async function runAssistantScenario(event) {
+  event.preventDefault();
+  if (!requireWorld() || state.assistantBusy) return;
+  if (!$("assistantConfirm").checked) {
+    toast(t("assistant.confirmRequired"), "error");
+    return;
+  }
+
+  const scenario = state.assistantScenario;
+  const input = assistantScenarioInput(scenario);
+  if (!input) return;
+
+  const run = addAssistantRun({
+    scenario,
+    title: input.title,
+    documentId: input.documentId,
+  });
+  state.assistantBusy = true;
+  renderAssistant();
+
+  try {
+    if (scenario === "source") {
+      await extractKnowledgeDocument(input.documentId);
+      const job = state.documentExtractionJobs[input.documentId];
+      if (job?.status === "failed") {
+        throw new Error(job.error || t("documents.extractionFailed"));
+      }
+      if (job?.status === "paused") {
+        updateAssistantRun(run.id, {
+          status: "interrupted",
+          result: t("documents.extraction.paused"),
+        });
+        toast(t("documents.extractionPaused"));
+        return;
+      }
+      updateAssistantRun(run.id, {
+        status: "completed",
+        result: t("assistant.source.completed", { count: job?.proposal_count || 0 }),
+        proposalId: job?.proposal_id || null,
+      });
+    } else if (scenario === "adventure") {
+      const proposal = await api(`/worlds/${state.selectedWorldId}/proposals/generate-adventure`, {
+        method: "POST",
+        body: JSON.stringify({
+          role: currentRole(),
+          output_language: language(),
+          premise: input.query,
+          scale: input.scale,
+          tone: input.tone || null,
+          enabled_modules: input.enabledModules,
+          query: input.query,
+          max_entities: input.maxExtractEntities,
+        }),
+      });
+      state.proposals = [proposal, ...state.proposals.filter((item) => item.id !== proposal.id)];
+      updateAssistantRun(run.id, {
+        status: "completed",
+        result: t("assistant.adventure.created", {
+          entities: proposal.payload.entities.length,
+          relationships: proposal.payload.relationships.length,
+        }),
+        proposalId: proposal.id,
+      });
+    } else {
+      const response = await api(`/worlds/${state.selectedWorldId}/chat`, {
+        method: "POST",
+        body: JSON.stringify({
+          role: currentRole(),
+          output_language: language(),
+          query: input.query,
+          messages: [{ role: "user", content: input.prompt }],
+          max_entities: 50,
+          max_rules: 25,
+          max_relationships: 100,
+          save_to_wiki: false,
+          temperature: 0.25,
+          max_tokens: input.maxTokens,
+        }),
+      });
+      updateAssistantRun(run.id, {
+        status: "completed",
+        result: response.completion.message.content,
+      });
+    }
+    $("assistantConfirm").checked = false;
+    toast(t("assistant.completed"));
+  } catch (error) {
+    updateAssistantRun(run.id, { status: "failed", error: error.message });
+    toast(t("assistant.failed", { message: error.message }), "error");
+  } finally {
+    state.assistantBusy = false;
+    renderAllWorldData();
+  }
+}
+
+function reconcileAssistantSourceRuns() {
+  state.assistantRuns
+    .filter((run) => run.scenario === "source" && ["running", "interrupted"].includes(run.status))
+    .forEach((run) => {
+      const job = state.documentExtractionJobs[run.documentId];
+      if (!job) return;
+      if (["queued", "running"].includes(job.status)) {
+        updateAssistantRun(run.id, { status: "running", error: null });
+      } else if (job.status === "completed") {
+        updateAssistantRun(run.id, {
+          status: "completed",
+          result: t("assistant.source.completed", { count: job.proposal_count || 0 }),
+          proposalId: job.proposal_id || null,
+          error: null,
+        });
+      } else if (job.status === "failed") {
+        updateAssistantRun(run.id, {
+          status: "failed",
+          error: job.error || t("documents.extractionFailed"),
+        });
+      }
+    });
+}
+
+function assistantScenarioInput(scenario) {
+  if (scenario === "source") {
+    const documentId = $("assistantDocument").value;
+    const document = state.documents.find((item) => item.id === documentId);
+    if (!document || document.status !== "ready") {
+      toast(t("assistant.source.chooseReady"), "error");
+      return null;
+    }
+    return {
+      documentId,
+      title: document.filename,
+    };
+  }
+
+  if (scenario === "audit") {
+    const focus = $("assistantAuditFocus").value.trim();
+    const full = $("assistantAuditDepth").value === "full";
+    const query = focus || t("assistant.audit.defaultQuery");
+    return {
+      title: focus || t("assistant.audit.title"),
+      query,
+      prompt: buildAssistantAuditPrompt(query, full),
+      maxTokens: full ? 2_800 : 1_600,
+    };
+  }
+
+  const brief = $("assistantAdventureBrief").value.trim();
+  if (!brief) {
+    toast(t("assistant.adventure.briefRequired"), "error");
+    $("assistantAdventureBrief").focus();
+    return null;
+  }
+  const scale = $("assistantAdventureScale").value;
+  const tone = $("assistantAdventureTone").value.trim();
+  const enabledModules = Object.entries(state.moduleSettings)
+    .filter(([, enabled]) => enabled !== false)
+    .map(([name]) => name);
+  return {
+    title: brief,
+    query: brief,
+    scale,
+    tone,
+    enabledModules,
+    maxExtractEntities: { small: 8, medium: 16, large: 28 }[scale] || 16,
+  };
+}
+
+function buildAssistantAuditPrompt(focus, full) {
+  const reportSize = full ? "detailed" : "concise";
+  const languageRule = language() === "ru" ? "Write the report in Russian." : "Write the report in English.";
+  return [
+    "Audit the supplied world context without inventing new lore.",
+    `Focus: ${focus}`,
+    `Produce a ${reportSize} Markdown report.`,
+    "Use sections: Summary, Contradictions, Probable duplicates, Missing links, Weak evidence, Next actions.",
+    "For every finding, name the exact entities, relationships, rules, or sources that support it.",
+    "Separate confirmed problems from hypotheses. If evidence is insufficient, say so.",
+    "Do not create drafts and do not rewrite the world.",
+    languageRule,
+  ].join("\n");
 }
 
 function replaceDocument(document) {
@@ -376,6 +630,7 @@ export async function buildEmbeddingIndex() {
     }
     if (job.status === "failed") throw new Error(job.error || t("embeddings.failed"));
     state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embedding-status`);
+    await refreshWorldDataQuietly();
     toast(t("embeddings.ready"));
   } finally {
     state.embeddingBusy = false;
@@ -389,6 +644,7 @@ export async function clearEmbeddingIndex() {
   state.embeddingJob = null;
   state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embeddings`, { method: "DELETE" });
   renderDocuments();
+  await refreshWorldDataQuietly();
 }
 
 export async function createWorld(event) {

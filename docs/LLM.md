@@ -55,6 +55,15 @@ The current pipeline uses:
 `summarizer_model` and `critic_model` are stored now so the future summarizer
 and validator pipelines can use the same settings contract.
 
+## Local Reasoning Models
+
+Structured extraction and world-aware chat send `reasoning_effort: "none"`.
+This prevents local reasoning models from spending the whole output budget
+before emitting user-visible text or JSON. The raw provider chat endpoint keeps
+the provider default for technical experiments. Extraction output tokens scale
+from 1536 to 4096 with the requested entity count; this avoids truncated JSON
+and a second repair generation.
+
 ## API
 
 Inspect current config:

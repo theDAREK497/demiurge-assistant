@@ -1,3 +1,4 @@
+from time import monotonic
 from typing import Any
 
 import httpx
@@ -9,6 +10,10 @@ from worldbuilder_core.services.llm_settings import LLMRuntimeSettings
 
 class LLMProviderError(Exception):
     """Raised when an LLM provider returns an error or an unexpected response."""
+
+
+STRUCTURED_OUTPUT_RETRY_SECONDS = 3_600
+_structured_output_disabled_until: dict[tuple[str, str], float] = {}
 
 
 class OpenAICompatibleLLMClient:
@@ -31,6 +36,11 @@ class OpenAICompatibleLLMClient:
         model = request.model or self.default_model
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
+        structured_output_key = (self.base_url, model)
+        structured_output_requested = "response_format" in payload
+        if _structured_output_disabled_until.get(structured_output_key, 0) > monotonic():
+            payload.pop("response_format", None)
+        structured_output_sent = "response_format" in payload
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
@@ -44,12 +54,17 @@ class OpenAICompatibleLLMClient:
                     and "response_format" in payload
                     and "grammar" in response.text.casefold()
                 ):
+                    _structured_output_disabled_until[structured_output_key] = (
+                        monotonic() + STRUCTURED_OUTPUT_RETRY_SECONDS
+                    )
                     payload.pop("response_format", None)
                     response = await client.post(
                         f"{self.base_url}/chat/completions",
                         headers=self._headers(),
                         json=payload,
                     )
+                elif response.status_code < 400 and structured_output_requested and structured_output_sent:
+                    _structured_output_disabled_until.pop(structured_output_key, None)
         except httpx.HTTPError as exc:
             detail = str(exc).strip() or exc.__class__.__name__
             if isinstance(exc, httpx.TimeoutException):

@@ -122,9 +122,9 @@ Open `http://127.0.0.1:8000/app/?role=master#master_token=YOUR_TOKEN`.
 The stack starts PostgreSQL/pgvector, FastAPI, and a separate AI worker. It
 builds embeddings and extracts ready document chunks into reviewable drafts.
 
-For local SQLite development, start the API normally and run
-`start_embedding_worker.bat` in a second terminal before building the semantic
-index or extracting document drafts.
+For local SQLite use, the API starts one sequential AI worker automatically.
+Set `WORLDBUILDER_LOCAL_WORKER_ENABLED=false` only when running
+`start_embedding_worker.bat` as a dedicated process.
 
 Database diagnostics:
 

@@ -19,7 +19,8 @@ class Settings(BaseModel):
     allowed_hosts: tuple[str, ...] = ("localhost", "testserver")
     max_request_bytes: int = 10 * 1024 * 1024
     max_document_bytes: int = 50 * 1024 * 1024
-    embedding_dimensions: int = 768
+    embedding_dimensions: int = 1024
+    local_worker_enabled: bool = True
 
 
 @lru_cache
@@ -46,4 +47,6 @@ def get_settings() -> Settings:
         embedding_dimensions=int(
             getenv("WORLDBUILDER_EMBEDDING_DIMENSIONS", str(defaults.embedding_dimensions))
         ),
+        local_worker_enabled=getenv("WORLDBUILDER_LOCAL_WORKER_ENABLED", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
     )

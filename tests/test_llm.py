@@ -17,6 +17,7 @@ def test_openai_compatible_client_chat_parses_response() -> None:
         payload = json.loads(request.content)
         assert payload["model"] == "story-model"
         assert payload["messages"] == [{"role": "user", "content": "Describe the city."}]
+        assert payload["reasoning_effort"] == "none"
         return httpx.Response(
             200,
             json={
@@ -39,13 +40,55 @@ def test_openai_compatible_client_chat_parses_response() -> None:
         transport=httpx.MockTransport(handler),
     )
 
-    response = asyncio.run(client.chat(LLMChatRequest(messages=[LLMMessage(role="user", content="Describe the city.")])))
+    response = asyncio.run(
+        client.chat(
+            LLMChatRequest(
+                messages=[LLMMessage(role="user", content="Describe the city.")],
+                reasoning_effort="none",
+            )
+        )
+    )
 
     assert response.model == "story-model"
     assert response.message.role == "assistant"
     assert response.message.content == "Cinder Port glows under ashfall."
     assert response.usage is not None
     assert response.usage.total_tokens == 20
+
+
+def test_chat_caches_unsupported_structured_output() -> None:
+    calls: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        calls.append(payload)
+        if len(calls) == 1:
+            assert "response_format" in payload
+            return httpx.Response(400, text="Failed to compile grammar")
+        assert "response_format" not in payload
+        return httpx.Response(
+            200,
+            json={
+                "model": "grammar-cache-model",
+                "choices": [{"message": {"role": "assistant", "content": "{}"}}],
+            },
+        )
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://grammar-cache.test/v1",
+        default_model="grammar-cache-model",
+        timeout_seconds=10,
+        transport=httpx.MockTransport(handler),
+    )
+    request = LLMChatRequest(
+        messages=[LLMMessage(role="user", content="Extract.")],
+        response_format={"type": "json_schema", "json_schema": {"name": "result", "schema": {}}},
+    )
+
+    asyncio.run(client.chat(request))
+    asyncio.run(client.chat(request))
+
+    assert len(calls) == 3
 
 
 def test_openai_compatible_client_parses_embedding_batch() -> None:
@@ -156,3 +199,32 @@ def test_world_chat_request_prepends_role_aware_context() -> None:
     assert "in Russian" in llm_request.messages[0].content
     assert "Mirror Gate" in llm_request.messages[0].content
     assert llm_request.messages[1].content == "What do I see?"
+    assert llm_request.reasoning_effort == "none"
+
+
+def test_world_chat_request_bounds_large_context_and_history() -> None:
+    context = WorldContextRead(
+        world=WorldRead(
+            id="world-1",
+            name="Bounded World",
+            description=None,
+            created_at="2026-01-01T00:00:00Z",
+            updated_at="2026-01-01T00:00:00Z",
+        ),
+        role=ViewerRole.master,
+        query=None,
+        context_text="C" * 50_000,
+    )
+    request = WorldLLMChatRequest(
+        messages=[
+            LLMMessage(role="user", content=f"message-{index}:" + "x" * 19_000)
+            for index in range(4)
+        ]
+    )
+
+    llm_request = build_world_llm_request(context, request)
+
+    assert len(llm_request.messages[0].content) < 33_000
+    assert sum(len(message.content) for message in llm_request.messages[1:]) <= 32_000
+    assert llm_request.messages[-1].content.startswith("message-3:")
+    assert "[truncated]" in llm_request.messages[-1].content

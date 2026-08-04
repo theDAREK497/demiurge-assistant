@@ -36,6 +36,9 @@ class RetrievalWorldNotFoundError(RetrievalError):
     pass
 
 
+MAX_CONTEXT_CHARS = 32_000
+
+
 def build_world_context(
     session: Session,
     world_id: str,
@@ -46,6 +49,7 @@ def build_world_context(
     max_rules: int = 8,
     max_relationships: int = 24,
     max_random_tables: int = 12,
+    max_document_chunks: int = 8,
     query_embedding: list[float] | None = None,
     embedding_model: str | None = None,
 ) -> WorldContextRead:
@@ -71,6 +75,7 @@ def build_world_context(
         query=query,
         query_embedding=query_embedding,
         embedding_model=embedding_model,
+        max_chunks=max_document_chunks,
     )
 
     return WorldContextRead(
@@ -208,6 +213,8 @@ def _select_document_chunks(
     query_embedding: list[float] | None = None,
     embedding_model: str | None = None,
 ) -> list[KnowledgeChunkExcerpt]:
+    if max_chunks <= 0:
+        return []
     terms = _search_terms(query)
     if not terms:
         return []
@@ -319,20 +326,25 @@ def render_context_text(
 ) -> str:
     lines = [f"World: {world.name}"]
     if world.description:
-        lines.append(f"Description: {world.description}")
+        lines.append(f"Description: {_compact_context_value(world.description, 1_000)}")
 
     if rules:
         lines.append("")
         lines.append("World rules:")
         for rule in rules:
-            lines.append(f"- P{rule.priority}: if {rule.condition} then {rule.effect}")
+            condition = _compact_context_value(rule.condition, 700)
+            effect = _compact_context_value(rule.effect, 700)
+            lines.append(f"- P{rule.priority}: if {condition} then {effect}")
 
     if entities:
         lines.append("")
         lines.append("Relevant entities:")
         for entity in entities:
             detail = entity.summary or entity.description or "No summary."
-            lines.append(f"- {entity.type}: {entity.name} [{entity.id}] - {detail}")
+            lines.append(
+                f"- {entity.type}: {entity.name} [{entity.id}] - "
+                f"{_compact_context_value(detail, 1_000)}"
+            )
 
     if relationships:
         lines.append("")
@@ -348,11 +360,12 @@ def render_context_text(
         lines.append("Random tables:")
         for table in random_tables:
             detail = table.description or "No description."
-            lines.append(f"- {table.name} [{table.id}] - {detail}")
+            lines.append(f"- {table.name} [{table.id}] - {_compact_context_value(detail, 700)}")
             for row in table.rows[:8]:
                 label = f"{row.label}: " if row.label else ""
                 secret = " (secret)" if row.is_secret else ""
-                lines.append(f"  - {label}{row.result} [weight {row.weight}]{secret}")
+                result = _compact_context_value(row.result, 500)
+                lines.append(f"  - {label}{result} [weight {row.weight}]{secret}")
 
     if document_chunks:
         lines.append("")
@@ -360,6 +373,20 @@ def render_context_text(
         for excerpt in document_chunks:
             heading = f" / {excerpt.heading}" if excerpt.heading else ""
             lines.append(f"- {excerpt.filename} #{excerpt.position + 1}{heading}:")
-            lines.append(excerpt.content)
+            lines.append(_compact_context_value(excerpt.content, 4_000))
 
-    return "\n".join(lines)
+    return _truncate_context("\n".join(lines), MAX_CONTEXT_CHARS)
+
+
+def _compact_context_value(value: str, limit: int) -> str:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 3].rstrip()}..."
+
+
+def _truncate_context(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    marker = "\n\n[Context truncated to fit the model budget.]"
+    return f"{value[: limit - len(marker)].rstrip()}{marker}"

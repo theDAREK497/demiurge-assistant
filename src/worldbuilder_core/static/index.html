@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Worldbuilder Core</title>
-    <link rel="stylesheet" href="/app/styles.css" />
+    <link rel="stylesheet" href="/app/styles.css?v=20260804.2" />
   </head>
   <body>
     <div class="shell">
@@ -78,6 +78,7 @@
         <nav class="tabs" aria-label="Workspace tabs">
           <button class="tab active" data-tab="wiki" type="button" data-i18n="tabs.wiki">Wiki</button>
           <button class="tab" data-tab="rules" data-master-only="true" type="button" data-i18n="tabs.rules">Rules</button>
+          <button class="tab" data-tab="assistant" data-master-only="true" type="button" data-i18n="tabs.assistant">Assistant</button>
           <button class="tab" data-tab="chat" data-master-only="true" type="button" data-i18n="tabs.chat">Chat</button>
           <button class="tab" data-tab="proposals" data-master-only="true" type="button" data-i18n="tabs.proposals">Proposals</button>
           <button class="tab" data-tab="documents" data-master-only="true" type="button" data-i18n="tabs.documents">Sources</button>
@@ -150,7 +151,7 @@
                 <input id="relationshipWeight" type="number" min="0" max="10" step="0.25" value="1" required />
                 <small class="muted" data-i18n="relationship.weightHint">Controls edge thickness and relationship influence.</small>
               </label>
-              <div class="form-grid">
+              <div class="form-grid relationship-period-grid">
                 <label>
                   <span data-i18n="relationship.validFrom">Active from</span>
                   <input id="relationshipValidFrom" type="text" placeholder="Year 315 / Chapter 2" />
@@ -193,6 +194,115 @@
                 <button id="refreshRelationships" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
               <div id="relationshipList" class="grid-list empty"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="tab-assistant" class="tab-panel">
+          <div class="panel assistant-panel">
+            <div class="panel-head">
+              <div>
+                <h3 data-i18n="assistant.title">Assistant</h3>
+                <p class="muted" data-i18n="assistant.subtitle">Choose a bounded task for the current world.</p>
+              </div>
+              <button id="clearAssistantHistory" class="ghost danger" type="button" data-i18n="assistant.clearHistory">Clear history</button>
+            </div>
+
+            <div class="assistant-workspace">
+              <nav class="assistant-scenarios" aria-label="Assistant scenarios" data-i18n-aria-label="assistant.scenariosLabel">
+                <button class="assistant-scenario active" data-assistant-scenario="source" type="button">
+                  <strong data-i18n="assistant.source.title">Analyze source</strong>
+                  <span data-i18n="assistant.source.short">Document to drafts</span>
+                </button>
+                <button class="assistant-scenario" data-assistant-scenario="audit" type="button">
+                  <strong data-i18n="assistant.audit.title">Check world</strong>
+                  <span data-i18n="assistant.audit.short">Contradictions and gaps</span>
+                </button>
+                <button class="assistant-scenario" data-assistant-scenario="adventure" type="button">
+                  <strong data-i18n="assistant.adventure.title">Prepare adventure</strong>
+                  <span data-i18n="assistant.adventure.short">Playable draft package</span>
+                </button>
+              </nav>
+
+              <div class="assistant-main">
+                <form id="assistantForm" class="stack">
+                  <div class="assistant-step">
+                    <span class="assistant-step-number">1</span>
+                    <div class="assistant-step-content">
+                      <div data-assistant-form="source">
+                        <label>
+                          <span data-i18n="assistant.source.document">Prepared document</span>
+                          <select id="assistantDocument"></select>
+                        </label>
+                        <p id="assistantDocumentHint" class="muted"></p>
+                      </div>
+
+                      <div class="hidden" data-assistant-form="audit">
+                        <label>
+                          <span data-i18n="assistant.audit.focus">What to check closely</span>
+                          <textarea id="assistantAuditFocus" rows="4" maxlength="2000" data-i18n-placeholder="assistant.audit.focusPlaceholder"></textarea>
+                        </label>
+                        <label>
+                          <span data-i18n="assistant.audit.depth">Report depth</span>
+                          <select id="assistantAuditDepth">
+                            <option value="brief" data-i18n="assistant.audit.brief">Brief</option>
+                            <option value="full" data-i18n="assistant.audit.full">Full</option>
+                          </select>
+                        </label>
+                      </div>
+
+                      <div class="hidden" data-assistant-form="adventure">
+                        <label>
+                          <span data-i18n="assistant.adventure.brief">Adventure premise</span>
+                          <textarea id="assistantAdventureBrief" rows="5" maxlength="4000" data-i18n-placeholder="assistant.adventure.briefPlaceholder"></textarea>
+                        </label>
+                        <div class="form-grid assistant-form-grid">
+                          <label>
+                            <span data-i18n="assistant.adventure.scale">Scale</span>
+                            <select id="assistantAdventureScale">
+                              <option value="small" data-i18n="assistant.adventure.small">One session</option>
+                              <option value="medium" data-i18n="assistant.adventure.medium">Short arc</option>
+                              <option value="large" data-i18n="assistant.adventure.large">Campaign arc</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span data-i18n="assistant.adventure.tone">Tone</span>
+                            <input id="assistantAdventureTone" type="text" maxlength="120" data-i18n-placeholder="assistant.adventure.tonePlaceholder" />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="assistant-step">
+                    <span class="assistant-step-number">2</span>
+                    <div class="assistant-step-content">
+                      <strong data-i18n="assistant.planTitle">Plan</strong>
+                      <ol id="assistantPlan" class="assistant-plan"></ol>
+                    </div>
+                  </div>
+
+                  <div class="assistant-step">
+                    <span class="assistant-step-number">3</span>
+                    <div class="assistant-step-content">
+                      <label class="check">
+                        <input id="assistantConfirm" type="checkbox" />
+                        <span data-i18n="assistant.confirm">Confirm this run</span>
+                      </label>
+                      <div class="inline-actions">
+                        <button id="assistantRun" type="submit" data-i18n="assistant.run">Run</button>
+                        <button id="assistantOpenDrafts" class="ghost hidden" type="button" data-i18n="assistant.openDrafts">Open drafts</button>
+                      </div>
+                    </div>
+                  </div>
+                </form>
+
+                <div id="assistantCurrentStatus" class="assistant-current-status hidden" aria-live="polite"></div>
+                <div class="assistant-history-head">
+                  <h4 data-i18n="assistant.history">Recent runs</h4>
+                </div>
+                <div id="assistantHistory" class="assistant-history empty"></div>
+              </div>
             </div>
           </div>
         </section>
@@ -311,6 +421,11 @@
                 <button id="arrangeGraph" class="ghost" type="button" data-i18n="graph.arrange" data-i18n-title="graph.arrangeTitle">Arrange</button>
                 <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
+            </div>
+            <div class="graph-weight-legend" aria-label="Relationship weight">
+              <span><i class="graph-weight-swatch low"></i><span data-i18n="graph.weightLow">Weak: 0-3</span></span>
+              <span><i class="graph-weight-swatch medium"></i><span data-i18n="graph.weightMedium">Medium: 4-7</span></span>
+              <span><i class="graph-weight-swatch high"></i><span data-i18n="graph.weightHigh">Strong: 8-10</span></span>
             </div>
             <div id="graphView" class="graph-view empty"></div>
           </div>
@@ -903,6 +1018,6 @@
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>
     <script src="/app/vendor/cytoscape/cytoscape.min.js?v=3.33.4"></script>
-    <script src="/app/app.js?v=20260728.3" type="module"></script>
+    <script src="/app/app.js?v=20260804.2" type="module"></script>
   </body>
 </html>

@@ -509,6 +509,9 @@ def test_visual_app_is_served() -> None:
     assert 'data-tab="graph"' in app_response.text
     assert 'data-tab="timeline"' in app_response.text
     assert 'data-tab="modules"' in app_response.text
+    assert 'data-tab="assistant"' in app_response.text
+    assert 'id="assistantForm"' in app_response.text
+    assert app_response.text.count("data-assistant-scenario=") == 3
     assert 'data-module-toggle="quests"' in app_response.text
     assert 'data-i18n="chat.saveHint"' in app_response.text
     assert 'id="chatThreadList"' in app_response.text
@@ -528,6 +531,8 @@ def test_visual_app_is_served() -> None:
     assert ru_response.json()["tabs.wiki"] == "Энциклопедия"
     assert ru_response.json()["tabs.rules"] == "Законы мира"
     assert ru_response.json()["tabs.proposals"] == "Черновики"
+    assert ru_response.json()["tabs.assistant"] == "Помощник"
+    assert ru_response.json()["assistant.adventure.title"] == "Подготовить приключение"
     assert ru_response.json()["rule.condition"] == "Когда это важно"
     assert ru_response.json()["entity.open"] == "Открыть"
     assert ru_response.json()["chat.saveThis"] == "Сохранить в черновик"
@@ -552,6 +557,7 @@ def test_visual_app_is_served() -> None:
     assert "data-delete-proposal" in render_response.text
     assert "#{1,6}" in render_response.text
     assert 'output.push("<hr>")' in render_response.text
+    assert "export function renderAssistant" in render_response.text
 
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
@@ -1142,6 +1148,77 @@ def test_extraction_endpoint_guarantees_requested_quest_entity(monkeypatch) -> N
     assert quests[0]["type"] == "event"
     assert quests[0]["match_entity_id"] == existing_quest["id"]
     assert "Потерянный медный колокол" in quests[0]["aliases"]
+
+
+def test_adventure_generation_creates_one_complete_draft(monkeypatch) -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Ash Coast"}).json()["id"]
+    existing = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Cinder Port", "summary": "A storm-battered harbor."},
+    ).json()
+
+    class FakeAdventureLLMClient:
+        async def chat(self, request):
+            assert request.reasoning_effort == "none"
+            assert request.response_format["json_schema"]["strict"] is True
+            assert "creative generation" in request.messages[0].content
+            assert "Cinder Port" in request.messages[1].content
+            return LLMChatResponse(
+                model="fake-adventure",
+                message=LLMMessage(
+                    role="assistant",
+                    content=f"""
+                    {{
+                      "quest": {{"name":"The Drowned Bell","summary":"Recover the bell.","description":"Hook, goal, stakes, three stages, obstacles, and outcome.","quest_status":"planned","timeline_date":"Scene 1"}},
+                      "clue": {{"name":"Salt-stained Ledger","summary":"Evidence points to the old pier.","description":"The ledger records the bell shipment."}},
+                      "timeline_event": {{"name":"Black Tide","summary":"The tide floods the lower docks.","description":"The flood blocks the safest route.","timeline_date":"Scene 2"}},
+                      "supporting_entities": [
+                        {{"client_id":"cinder-port","type":"location","name":"{existing['name']}","summary":"A storm-battered harbor.","description":"The adventure starts here."}}
+                      ],
+                      "relationships": [
+                        {{"source_client_id":"quest","target_client_id":"cinder-port","type":"takes_place_in","label":"takes place in","confidence":1.0,"weight":8,"evidence":"The premise names the port."}},
+                        {{"source_client_id":"clue","target_client_id":"quest","type":"reveals","label":"reveals","confidence":0.85,"weight":7,"evidence":"The ledger reveals the route."}},
+                        {{"source_client_id":"timeline_event","target_client_id":"quest","type":"complicates","label":"complicates","confidence":0.85,"weight":6,"evidence":"The tide blocks the docks."}}
+                      ],
+                      "random_table": {{
+                        "name":"Dock Events","description":"Complications during the search.",
+                        "rows": [
+                          "A patrol closes the pier.",
+                          "The tide exposes a tunnel.",
+                          "A witness asks for protection."
+                        ]
+                      }}
+                    }}
+                    """,
+                ),
+                finish_reason="stop",
+            )
+
+    import worldbuilder_core.api.routes.proposals as proposals_route
+
+    monkeypatch.setattr(proposals_route, "build_llm_client", lambda *_, **__: FakeAdventureLLMClient())
+
+    response = client.post(
+        f"/api/worlds/{world_id}/proposals/generate-adventure",
+        json={
+            "premise": "Build an investigation around Cinder Port.",
+            "scale": "small",
+            "tone": "grim",
+            "output_language": "en",
+            "enabled_modules": ["graph", "timeline", "quests", "randomTables", "detectiveBoard"],
+            "max_entities": 8,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    proposal = response.json()
+    assert proposal["status"] == "pending"
+    assert len(proposal["payload"]["entities"]) == 4
+    assert len(proposal["payload"]["relationships"]) == 3
+    assert len(proposal["payload"]["random_table_rows"]) == 3
+    cinder_port = next(entity for entity in proposal["payload"]["entities"] if entity["name"] == "Cinder Port")
+    assert cinder_port["match_entity_id"] == existing["id"]
 
 
 def test_apply_does_not_merge_distinct_directional_entities() -> None:
@@ -1811,6 +1888,16 @@ def test_document_extraction_endpoint_queues_one_active_job(tmp_path, monkeypatc
     assert job["total_chunks"] == document["total_chunks"]
     assert client.post(f"/api/documents/{document['id']}/extract").json()["id"] == job["id"]
     assert client.get(f"/api/document-extraction-jobs/{job['id']}").json()["status"] == "queued"
+
+    paused = client.post(f"/api/document-extraction-jobs/{job['id']}/pause")
+    assert paused.status_code == 200
+    assert paused.json()["status"] == "paused"
+    assert paused.json()["pause_requested"] is True
+
+    resumed = client.post(f"/api/document-extraction-jobs/{job['id']}/resume")
+    assert resumed.status_code == 200
+    assert resumed.json()["status"] == "queued"
+    assert resumed.json()["pause_requested"] is False
 
     listed = client.get(f"/api/worlds/{world_id}/document-extraction-jobs")
     assert listed.status_code == 200

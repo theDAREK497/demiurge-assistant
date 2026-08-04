@@ -52,6 +52,53 @@ def test_parse_extraction_payload_recovers_missing_entity_name() -> None:
     assert payload.entities[0].type == "clue"
 
 
+def test_parse_extraction_payload_prefers_meaningful_client_id_over_long_summary() -> None:
+    payload = parse_extraction_payload(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "client_id": "loc_tunguska",
+                        "type": "location",
+                        "summary": "The primary network core, associated with the arrival of the original material.",
+                    }
+                ]
+            }
+        ),
+        max_entities=12,
+    )
+
+    assert payload.entities[0].name == "Tunguska"
+
+
+def test_parse_extraction_payload_replaces_descriptive_name_from_client_id() -> None:
+    payload = parse_extraction_payload(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "client_id": "loc_tomsk",
+                        "type": "location",
+                        "name": "The controlling terminal and relay for the whole crystal network.",
+                    }
+                ]
+            }
+        ),
+        max_entities=12,
+    )
+
+    assert payload.entities[0].name == "Tomsk"
+
+
+def test_world_entity_type_is_normalized_to_concept() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"world-eon","type":"world","name":"Eon"}]}',
+        max_entities=12,
+    )
+
+    assert payload.entities[0].type == "concept"
+
+
 def test_parse_extraction_payload_accepts_json_fence() -> None:
     payload = parse_extraction_payload(
         """
@@ -196,11 +243,27 @@ def test_build_extraction_request_contains_context_and_limit() -> None:
     )
 
     assert request.temperature == 0
+    assert request.max_tokens == 2_880
+    assert request.response_format is not None
+    assert request.response_format["type"] == "json_schema"
+    assert request.response_format["json_schema"]["strict"] is True
+    assert request.reasoning_effort == "none"
     assert "at most 12 entities" in request.messages[0].content
     assert "random_table_rows" in request.messages[0].content
     assert "in Russian" in request.messages[0].content
     assert "World: Asterion" in request.messages[1].content
     assert "Mira founded the Brass Guild." in request.messages[1].content
+
+
+def test_build_extraction_request_can_disable_structured_output() -> None:
+    request = build_extraction_request(
+        source_text="Mira founded the Brass Guild.",
+        context_text="World: Asterion",
+        max_entities=4,
+        structured_output=False,
+    )
+
+    assert request.response_format is None
 
 
 def test_build_extraction_request_can_request_english_output() -> None:
@@ -349,6 +412,29 @@ def test_requested_quest_promotes_matching_event_instead_of_creating_duplicate()
     assert len(result.entities) == 1
     assert result.entities[0].tags == ["quest"]
     assert result.entities[0].attributes["module"] == "quest"
+
+
+def test_generic_document_extraction_intent_does_not_invent_quest() -> None:
+    result = ensure_requested_quest_entity(
+        ExtractionPayload(),
+        intent_text="Extract only explicit world objects and structures present in this source segment.",
+        source_text="The crystal network connects Tunguska and Tomsk.",
+    )
+
+    assert result.entities == []
+
+
+def test_plain_quest_prefix_recovers_title_and_timeline_date() -> None:
+    result = ensure_requested_quest_entity(
+        ExtractionPayload(),
+        intent_text="Create the explicitly described quest.",
+        source_text="Quest Ash Bell: In Year 315 investigator Mira must recover the bell before dawn.",
+    )
+
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "Ash Bell"
+    assert result.entities[0].tags == ["quest"]
+    assert result.entities[0].attributes["timeline_date"] == "Year 315"
 
 
 def test_russian_quest_tag_is_normalized() -> None:

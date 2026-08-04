@@ -26,6 +26,11 @@ from worldbuilder_core.services.proposals import (
 )
 from worldbuilder_core.services.retrieval import build_world_context
 
+EXTRACTION_SEGMENT_CHARS = 2_200
+DOCUMENT_SEGMENT_MAX_ENTITIES = 4
+RETRY_BASE_SECONDS = 15
+RETRY_MAX_SECONDS = 120
+
 
 def enqueue_document_extraction(
     session: Session,
@@ -50,6 +55,26 @@ def enqueue_document_extraction(
     )
     if existing is not None:
         return existing
+    resumable = session.scalar(
+        select(DocumentExtractionJob)
+        .where(
+            DocumentExtractionJob.document_id == document.id,
+            DocumentExtractionJob.status == "failed",
+            DocumentExtractionJob.processed_chunks < DocumentExtractionJob.total_chunks,
+        )
+        .order_by(DocumentExtractionJob.updated_at.desc())
+    )
+    if resumable is not None:
+        resumable.status = "queued"
+        resumable.attempts = 0
+        resumable.error = None
+        resumable.retry_at = None
+        resumable.lease_owner = None
+        resumable.lease_expires_at = None
+        resumable.total_chunks = document.total_chunks
+        session.commit()
+        session.refresh(resumable)
+        return resumable
     job = DocumentExtractionJob(
         world_id=document.world_id,
         document_id=document.id,
@@ -73,6 +98,10 @@ def claim_document_extraction_job(session: Session, worker_id: str) -> DocumentE
                 & (DocumentExtractionJob.lease_expires_at < now),
             ),
             DocumentExtractionJob.attempts < DocumentExtractionJob.max_attempts,
+            or_(
+                DocumentExtractionJob.retry_at.is_(None),
+                DocumentExtractionJob.retry_at <= now,
+            ),
         )
         .order_by(DocumentExtractionJob.updated_at.asc())
         .limit(1)
@@ -85,7 +114,39 @@ def claim_document_extraction_job(session: Session, worker_id: str) -> DocumentE
     job.status = "running"
     job.lease_owner = worker_id
     job.heartbeat_at = now
+    job.retry_at = None
     job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+def pause_document_extraction_job(session: Session, job_id: str) -> DocumentExtractionJob:
+    job = session.get(DocumentExtractionJob, job_id)
+    if job is None:
+        raise LookupError("Document extraction job not found")
+    if job.status not in {"queued", "running", "paused"}:
+        raise ValueError("Only an active extraction job can be paused")
+    job.pause_requested = True
+    if job.status == "queued":
+        job.status = "paused"
+        job.retry_at = None
+    session.commit()
+    session.refresh(job)
+    return job
+
+
+def resume_document_extraction_job(session: Session, job_id: str) -> DocumentExtractionJob:
+    job = session.get(DocumentExtractionJob, job_id)
+    if job is None:
+        raise LookupError("Document extraction job not found")
+    if job.status != "paused":
+        raise ValueError("Only a paused extraction job can be resumed")
+    job.pause_requested = False
+    job.status = "queued"
+    job.attempts = 0
+    job.error = None
+    job.retry_at = None
     session.commit()
     session.refresh(job)
     return job
@@ -120,33 +181,50 @@ async def run_document_extraction_batch(
             job.world_id,
             query=chunk.content[:1_000],
             max_entities=runtime.max_entities_per_extract,
+            max_document_chunks=0,
         )
         client = build_llm_client(runtime, default_model=runtime.model_for("extractor"))
-        segment_payloads = []
         segments = _split_for_extraction(chunk.content)
-        _save_segment_progress(session, job, current=0, total=len(segments))
-        for segment_index, segment in enumerate(segments, start=1):
+        segment_payloads, completed_segments = _restore_segment_progress(job, len(segments))
+        _save_segment_progress(
+            session,
+            job,
+            current=completed_segments,
+            total=len(segments),
+            partial_payloads=segment_payloads,
+        )
+        for segment_index in range(completed_segments, len(segments)):
             segment_payloads.append(
                 await extract_payload_with_llm(
                     llm_client=client,
-                    source_text=segment,
+                    source_text=segments[segment_index],
                     context_text=context.context_text,
-                    max_entities=min(runtime.max_entities_per_extract, 4),
+                    max_entities=min(runtime.max_entities_per_extract, DOCUMENT_SEGMENT_MAX_ENTITIES),
                     output_language=job.output_language,
                     model=runtime.model_for("extractor"),
                     truncate_excess_entities=True,
+                    structured_output=True,
+                    max_output_tokens=1_280,
                     intent_text=(
-                        "Extract separate explicit world facts, clues, quests, events, dates, "
-                        "relationships, rules, and random tables from this source segment."
+                        "Extract only explicit world objects and structures present in this source segment. "
+                        "Do not invent missing content."
                     ),
                 )
             )
             _save_segment_progress(
                 session,
                 job,
-                current=segment_index,
+                current=segment_index + 1,
                 total=len(segments),
+                partial_payloads=segment_payloads,
             )
+            if _pause_requested(session, job.id):
+                job.status = "paused"
+                job.lease_owner = None
+                job.lease_expires_at = None
+                session.commit()
+                session.refresh(job)
+                return job
         payload = _merge_segment_payloads(segment_payloads)
         payload = sanitize_extraction_payload_for_world(session, job.world_id, payload)
         if document.is_secret:
@@ -159,12 +237,19 @@ async def run_document_extraction_batch(
         job.processed_chunks += 1
         job.current_segment = 0
         job.total_segments = 0
+        job.partial_payloads = []
         job.attempts = 0
         job.error = None
+        job.retry_at = None
         job.heartbeat_at = datetime.now(UTC)
         job.lease_owner = None
         job.lease_expires_at = None
-        job.status = "completed" if job.processed_chunks >= job.total_chunks else "queued"
+        pause_requested = _pause_requested(session, job.id)
+        if job.processed_chunks >= job.total_chunks:
+            job.status = "completed"
+            job.pause_requested = False
+        else:
+            job.status = "paused" if pause_requested else "queued"
         session.commit()
         session.refresh(job)
         return job
@@ -172,16 +257,31 @@ async def run_document_extraction_batch(
         session.rollback()
         job = session.get(DocumentExtractionJob, job_id)
         job.attempts += 1
-        job.status = "failed" if job.attempts >= job.max_attempts else "queued"
+        job.status = (
+            "paused"
+            if job.pause_requested
+            else "failed" if job.attempts >= job.max_attempts else "queued"
+        )
         job.error = str(exc)[:2_000]
-        job.current_segment = 0
-        job.total_segments = 0
+        if job.status == "queued":
+            retry_seconds = min(RETRY_BASE_SECONDS * (2 ** (job.attempts - 1)), RETRY_MAX_SECONDS)
+            job.retry_at = datetime.now(UTC) + timedelta(seconds=retry_seconds)
+        else:
+            job.retry_at = None
         job.lease_owner = None
         job.lease_expires_at = None
         job.heartbeat_at = datetime.now(UTC)
         session.commit()
         session.refresh(job)
         return job
+
+
+def _pause_requested(session: Session, job_id: str) -> bool:
+    return bool(
+        session.scalar(
+            select(DocumentExtractionJob.pause_requested).where(DocumentExtractionJob.id == job_id)
+        )
+    )
 
 
 def _save_segment_progress(
@@ -190,13 +290,28 @@ def _save_segment_progress(
     *,
     current: int,
     total: int,
+    partial_payloads: list[ExtractionPayload],
 ) -> None:
     now = datetime.now(UTC)
     job.current_segment = current
     job.total_segments = total
+    job.partial_payloads = [payload.model_dump(mode="json") for payload in partial_payloads]
     job.heartbeat_at = now
     job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
     session.commit()
+
+
+def _restore_segment_progress(
+    job: DocumentExtractionJob,
+    total_segments: int,
+) -> tuple[list[ExtractionPayload], int]:
+    if job.total_segments != total_segments or job.current_segment != len(job.partial_payloads or []):
+        return [], 0
+    try:
+        payloads = [ExtractionPayload.model_validate(payload) for payload in job.partial_payloads]
+    except (TypeError, ValueError):
+        return [], 0
+    return payloads, min(job.current_segment, total_segments)
 
 
 def _merge_into_proposal(
@@ -245,6 +360,7 @@ def _merge_into_proposal(
 
 def _finish_job(session: Session, job: DocumentExtractionJob) -> DocumentExtractionJob:
     job.status = "completed"
+    job.retry_at = None
     job.lease_owner = None
     job.lease_expires_at = None
     session.commit()
@@ -265,7 +381,7 @@ def _has_payload(payload: ExtractionPayload) -> bool:
     )
 
 
-def _split_for_extraction(text_value: str, limit: int = 900) -> list[str]:
+def _split_for_extraction(text_value: str, limit: int = EXTRACTION_SEGMENT_CHARS) -> list[str]:
     if len(text_value) <= limit:
         return [text_value]
     segments = []
@@ -292,15 +408,71 @@ def _split_for_extraction(text_value: str, limit: int = 900) -> list[str]:
 def _merge_segment_payloads(payloads: list[ExtractionPayload]) -> ExtractionPayload:
     if not payloads:
         return ExtractionPayload()
+    namespaced = [
+        _namespace_segment_references(payload, segment_index)
+        for segment_index, payload in enumerate(payloads)
+    ]
     combined = ExtractionPayload.model_construct(
-        entities=[item for payload in payloads for item in payload.entities][:50],
-        relationships=[item for payload in payloads for item in payload.relationships][:100],
-        world_rules=[item for payload in payloads for item in payload.world_rules][:25],
-        random_tables=[item for payload in payloads for item in payload.random_tables][:25],
-        random_table_rows=[item for payload in payloads for item in payload.random_table_rows][:100],
-        notes=[item for payload in payloads for item in payload.notes][:25],
+        entities=[item for payload in namespaced for item in payload.entities][:50],
+        relationships=[item for payload in namespaced for item in payload.relationships][:100],
+        world_rules=[item for payload in namespaced for item in payload.world_rules][:25],
+        random_tables=[item for payload in namespaced for item in payload.random_tables][:25],
+        random_table_rows=[item for payload in namespaced for item in payload.random_table_rows][:100],
+        notes=[item for payload in namespaced for item in payload.notes][:25],
     )
     return dedupe_extraction_payload(combined)
+
+
+def _namespace_segment_references(payload: ExtractionPayload, segment_index: int) -> ExtractionPayload:
+    prefix = f"s{segment_index + 1}-"
+    entity_ids = {
+        entity.client_id: f"{prefix}{entity.client_id}"[:80]
+        for entity in payload.entities
+        if entity.client_id
+    }
+    table_ids = {
+        table.client_id: f"{prefix}{table.client_id}"[:80]
+        for table in payload.random_tables
+    }
+    return payload.model_copy(
+        update={
+            "entities": [
+                entity.model_copy(update={"client_id": entity_ids[entity.client_id]})
+                if entity.client_id
+                else entity
+                for entity in payload.entities
+            ],
+            "relationships": [
+                relationship.model_copy(
+                    update={
+                        "source_client_id": entity_ids.get(
+                            relationship.source_client_id,
+                            relationship.source_client_id,
+                        ),
+                        "target_client_id": entity_ids.get(
+                            relationship.target_client_id,
+                            relationship.target_client_id,
+                        ),
+                    }
+                )
+                for relationship in payload.relationships
+            ],
+            "random_tables": [
+                table.model_copy(update={"client_id": table_ids[table.client_id]})
+                for table in payload.random_tables
+            ],
+            "random_table_rows": [
+                row.model_copy(
+                    update={
+                        "table_client_id": table_ids.get(row.table_client_id, row.table_client_id),
+                    }
+                )
+                if row.table_client_id
+                else row
+                for row in payload.random_table_rows
+            ],
+        }
+    )
 
 
 def _apply_source_secrecy(payload: ExtractionPayload) -> ExtractionPayload:

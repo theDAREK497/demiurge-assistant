@@ -69,12 +69,15 @@ def _ensure_relationship_columns() -> None:
 
 
 def _ensure_document_extraction_columns() -> None:
-    columns = {
-        "current_segment": "INTEGER NOT NULL DEFAULT 0",
-        "total_segments": "INTEGER NOT NULL DEFAULT 0",
-    }
     with engine.begin() as connection:
         if settings.database_url.startswith("sqlite"):
+            columns = {
+                "current_segment": "INTEGER NOT NULL DEFAULT 0",
+                "total_segments": "INTEGER NOT NULL DEFAULT 0",
+                "partial_payloads": "JSON NOT NULL DEFAULT '[]'",
+                "pause_requested": "BOOLEAN NOT NULL DEFAULT 0",
+                "retry_at": "DATETIME",
+            }
             existing = {
                 row[1] for row in connection.execute(text("PRAGMA table_info(document_extraction_jobs)"))
             }
@@ -83,8 +86,21 @@ def _ensure_document_extraction_columns() -> None:
                     connection.execute(
                         text(f"ALTER TABLE document_extraction_jobs ADD COLUMN {name} {sql_type}")
                     )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_extraction_jobs_retry_at "
+                    "ON document_extraction_jobs (retry_at)"
+                )
+            )
             return
         if settings.database_url.startswith("postgresql"):
+            columns = {
+                "current_segment": "INTEGER NOT NULL DEFAULT 0",
+                "total_segments": "INTEGER NOT NULL DEFAULT 0",
+                "partial_payloads": "JSONB NOT NULL DEFAULT '[]'::jsonb",
+                "pause_requested": "BOOLEAN NOT NULL DEFAULT FALSE",
+                "retry_at": "TIMESTAMPTZ",
+            }
             for name, sql_type in columns.items():
                 connection.execute(
                     text(
@@ -92,6 +108,12 @@ def _ensure_document_extraction_columns() -> None:
                         f"ADD COLUMN IF NOT EXISTS {name} {sql_type}"
                     )
                 )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_document_extraction_jobs_retry_at "
+                    "ON document_extraction_jobs (retry_at)"
+                )
+            )
 
 
 def get_session() -> Generator[Session, None, None]:

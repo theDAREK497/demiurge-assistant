@@ -3,10 +3,18 @@ from sqlalchemy import select
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import ExtractionProposal, ProposalStatus
-from worldbuilder_core.schemas import ExtractionFromTextRequest, ExtractionProposalCreate, ExtractionProposalRead, ProposalApplyResult, ProposalItemSelection
+from worldbuilder_core.schemas import (
+    AdventureGenerationRequest,
+    ExtractionFromTextRequest,
+    ExtractionProposalCreate,
+    ExtractionProposalRead,
+    ProposalApplyResult,
+    ProposalItemSelection,
+)
 from worldbuilder_core.services.extraction import (
     ExtractionParseError,
     extract_payload_with_llm,
+    generate_adventure_payload_with_llm,
 )
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
@@ -22,7 +30,11 @@ from worldbuilder_core.services.proposals import (
     reject_extraction_proposal,
     sanitize_extraction_payload_for_world,
 )
-from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context
+from worldbuilder_core.services.retrieval import (
+    RetrievalWorldNotFoundError,
+    build_world_context,
+    build_world_context_with_embeddings,
+)
 
 router = APIRouter(tags=["proposals"])
 
@@ -76,6 +88,59 @@ async def extract_proposal_from_text(
             session,
             world_id,
             ExtractionProposalCreate(source_text=payload.source_text, payload=extraction_payload),
+        )
+    except ProposalValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/worlds/{world_id}/proposals/generate-adventure",
+    response_model=ExtractionProposalRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_adventure_proposal(
+    world_id: str,
+    payload: AdventureGenerationRequest,
+    session: DbSession,
+) -> ExtractionProposal:
+    try:
+        context = await build_world_context_with_embeddings(
+            session,
+            world_id,
+            role=payload.role,
+            query=payload.query or payload.premise,
+            max_entities=payload.max_entities,
+            max_rules=12,
+            max_relationships=40,
+        )
+    except RetrievalWorldNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found") from exc
+
+    runtime_settings = get_llm_runtime_settings(session)
+    llm_client = build_llm_client(runtime_settings, default_model=runtime_settings.model_for("extractor"))
+    try:
+        adventure = await generate_adventure_payload_with_llm(
+            llm_client=llm_client,
+            premise=payload.premise,
+            context_text=context.context_text,
+            scale=payload.scale,
+            tone=payload.tone,
+            enabled_modules=payload.enabled_modules,
+            max_entities=payload.max_entities,
+            output_language=payload.output_language,
+            model=payload.model or runtime_settings.model_for("extractor"),
+        )
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ExtractionParseError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Adventure generation failed: {exc}") from exc
+
+    adventure = sanitize_extraction_payload_for_world(session, world_id, adventure)
+    try:
+        return create_extraction_proposal(
+            session,
+            world_id,
+            ExtractionProposalCreate(source_text=payload.premise, payload=adventure),
         )
     except ProposalValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

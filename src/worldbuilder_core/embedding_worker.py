@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import time
+from threading import Event
 
 from worldbuilder_core.db import SessionLocal, create_db_and_tables
 from worldbuilder_core.services.document_extraction_jobs import (
@@ -14,10 +15,15 @@ from worldbuilder_core.services.embedding_jobs import (
 )
 
 
-def run_worker(*, poll_seconds: float = 2.0, once: bool = False) -> None:
+def run_worker(
+    *,
+    poll_seconds: float = 2.0,
+    once: bool = False,
+    stop_event: Event | None = None,
+) -> None:
     create_db_and_tables()
     worker_id = worker_identity()
-    while True:
+    while stop_event is None or not stop_event.is_set():
         with SessionLocal() as session:
             job = claim_embedding_job(session, worker_id)
         if job is not None:
@@ -31,7 +37,10 @@ def run_worker(*, poll_seconds: float = 2.0, once: bool = False) -> None:
         if extraction_job is None:
             if once:
                 return
-            time.sleep(poll_seconds)
+            if stop_event is None:
+                time.sleep(poll_seconds)
+            else:
+                stop_event.wait(poll_seconds)
             continue
         with SessionLocal() as session:
             asyncio.run(run_document_extraction_batch(session, extraction_job.id, worker_id))

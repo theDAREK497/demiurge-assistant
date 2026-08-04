@@ -42,6 +42,24 @@ Current route modules:
 Shared application settings are stored separately from world data in
 `app_settings`. This currently powers persistent LLM provider configuration.
 
+### Bounded Master Assistant
+
+The `/app/` Assistant tab is a client-side orchestrator over existing APIs, not
+an autonomous write path:
+
+```text
+explicit user confirmation
+  -> source: document extraction job -> pending proposals
+  -> audit: role-aware retrieval + chat -> read-only report
+  -> adventure: one structured generation call -> validated pending proposal
+  -> manual proposal review/apply
+```
+
+Assistant run summaries are bounded to 20 entries and stored per world in
+browser local storage. Reloaded in-progress browser runs are marked
+interrupted. Durable source extraction continues through its leased backend
+job and remains visible in Sources.
+
 ## Domain Model
 
 ### World
@@ -195,8 +213,8 @@ append-only revision history.
 ### Large Document Ingestion
 
 Master users can upload `.txt` and `.docx` sources as a raw streamed request.
-DOCX text is read with the standard library, so the pipeline has no optional
-Word dependency.
+DOCX XML is parsed incrementally with the standard library, so large books do
+not require a full in-memory XML tree or an optional Word dependency.
 
 ```text
 streamed upload
@@ -226,8 +244,21 @@ ready document
   -> pending proposals for manual review
 ```
 
-Extraction inherits source secrecy, retries the current chunk after provider or
-schema failures, and never applies results directly to the world.
+Extraction inherits source secrecy and never applies results directly to the
+world. Each source chunk is split into bounded model segments. Completed
+segments are checkpointed in the job, so provider or schema failures resume at
+the next segment instead of regenerating the whole chunk. Temporary failures
+use 15/30/60/120-second backoff before the next leased attempt. When an
+OpenAI-compatible provider rejects JSON grammar, that capability failure is
+cached temporarily to avoid repeating a known failing request for every
+segment.
+
+The local SQLite runtime starts one sequential AI worker inside the API
+process. Document segments are capped at 2200 characters, four extracted
+entities, and 1280 output tokens, use strict JSON output with model reasoning disabled, and can be
+paused after the current segment. Segment-local client IDs are namespaced
+before merging so repeated model IDs cannot collide. PostgreSQL deployments
+keep the external worker shown below and disable the embedded worker.
 
 The production path now provides that split:
 
@@ -241,7 +272,7 @@ FastAPI -> embedding_jobs/document_extraction_jobs <- AI worker(s)
 
 Workers claim jobs with `FOR UPDATE SKIP LOCKED`. A lease and heartbeat allow a
 different worker to recover work after a crashed process. Provider failures are
-retried up to five times. SQLite keeps a single-machine fallback without
+retried up to five times with checkpoint-safe backoff. SQLite keeps a single-machine fallback without
 `SKIP LOCKED` or a database vector index.
 
 ### Import/Export

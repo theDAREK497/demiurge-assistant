@@ -98,6 +98,16 @@ The `/app/` UI already supports:
   tools stay close to the module without dominating the screen;
 - module toggles in Settings;
 - AI chat with draft-save flow;
+- bounded Master Assistant tab with three scenarios: resumable source
+  extraction, read-only world consistency audit, and adventure generation into
+  a reviewable draft;
+- adventure generation uses a compact mandatory schema for quests, clues,
+  timeline events, graph links, and random tables instead of a slow prose-then-
+  extraction chain;
+- one automatic sequential AI worker in local SQLite mode, with pause/resume
+  controls and per-segment checkpoints for long source extraction;
+- Assistant runs require explicit confirmation, never apply world changes
+  automatically, and keep a bounded per-world browser history;
 - local browser chat history with separate branches per world and viewer role;
 - prompt template chips in chat for common worldbuilding targets and enabled
   modules;
@@ -188,6 +198,15 @@ Roadmap items still intentionally open:
 - ready imported sources can be extracted chunk-by-chunk by the leased AI worker;
 - extracted facts are deduplicated into pending proposals, inherit source secrecy,
   and remain review-only until the master applies them.
+- DOCX XML is parsed as a stream; AI extraction checkpoints completed
+  sub-chunks and caches unsupported structured-output grammar to reduce RAM,
+  retries, and duplicate LM Studio calls on large books.
+- temporary LM Studio channel errors and timeouts keep the checkpoint and use
+  bounded backoff; the UI reports an automatic retry instead of a terminal
+  failure while attempts remain.
+- document and embedding actions refresh all world data when they finish; a
+  stale workspace also refreshes when its tab is opened or the page regains
+  focus.
 - Cytoscape.js 3.33.4 is bundled locally under its MIT license for graph
   layout, zoom, pan, node dragging, and weighted relationship rendering.
 - relationships have confidence, 0-10 weight, validity period, evidence, and

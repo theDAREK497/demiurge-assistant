@@ -447,6 +447,7 @@ class DocumentExtractionJob(TimestampMixin, Base):
     processed_chunks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     current_segment: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     total_segments: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    partial_payloads: Mapped[list[dict]] = mapped_column(JSON, default=list, nullable=False)
     proposal_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     output_language: Mapped[str] = mapped_column(String(8), default="ru", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -454,6 +455,8 @@ class DocumentExtractionJob(TimestampMixin, Base):
     lease_owner: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
+    pause_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

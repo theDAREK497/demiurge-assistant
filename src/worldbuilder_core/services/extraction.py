@@ -48,6 +48,8 @@ ENTITY_TYPE_ALIASES = {
     "setting": "concept",
     "world_concept": "concept",
     "worldbuilding_concept": "concept",
+    "world": "concept",
+    "universe": "concept",
     "theme": "concept",
     "lore": "concept",
     "quest": "event",
@@ -104,6 +106,8 @@ async def extract_payload_with_llm(
     model: str | None = None,
     intent_text: str | None = None,
     truncate_excess_entities: bool = False,
+    structured_output: bool = True,
+    max_output_tokens: int | None = None,
 ) -> ExtractionPayload:
     extraction_request = build_extraction_request(
         source_text=source_text,
@@ -112,6 +116,8 @@ async def extract_payload_with_llm(
         output_language=output_language,
         model=model,
         intent_text=intent_text,
+        structured_output=structured_output,
+        max_output_tokens=max_output_tokens,
     )
     completion = await llm_client.chat(extraction_request)
     try:
@@ -141,6 +147,308 @@ async def extract_payload_with_llm(
     return annotate_payload_with_source_excerpts(payload, source_text)
 
 
+async def generate_adventure_payload_with_llm(
+    *,
+    llm_client: SupportsLLMChat,
+    premise: str,
+    context_text: str,
+    scale: str,
+    tone: str | None,
+    enabled_modules: list[str],
+    max_entities: int,
+    output_language: str = "ru",
+    model: str | None = None,
+) -> ExtractionPayload:
+    request = build_adventure_request(
+        premise=premise,
+        context_text=context_text,
+        scale=scale,
+        tone=tone,
+        enabled_modules=enabled_modules,
+        max_entities=max_entities,
+        output_language=output_language,
+        model=model,
+    )
+    completion = await llm_client.chat(request)
+    try:
+        payload = parse_adventure_package(completion.message.content, max_entities=max_entities)
+        validate_adventure_payload(payload, enabled_modules)
+    except ExtractionParseError as first_error:
+        repair_request = build_repair_request(
+            original_request=request,
+            broken_content=completion.message.content,
+            error=str(first_error),
+        )
+        repaired_completion = await llm_client.chat(repair_request)
+        payload = parse_adventure_package(repaired_completion.message.content, max_entities=max_entities)
+        validate_adventure_payload(payload, enabled_modules)
+    return payload
+
+
+def build_adventure_request(
+    *,
+    premise: str,
+    context_text: str,
+    scale: str,
+    tone: str | None,
+    enabled_modules: list[str],
+    max_entities: int,
+    output_language: str = "ru",
+    model: str | None = None,
+) -> LLMChatRequest:
+    language_name = "English" if output_language == "en" else "Russian"
+    modules = ", ".join(enabled_modules) or "graph, timeline, quests, randomTables, detectiveBoard"
+    return LLMChatRequest(
+        model=model,
+        temperature=0.65,
+        max_tokens=1_536,
+        reasoning_effort="none",
+        response_format=_adventure_response_format(max_entities),
+        messages=[
+            LLMMessage(
+                role="system",
+                content=(
+                    "You create a playable adventure directly as structured Worldbuilder JSON. "
+                    "This is creative generation, not extraction or a prose answer. Return JSON only. "
+                    "Use the supplied world context as authoritative lore and reuse existing entities with "
+                    "match_entity_id. Never make renamed copies of existing entities. "
+                    "Fill the required quest, clue, timeline_event, random_table, and supporting_entities fields. "
+                    "The quest description must contain hook, goal, stakes, stages, obstacles, and outcome. "
+                    "Use the fixed client references quest, clue, and timeline_event in relationships. "
+                    "Connect these and supporting entities with at least two relationships. "
+                    "Every relationship needs a readable label, confidence from the evidence rubric, weight from "
+                    "0 to 10, and short evidence. Create one useful random table and at least three rows linked by "
+                    "table_client_id. Do not represent a table as an entity or relationship. "
+                    "Use only concise names, one-sentence summaries, and focused descriptions. "
+                    "Do not use Markdown, LaTeX, or dollar-delimited math inside JSON strings. "
+                    f"Write all generated content in {language_name}. At most {max_entities} entities."
+                ),
+            ),
+            LLMMessage(
+                role="user",
+                content=(
+                    f"Authoritative world context:\n{context_text}\n\n"
+                    f"Adventure premise:\n{premise}\n\n"
+                    f"Scale: {scale}\nTone: {tone or 'match the world'}\nEnabled modules: {modules}\n"
+                    "Create one coherent package that can be reviewed and applied as a draft."
+                ),
+            ),
+        ],
+    )
+
+
+def _adventure_response_format(max_entities: int) -> dict:
+    string = {"type": "string", "maxLength": 500}
+    long_string = {"type": "string", "maxLength": 1_200}
+    entity = {
+        "type": "object",
+        "properties": {
+            "client_id": string,
+            "type": string,
+            "name": string,
+            "summary": string,
+            "description": long_string,
+        },
+        "required": ["client_id", "type", "name", "summary", "description"],
+        "additionalProperties": False,
+    }
+    relationship = {
+        "type": "object",
+        "properties": {
+            "source_client_id": string,
+            "target_client_id": string,
+            "type": string,
+            "label": string,
+            "confidence": {"type": "number"},
+            "weight": {"type": "number"},
+            "evidence": long_string,
+        },
+        "required": [
+            "source_client_id",
+            "target_client_id",
+            "type",
+            "label",
+            "confidence",
+            "weight",
+            "evidence",
+        ],
+        "additionalProperties": False,
+    }
+    named_content = {
+        "type": "object",
+        "properties": {"name": string, "summary": string, "description": long_string},
+        "required": ["name", "summary", "description"],
+        "additionalProperties": False,
+    }
+    quest = {
+        "type": "object",
+        "properties": {
+            **named_content["properties"],
+            "quest_status": string,
+            "timeline_date": string,
+        },
+        "required": ["name", "summary", "description", "quest_status", "timeline_date"],
+        "additionalProperties": False,
+    }
+    timeline_event = {
+        "type": "object",
+        "properties": {**named_content["properties"], "timeline_date": string},
+        "required": ["name", "summary", "description", "timeline_date"],
+        "additionalProperties": False,
+    }
+    random_table = {
+        "type": "object",
+        "properties": {
+            "name": string,
+            "description": long_string,
+            "rows": {"type": "array", "minItems": 3, "maxItems": 3, "items": long_string},
+        },
+        "required": ["name", "description", "rows"],
+        "additionalProperties": False,
+    }
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "worldbuilder_adventure",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "quest": quest,
+                    "clue": named_content,
+                    "timeline_event": timeline_event,
+                    "supporting_entities": {
+                        "type": "array",
+                        "maxItems": min(max(max_entities - 3, 1), 5),
+                        "items": entity,
+                    },
+                    "relationships": {"type": "array", "maxItems": 6, "items": relationship},
+                    "random_table": random_table,
+                },
+                "required": [
+                    "quest",
+                    "clue",
+                    "timeline_event",
+                    "supporting_entities",
+                    "relationships",
+                    "random_table",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def parse_adventure_package(content: str, *, max_entities: int) -> ExtractionPayload:
+    try:
+        raw = json.loads(_extract_json_text(content))
+        quest = raw["quest"]
+        clue = raw["clue"]
+        timeline_event = raw["timeline_event"]
+        random_table = raw["random_table"]
+        relationships = list(raw.get("relationships", []))
+        if len(relationships) < 2:
+            relationships.extend(
+                [
+                    {
+                        "source_client_id": "clue",
+                        "target_client_id": "quest",
+                        "type": "reveals",
+                        "label": "reveals",
+                        "confidence": 0.85,
+                        "weight": 7,
+                        "evidence": clue["summary"],
+                    },
+                    {
+                        "source_client_id": "timeline_event",
+                        "target_client_id": "quest",
+                        "type": "complicates",
+                        "label": "complicates",
+                        "confidence": 0.85,
+                        "weight": 6,
+                        "evidence": timeline_event["summary"],
+                    },
+                ][len(relationships) :]
+            )
+        normalized = {
+            "entities": [
+                {
+                    "client_id": "quest",
+                    "type": "event",
+                    "name": quest["name"],
+                    "summary": quest["summary"],
+                    "description": quest["description"],
+                    "tags": ["quest"],
+                    "attributes": {
+                        "module": "quest",
+                        "quest_status": quest["quest_status"],
+                        "timeline_date": quest["timeline_date"],
+                    },
+                },
+                {
+                    "client_id": "clue",
+                    "type": "clue",
+                    "name": clue["name"],
+                    "summary": clue["summary"],
+                    "description": clue["description"],
+                },
+                {
+                    "client_id": "timeline_event",
+                    "type": "event",
+                    "name": timeline_event["name"],
+                    "summary": timeline_event["summary"],
+                    "description": timeline_event["description"],
+                    "attributes": {"timeline_date": timeline_event["timeline_date"]},
+                },
+                *raw.get("supporting_entities", []),
+            ],
+            "relationships": relationships,
+            "world_rules": [],
+            "random_tables": [
+                {
+                    "client_id": "adventure_table",
+                    "name": random_table["name"],
+                    "description": random_table["description"],
+                }
+            ],
+            "random_table_rows": [
+                {
+                    "table_client_id": "adventure_table",
+                    "label": str(index),
+                    "result": result,
+                    "weight": 1,
+                }
+                for index, result in enumerate(random_table["rows"], start=1)
+            ],
+            "notes": [],
+        }
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise ExtractionParseError(f"Invalid adventure package: {exc}") from exc
+    return parse_extraction_payload(json.dumps(normalized), max_entities=max_entities)
+
+
+def validate_adventure_payload(payload: ExtractionPayload, enabled_modules: list[str]) -> None:
+    modules = set(enabled_modules)
+    errors: list[str] = []
+    if "quests" in modules and not any("quest" in entity.tags for entity in payload.entities):
+        errors.append("missing quest entity tagged quest")
+    if "detectiveBoard" in modules and not any(entity.type == "clue" for entity in payload.entities):
+        errors.append("missing clue entity")
+    if "timeline" in modules and not any(
+        entity.type == "event" and entity.attributes.get("timeline_date") for entity in payload.entities
+    ):
+        errors.append("missing timeline event with attributes.timeline_date")
+    if "graph" in modules and len(payload.relationships) < 2:
+        errors.append("at least two relationships are required")
+    if "randomTables" in modules:
+        if not payload.random_tables:
+            errors.append("missing random table")
+        if len(payload.random_table_rows) < 3:
+            errors.append("random table needs at least three rows")
+    if errors:
+        raise ExtractionParseError("Adventure package incomplete: " + "; ".join(errors))
+
+
 def build_extraction_request(
     *,
     source_text: str,
@@ -149,13 +457,16 @@ def build_extraction_request(
     output_language: str = "ru",
     model: str | None = None,
     intent_text: str | None = None,
+    structured_output: bool = True,
+    max_output_tokens: int | None = None,
 ) -> LLMChatRequest:
     language_name = "English" if output_language == "en" else "Russian"
     return LLMChatRequest(
         model=model,
         temperature=0.0,
-        max_tokens=768,
-        response_format=_extraction_response_format(max_entities),
+        max_tokens=max_output_tokens or max(1_536, min(4_096, max_entities * 240)),
+        reasoning_effort="none",
+        response_format=_extraction_response_format(max_entities) if structured_output else None,
         messages=[
             LLMMessage(
                 role="system",
@@ -172,6 +483,8 @@ def build_extraction_request(
                     "World rules must use condition and effect strings. "
                     "Create a separate entity for every distinct quest, event, and clue. A clue is concrete evidence, "
                     "trace, document, testimony, anomaly, or fact that can lead to a conclusion; use type 'clue'. "
+                    "Every entity must include a short name. Keep summaries to one sentence and descriptions under "
+                    "800 characters. Omit optional fields that add no information. "
                     "Never merge several events or quests into one entity and never copy the whole source text into "
                     "an entity description. Keep each summary under 500 characters and each description focused only "
                     "on that entity. "
@@ -321,10 +634,10 @@ def _extraction_response_format(max_entities: int) -> dict:
     }
     return {
         "type": "json_schema",
-            "json_schema": {
-                "name": "worldbuilder_extraction",
-                "strict": False,
-                "schema": schema,
+        "json_schema": {
+            "name": "worldbuilder_extraction",
+            "strict": True,
+            "schema": schema,
         },
     }
 
@@ -338,6 +651,8 @@ def build_repair_request(
     return LLMChatRequest(
         model=original_request.model,
         temperature=0.0,
+        max_tokens=original_request.max_tokens,
+        reasoning_effort=original_request.reasoning_effort,
         response_format=original_request.response_format,
         messages=[
             *original_request.messages,
@@ -413,11 +728,15 @@ def ensure_requested_quest_entity(
     candidate_index = _find_quest_candidate_index(entities, quest_title)
     if candidate_index is not None:
         candidate = entities[candidate_index]
+        attributes = {**candidate.attributes, "module": "quest"}
+        timeline_date = _extract_timeline_date(source_text)
+        if timeline_date and "timeline_date" not in attributes:
+            attributes["timeline_date"] = timeline_date
         entities[candidate_index] = candidate.model_copy(
             update={
                 "type": EntityType.event,
                 "tags": _merge_unique_strings(candidate.tags, ["quest"]),
-                "attributes": {**candidate.attributes, "module": "quest"},
+                "attributes": attributes,
             }
         )
         return payload.model_copy(update={"entities": entities})
@@ -425,6 +744,10 @@ def ensure_requested_quest_entity(
     title = quest_title or ("New quest" if _looks_english(intent_text or source_text) else "Новый квест")
     used_client_ids = {entity.client_id for entity in entities if entity.client_id}
     client_id = _unique_quest_client_id(title, used_client_ids)
+    attributes = {"module": "quest"}
+    timeline_date = _extract_timeline_date(source_text)
+    if timeline_date:
+        attributes["timeline_date"] = timeline_date
     entities.append(
         ExtractedEntityDraft(
             client_id=client_id,
@@ -434,7 +757,7 @@ def ensure_requested_quest_entity(
             description=_extract_quest_description(source_text),
             tags=["quest"],
             status=VerificationStatus.proposed,
-            attributes={"module": "quest"},
+            attributes=attributes,
         )
     )
     return payload.model_copy(update={"entities": entities})
@@ -487,6 +810,14 @@ def _extract_quest_title(source_text: str) -> str | None:
             continue
         clean_line = re.sub(r"^#{1,6}\s*", "", line)
         clean_line = clean_line.strip("* _`#")
+        inline = re.match(
+            r"(?iu)^(?:quest(?:\s+hook)?|mission|adventure\s+hook)\s+([^:.!?]{1,120})\s*:",
+            clean_line,
+        )
+        if inline:
+            title = _clean_quest_title(inline.group(1))
+            if title:
+                return title
         explicit = re.match(
             r"(?iu)^(?:quest(?:\s+hook)?|mission|adventure\s+hook|квест\w*(?:\s+крючок)?|задание)\s*[:\-–—]\s*(.+)$",
             clean_line,
@@ -505,6 +836,19 @@ def _extract_quest_title(source_text: str) -> str | None:
             title,
         ):
             return title
+    return None
+
+
+def _extract_timeline_date(source_text: str) -> str | None:
+    patterns = (
+        r"(?iu)\bYear\s+\d{1,6}\b",
+        r"(?iu)\b(?:\d{1,4})\s*(?:year|г(?:од(?:а|у|ом|е)?|\.)?)\b",
+        r"(?iu)\b(?:spring|summer|autumn|fall|winter)\s+(?:of\s+)?\d{1,4}\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, source_text)
+        if match:
+            return match.group(0).strip(" .,:;-")[:120]
     return None
 
 
@@ -689,8 +1033,11 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
             continue
 
         name = _clean_string(raw_entity.get("name") or raw_entity.get("title"))
+        summary_name = _clean_string(raw_entity.get("summary"))
+        identifier_name = _name_from_client_id(raw_entity.get("client_id") or raw_entity.get("id"))
+        if identifier_name and (not name or _looks_like_descriptive_name(name)):
+            name = identifier_name
         if not name:
-            summary_name = _clean_string(raw_entity.get("summary"))
             if summary_name:
                 name = re.split(r"(?<=[.!?])\s", summary_name, maxsplit=1)[0][:200]
         if not name:
@@ -755,6 +1102,35 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
                 entity_aliases[alias] = client_id
 
     return entities
+
+
+def _name_from_client_id(raw_value: object) -> str | None:
+    value = _clean_string(raw_value)
+    if not value:
+        return None
+    parts = [part for part in re.split(r"[-_\s]+", value) if part]
+    prefixes = {
+        "char",
+        "character",
+        "clue",
+        "concept",
+        "entity",
+        "event",
+        "item",
+        "loc",
+        "location",
+        "quest",
+    }
+    while parts and parts[0].casefold() in prefixes:
+        parts.pop(0)
+    if not parts or all(part.isdigit() for part in parts):
+        return None
+    return " ".join(parts)[:200].replace("-", " ").title()
+
+
+def _looks_like_descriptive_name(value: str) -> bool:
+    words = value.split()
+    return len(words) > 8 or "," in value or (len(words) >= 5 and value.rstrip().endswith((".", "!", "?")))
 
 
 def _normalize_relationships(raw_relationships: object, entity_aliases: dict[str, str]) -> list[dict]:

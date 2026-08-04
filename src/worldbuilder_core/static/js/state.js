@@ -33,6 +33,7 @@ export const state = {
   embeddingStatus: null,
   embeddingBusy: false,
   embeddingJob: null,
+  worldDataLoadedAt: 0,
   llmConfig: null,
   editingEntityId: null,
   editingRelationshipId: null,
@@ -53,6 +54,10 @@ export const state = {
   chatBusy: false,
   editingChatMessageIndex: null,
   editingChatThreadId: null,
+  assistantScenario: "source",
+  assistantBusy: false,
+  assistantRuns: [],
+  assistantStorageScope: null,
   moduleSettings: { ...defaultModuleSettings },
   entityTypeFilter: "all",
   graphPositions: {},
@@ -62,6 +67,73 @@ export const state = {
 
 export function selectedWorld() {
   return state.worlds.find((world) => world.id === state.selectedWorldId) || null;
+}
+
+function assistantStorageKey(worldId) {
+  return `worldbuilder.assistantRuns.${worldId}`;
+}
+
+export function loadAssistantRunsForWorld(worldId) {
+  state.assistantStorageScope = worldId ? assistantStorageKey(worldId) : null;
+  state.assistantBusy = false;
+  if (!state.assistantStorageScope) {
+    state.assistantRuns = [];
+    return;
+  }
+  try {
+    const stored = JSON.parse(localStorage.getItem(state.assistantStorageScope) || "[]");
+    state.assistantRuns = Array.isArray(stored)
+      ? stored.slice(0, 20).map((run) => (
+          run.status === "running"
+            ? { ...run, status: "interrupted", updatedAt: new Date().toISOString() }
+            : run
+        ))
+      : [];
+    persistAssistantRuns();
+  } catch {
+    state.assistantRuns = [];
+  }
+}
+
+export function addAssistantRun(run) {
+  const timestamp = new Date().toISOString();
+  const item = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    scenario: run.scenario,
+    title: String(run.title || "").slice(0, 160),
+    status: run.status || "running",
+    result: String(run.result || "").slice(0, 100_000),
+    proposalId: run.proposalId || null,
+    documentId: run.documentId || null,
+    error: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+  state.assistantRuns = [item, ...state.assistantRuns].slice(0, 20);
+  persistAssistantRuns();
+  return item;
+}
+
+export function updateAssistantRun(runId, changes) {
+  const run = state.assistantRuns.find((item) => item.id === runId);
+  if (!run) return null;
+  Object.assign(run, changes, { updatedAt: new Date().toISOString() });
+  persistAssistantRuns();
+  return run;
+}
+
+export function clearAssistantRuns() {
+  state.assistantRuns = [];
+  persistAssistantRuns();
+}
+
+function persistAssistantRuns() {
+  if (!state.assistantStorageScope) return;
+  try {
+    localStorage.setItem(state.assistantStorageScope, JSON.stringify(state.assistantRuns));
+  } catch (error) {
+    console.warn("Assistant history could not be persisted", error);
+  }
 }
 
 function chatStorageKey(worldId, role) {

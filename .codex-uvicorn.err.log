@@ -1,0 +1,96 @@
+INFO:     Started server process [26296]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+Exception in thread worldbuilder-ai-worker:
+Traceback (most recent call last):
+  File "X:\Projects\demiurge-assistant\src\worldbuilder_core\services\document_extraction_jobs.py", line 198, in run_document_extraction_batch
+    await extract_payload_with_llm(
+    ...<13 lines>...
+    )
+  File "X:\Projects\demiurge-assistant\src\worldbuilder_core\services\extraction.py", line 122, in extract_payload_with_llm
+    completion = await llm_client.chat(extraction_request)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "X:\Projects\demiurge-assistant\src\worldbuilder_core\services\llm.py", line 75, in chat
+    raise LLMProviderError(f"LLM provider returned HTTP {response.status_code}: {response.text}")
+worldbuilder_core.services.llm.LLMProviderError: LLM provider returned HTTP 400: {"error":"Model unloaded by user or API request."}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Python314\Lib\threading.py", line 1082, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "C:\Python314\Lib\threading.py", line 1024, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "X:\Projects\demiurge-assistant\src\worldbuilder_core\embedding_worker.py", line 46, in run_worker
+    asyncio.run(run_document_extraction_batch(session, extraction_job.id, worker_id))
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "X:\Projects\demiurge-assistant\src\worldbuilder_core\services\document_extraction_jobs.py", line 274, in run_document_extraction_batch
+    session.commit()
+    ~~~~~~~~~~~~~~^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 2035, in commit
+    trans.commit(_to_root=True)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "<string>", line 2, in commit
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 1316, in commit
+    self._prepare_impl()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "<string>", line 2, in _prepare_impl
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\state_changes.py", line 137, in _go
+    ret_value = fn(self, *arg, **kw)
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 1290, in _prepare_impl
+    self.session.flush()
+    ~~~~~~~~~~~~~~~~~~^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4353, in flush
+    self._flush(objects)
+    ~~~~~~~~~~~^^^^^^^^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4488, in _flush
+    with util.safe_reraise():
+         ~~~~~~~~~~~~~~~~~^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\util\langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\session.py", line 4449, in _flush
+    flush_context.execute()
+    ~~~~~~~~~~~~~~~~~~~~~^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 465, in execute
+    rec.execute(self)
+    ~~~~~~~~~~~^^^^^^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\unitofwork.py", line 641, in execute
+    util.preloaded.orm_persistence.save_obj(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.mapper,
+        ^^^^^^^^^^^^
+        uow.states_for_mapper_hierarchy(self.mapper, False, False),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        uow,
+        ^^^^
+    )
+    ^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\persistence.py", line 86, in save_obj
+    _emit_update_statements(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        base_mapper,
+        ^^^^^^^^^^^^
+    ...<3 lines>...
+        update,
+        ^^^^^^^
+    )
+    ^
+  File "X:\Projects\demiurge-assistant\.venv\Lib\site-packages\sqlalchemy\orm\persistence.py", line 949, in _emit_update_statements
+    raise orm_exc.StaleDataError(
+    ...<3 lines>...
+    )
+sqlalchemy.orm.exc.StaleDataError: UPDATE statement on table 'document_extraction_jobs' expected to update 1 row(s); 0 were matched.

@@ -222,22 +222,23 @@ def _read_docx(path: Path) -> Iterator[str]:
             if info.file_size > MAX_DOCX_XML_BYTES:
                 raise InvalidDocumentError("DOCX document XML is too large")
             with archive.open(info) as source:
-                tree = ElementTree.parse(source)
+                for _, paragraph in ElementTree.iterparse(source, events=("end",)):
+                    if paragraph.tag != f"{WORD_NS}p":
+                        continue
+                    parts: list[str] = []
+                    for node in paragraph.iter():
+                        if node.tag == f"{WORD_NS}t" and node.text:
+                            parts.append(node.text)
+                        elif node.tag == f"{WORD_NS}tab":
+                            parts.append("\t")
+                        elif node.tag in {f"{WORD_NS}br", f"{WORD_NS}cr"}:
+                            parts.append("\n")
+                    value = _normalize_text("".join(parts))
+                    paragraph.clear()
+                    if value:
+                        yield value
     except BadZipFile as exc:
         raise InvalidDocumentError("Invalid DOCX archive") from exc
-
-    for paragraph in tree.iter(f"{WORD_NS}p"):
-        parts: list[str] = []
-        for node in paragraph.iter():
-            if node.tag == f"{WORD_NS}t" and node.text:
-                parts.append(node.text)
-            elif node.tag == f"{WORD_NS}tab":
-                parts.append("\t")
-            elif node.tag in {f"{WORD_NS}br", f"{WORD_NS}cr"}:
-                parts.append("\n")
-        value = _normalize_text("".join(parts))
-        if value:
-            yield value
 
 
 def _normalized_paragraphs(text: str) -> Iterator[str]:

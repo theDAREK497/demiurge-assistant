@@ -1,6 +1,6 @@
-import { $, escapeHtml } from "./dom.js?v=20260728.3";
-import { selectedWorld, state } from "./state.js?v=20260728.3";
-import { language, t } from "./i18n.js?v=20260728.3";
+import { $, escapeHtml } from "./dom.js?v=20260804.2";
+import { selectedWorld, state } from "./state.js?v=20260804.2";
+import { language, t } from "./i18n.js?v=20260804.2";
 import {
   applyProposal,
   applySelectedProposal,
@@ -36,7 +36,9 @@ import {
   rejectProposal,
   renameChatThread,
   loadWorldData,
+  pauseDocumentExtraction,
   pauseKnowledgeDocument,
+  resumeDocumentExtraction,
   resumeKnowledgeDocument,
   rollRandomTable,
   reorderEntities,
@@ -48,7 +50,7 @@ import {
   startCreateEntityWithType,
   updateEntityType,
   updateQuestStatus,
-} from "./actions.js?v=20260728.3";
+} from "./actions.js?v=20260804.2";
 
 let graphInstance = null;
 let graphViewportSaveTimer = null;
@@ -128,6 +130,7 @@ export function renderAllWorldData() {
   renderRules();
   renderProposals();
   renderDocuments();
+  renderAssistant();
   renderGraph();
   renderTimeline();
   renderModules();
@@ -1102,7 +1105,11 @@ export function renderGraph() {
   const hasSavedLayout = state.entities.every((entity) => state.graphPositions[entity.id]);
   const rootStyle = getComputedStyle(document.documentElement);
   const textColor = rootStyle.getPropertyValue("--text").trim() || "#20242A";
-  const lineColor = rootStyle.getPropertyValue("--muted").trim() || "#65705F";
+  const weightColors = {
+    low: rootStyle.getPropertyValue("--graph-weight-low").trim() || "#738079",
+    medium: rootStyle.getPropertyValue("--graph-weight-medium").trim() || "#B8791E",
+    high: rootStyle.getPropertyValue("--graph-weight-high").trim() || "#C24951",
+  };
   const panelColor = rootStyle.getPropertyValue("--panel").trim() || "#FFFFFF";
   const viewport = loadGraphViewport();
   const elements = [
@@ -1123,9 +1130,12 @@ export function renderGraph() {
         id: relationship.id,
         source: relationship.source_entity_id,
         target: relationship.target_entity_id,
-        label: relationshipDisplayLabel(relationship),
+        label: `${relationshipDisplayLabel(relationship)} · ${t("graph.weightShort", {
+          value: Number(relationship.weight ?? 1),
+        })}`,
         confidence: Number(relationship.confidence ?? 0.65),
         weight: Number(relationship.weight ?? 1),
+        weightColor: relationshipWeightColor(relationship.weight, weightColors),
         validFrom: relationship.valid_from || "",
         validTo: relationship.valid_to || "",
         evidence: relationship.evidence || relationship.description || "",
@@ -1182,9 +1192,9 @@ export function renderGraph() {
           "curve-style": "bezier",
           "font-size": 10,
           label: "data(label)",
-          "line-color": lineColor,
+          "line-color": "data(weightColor)",
           opacity: "mapData(confidence, 0, 1, 0.45, 1)",
-          "target-arrow-color": lineColor,
+          "target-arrow-color": "data(weightColor)",
           "target-arrow-shape": "triangle",
           "text-background-color": panelColor,
           "text-background-opacity": 0.82,
@@ -1713,8 +1723,10 @@ export function renderTimeline() {
     .map(
       (event) => `
         <article class="timeline-item" data-timeline-entity="${event.id}" draggable="${isMasterMode()}">
-          ${isMasterMode() ? '<span class="drag-handle" aria-hidden="true">⋮⋮</span>' : ""}
-          <div class="timeline-date">${escapeHtml(event.attributes?.timeline_date || t("timeline.noDate"))}</div>
+          <div class="timeline-date-cell ${isMasterMode() ? "has-drag-handle" : ""}">
+            ${isMasterMode() ? '<span class="drag-handle" aria-hidden="true">⋮⋮</span>' : ""}
+            <div class="timeline-date">${escapeHtml(event.attributes?.timeline_date || t("timeline.noDate"))}</div>
+          </div>
           <div class="item">
             <div class="item-title">${escapeHtml(event.name)}</div>
             <div class="item-body">${renderMarkdown(event.summary || event.description || t("common.noSummary"))}</div>
@@ -2323,6 +2335,13 @@ function relationshipDisplayLabel(relationship) {
   return normalizedType.replace(/_/g, " ") || relationship.type || "";
 }
 
+function relationshipWeightColor(weight, colors) {
+  const value = Math.max(0, Math.min(10, Number(weight ?? 1)));
+  if (value >= 8) return colors.high;
+  if (value >= 4) return colors.medium;
+  return colors.low;
+}
+
 function graphPositionStorageKey() {
   return state.selectedWorldId ? `worldbuilder.graphPositions.${state.selectedWorldId}.${currentRole()}` : null;
 }
@@ -2832,23 +2851,33 @@ export function renderDocuments() {
   }
   if (indexStatus) {
     const status = state.embeddingStatus;
-    const baseStatus = status?.model
-      ? t("embeddings.status", {
+    let baseStatus = t("embeddings.notConfigured");
+    let statusHint = "";
+    if (status?.model) {
+      baseStatus = t("embeddings.status", {
           model: status.model,
           embedded: status.embedded_chunks,
           total: status.total_chunks,
-          dimensions: status.dimensions || "?",
-        })
-      : t("embeddings.notConfigured");
+          dimensions: status.dimensions || "-",
+        });
+      statusHint = status.total_chunks === 0
+        ? t("embeddings.noChunks")
+        : status.pending_chunks === 0
+          ? t("embeddings.upToDate")
+          : t("embeddings.pending", { count: status.pending_chunks });
+    }
     const jobStatus = state.embeddingJob
       ? ` ${t(`embeddings.job.${state.embeddingJob.status}`, {
           processed: state.embeddingJob.processed_chunks,
           total: state.embeddingJob.total_chunks,
         })}`
       : "";
-    indexStatus.textContent = `${baseStatus}${jobStatus}`;
+    indexStatus.textContent = `${baseStatus}. ${statusHint}${jobStatus}`.trim();
     buildButton.disabled = !status?.model || state.embeddingBusy || !status?.pending_chunks;
     buildButton.textContent = state.embeddingBusy ? t("embeddings.processing") : t("embeddings.build");
+    buildButton.title = buildButton.disabled && status?.pending_chunks === 0
+      ? t("embeddings.upToDate")
+      : t("embeddings.buildHint");
     clearButton.disabled = state.embeddingBusy || !status?.embedded_chunks;
   }
   if (!list) return;
@@ -2908,13 +2937,23 @@ export function renderDocuments() {
                         )}</div>`
                       : ""
                   }
-                  ${extractionJob.error ? `<div class="danger">${escapeHtml(extractionJob.error)}</div>` : ""}
+                  ${renderExtractionRetryStatus(extractionJob)}
                 </div>`
               : ""
           }
           <div class="item-actions">
             ${canPause ? `<button class="ghost" data-pause-document="${document.id}" type="button">${t("documents.pause")}</button>` : ""}
             ${canResume ? `<button data-resume-document="${document.id}" type="button">${t("documents.resume")}</button>` : ""}
+            ${
+              ["queued", "running"].includes(extractionJob?.status)
+                ? `<button class="ghost" data-pause-extraction="${extractionJob.id}" type="button">${t("documents.pauseExtraction")}</button>`
+                : ""
+            }
+            ${
+              extractionJob?.status === "paused"
+                ? `<button data-resume-extraction="${extractionJob.id}" type="button">${t("documents.resumeExtraction")}</button>`
+                : ""
+            }
             ${
               document.status === "ready" && (!extractionJob || extractionJob.status === "failed")
                 ? `<button data-extract-document="${document.id}" type="button">${t("documents.extract")}</button>`
@@ -2937,6 +2976,12 @@ export function renderDocuments() {
   list.querySelectorAll("[data-resume-document]").forEach((button) => {
     button.addEventListener("click", () => resumeKnowledgeDocument(button.dataset.resumeDocument));
   });
+  list.querySelectorAll("[data-pause-extraction]").forEach((button) => {
+    button.addEventListener("click", () => pauseDocumentExtraction(button.dataset.pauseExtraction));
+  });
+  list.querySelectorAll("[data-resume-extraction]").forEach((button) => {
+    button.addEventListener("click", () => resumeDocumentExtraction(button.dataset.resumeExtraction));
+  });
   list.querySelectorAll("[data-delete-document]").forEach((button) => {
     button.addEventListener("click", () => deleteKnowledgeDocument(button.dataset.deleteDocument));
   });
@@ -2945,6 +2990,155 @@ export function renderDocuments() {
   });
   list.querySelectorAll("[data-open-document-proposals]").forEach((button) => {
     button.addEventListener("click", () => activateTab("proposals"));
+  });
+}
+
+function renderExtractionRetryStatus(job) {
+  if (job.status === "failed" && job.error) {
+    return `<div class="danger">${escapeHtml(job.error)}</div>`;
+  }
+  if (job.pause_requested && job.status === "running") {
+    return `<div class="item-meta">${escapeHtml(t("documents.extractionPausePending"))}</div>`;
+  }
+  if (job.attempts > 0 && ["queued", "running"].includes(job.status)) {
+    return `<div class="item-meta">${escapeHtml(t("documents.extractionRetrying", {
+      attempt: Math.min(job.attempts + 1, job.max_attempts),
+      max: job.max_attempts,
+    }))}</div>`;
+  }
+  return "";
+}
+
+export function renderAssistant() {
+  const form = $("assistantForm");
+  const history = $("assistantHistory");
+  if (!form || !history) return;
+
+  document.querySelectorAll("[data-assistant-scenario]").forEach((button) => {
+    const active = button.dataset.assistantScenario === state.assistantScenario;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    button.disabled = state.assistantBusy;
+  });
+  document.querySelectorAll("[data-assistant-form]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.assistantForm !== state.assistantScenario);
+  });
+
+  const readyDocuments = state.documents.filter((document) => document.status === "ready");
+  const documentSelect = $("assistantDocument");
+  const previousDocumentId = documentSelect.value;
+  documentSelect.innerHTML = readyDocuments.length
+    ? readyDocuments
+        .map((document) => `<option value="${escapeHtml(document.id)}">${escapeHtml(document.filename)}</option>`)
+        .join("")
+    : `<option value="">${escapeHtml(t("assistant.source.noDocuments"))}</option>`;
+  if (readyDocuments.some((document) => document.id === previousDocumentId)) {
+    documentSelect.value = previousDocumentId;
+  }
+  documentSelect.disabled = !readyDocuments.length || state.assistantBusy;
+  const selectedDocument = readyDocuments.find((document) => document.id === documentSelect.value);
+  const selectedJob = selectedDocument ? state.documentExtractionJobs[selectedDocument.id] : null;
+  $("assistantDocumentHint").textContent = selectedJob
+    ? assistantDocumentJobText(selectedJob)
+    : selectedDocument
+      ? t("assistant.source.readyInfo", { chunks: selectedDocument.total_chunks })
+      : t("assistant.source.uploadFirst");
+
+  const planKeys = {
+    source: ["assistant.source.plan1", "assistant.source.plan2", "assistant.source.plan3"],
+    audit: ["assistant.audit.plan1", "assistant.audit.plan2", "assistant.audit.plan3"],
+    adventure: ["assistant.adventure.plan1", "assistant.adventure.plan2", "assistant.adventure.plan3"],
+  };
+  $("assistantPlan").innerHTML = planKeys[state.assistantScenario]
+    .map((key) => `<li>${escapeHtml(t(key))}</li>`)
+    .join("");
+
+  const confirm = $("assistantConfirm");
+  const runButton = $("assistantRun");
+  confirm.disabled = state.assistantBusy;
+  runButton.disabled = state.assistantBusy || !confirm.checked;
+  runButton.textContent = state.assistantBusy ? t("assistant.running") : t("assistant.run");
+  $("clearAssistantHistory").disabled = state.assistantBusy || !state.assistantRuns.length;
+
+  const currentStatus = $("assistantCurrentStatus");
+  const activeRun = state.assistantRuns.find((run) => run.status === "running");
+  currentStatus.classList.toggle("hidden", !state.assistantBusy || !activeRun);
+  const activeSourceJob = activeRun?.scenario === "source"
+    ? state.documentExtractionJobs[activeRun.documentId]
+    : null;
+  const runningDetail = activeSourceJob
+    ? `${assistantDocumentJobText(activeSourceJob)} ${t("assistant.source.workerHint")}`
+    : t("assistant.runningDetail");
+  currentStatus.innerHTML = activeRun
+    ? `<span class="spinner" aria-hidden="true"></span>
+       <div><strong>${escapeHtml(t(`assistant.${activeRun.scenario}.title`))}</strong>
+       <span>${escapeHtml(runningDetail)}</span></div>`
+    : "";
+
+  const openDraftsButton = $("assistantOpenDrafts");
+  const hasDraft = state.assistantRuns.some((run) => run.proposalId);
+  openDraftsButton.classList.toggle("hidden", !hasDraft);
+
+  if (!state.assistantRuns.length) {
+    history.className = "assistant-history empty";
+    history.textContent = t("assistant.historyEmpty");
+    return;
+  }
+
+  history.className = "assistant-history";
+  history.innerHTML = state.assistantRuns
+    .map((run, index) => {
+      const hasDetails = Boolean(run.result || run.error);
+      const statusLabel = t(`assistant.status.${run.status}`);
+      const statusClass = ["failed", "interrupted"].includes(run.status)
+        ? "danger"
+        : run.status === "completed"
+          ? "success"
+          : "";
+      return `
+        <article class="assistant-run">
+          <div class="assistant-run-head">
+            <div>
+              <strong>${escapeHtml(t(`assistant.${run.scenario}.title`))}</strong>
+              <span>${escapeHtml(run.title)}</span>
+            </div>
+            <span class="status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
+          </div>
+          <small class="muted">${new Date(run.createdAt).toLocaleString(language())}</small>
+          ${
+            hasDetails
+              ? `<details class="assistant-run-result" ${index === 0 ? "open" : ""}>
+                   <summary>${escapeHtml(t("assistant.result"))}</summary>
+                   ${run.error ? `<p class="danger">${escapeHtml(run.error)}</p>` : ""}
+                   ${run.result ? `<div class="markdown-body">${renderMarkdown(run.result)}</div>` : ""}
+                 </details>`
+              : ""
+          }
+          ${
+            run.proposalId
+              ? `<div class="item-actions">
+                   <button class="ghost" data-open-assistant-proposal="${escapeHtml(run.proposalId)}" type="button">${escapeHtml(t("assistant.openDrafts"))}</button>
+                 </div>`
+              : ""
+          }
+        </article>`;
+    })
+    .join("");
+  history.querySelectorAll("[data-open-assistant-proposal]").forEach((button) => {
+    button.addEventListener("click", () => activateTab("proposals"));
+  });
+}
+
+function assistantDocumentJobText(job) {
+  if (job.status === "completed") {
+    return t("documents.extraction.completed", { count: job.proposal_count || 0 });
+  }
+  if (job.status === "failed") {
+    return job.error || t("documents.extraction.failed");
+  }
+  return t(`documents.extraction.${job.status}`, {
+    processed: job.processed_chunks || 0,
+    total: job.total_chunks || 0,
   });
 }
 

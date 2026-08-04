@@ -2,6 +2,7 @@ import {
   buildContext,
   buildEmbeddingIndex,
   branchChatThread,
+  clearAssistantHistory,
   createEntity,
   createEntityType,
   createManualProposal,
@@ -39,6 +40,8 @@ import {
   saveRandomTable,
   saveRandomTableRow,
   saveLlmConfig,
+  runAssistantScenario,
+  selectAssistantScenario,
   sendChat,
   startNewChatThread,
   startCreateEntity,
@@ -46,10 +49,10 @@ import {
   testLlmConnection,
   uploadEntityImage,
   uploadKnowledgeDocument,
-} from "./actions.js?v=20260728.3";
-import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260728.3";
-import { $, toast, wrap } from "./dom.js?v=20260728.3";
-import { language, setLanguage, t } from "./i18n.js?v=20260728.3";
+} from "./actions.js?v=20260804.2";
+import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260804.2";
+import { $, toast, wrap } from "./dom.js?v=20260804.2";
+import { language, setLanguage, t } from "./i18n.js?v=20260804.2";
 import {
   activateModuleView,
   activateTab,
@@ -57,6 +60,7 @@ import {
   closeEntityReader,
   openSelectedEntityForEdit,
   renderChat,
+  renderAssistant,
   renderChatTemplates,
   renderChatThreads,
   renderEntities,
@@ -64,19 +68,37 @@ import {
   renderInviteLinks,
   renderModuleVisibility,
   zoomGraph,
-} from "./render.js?v=20260728.3";
-import { defaultModuleSettings, state } from "./state.js?v=20260728.3";
-import { setTheme, theme } from "./theme.js?v=20260728.3";
+} from "./render.js?v=20260804.2";
+import { defaultModuleSettings, state } from "./state.js?v=20260804.2";
+import { setTheme, theme } from "./theme.js?v=20260804.2";
+
+let automaticRefreshReady = false;
 
 function bindTabs() {
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => {
       activateTab(button.dataset.tab);
+      refreshWorldDataIfStale();
     });
   });
 }
 
+function refreshWorldDataIfStale(maxAgeMs = 15_000) {
+  if (
+    !automaticRefreshReady ||
+    !state.selectedWorldId ||
+    Date.now() - state.worldDataLoadedAt < maxAgeMs
+  ) return;
+  state.worldDataLoadedAt = Date.now();
+  wrap(loadWorldData)();
+}
+
 function bindEvents() {
+  window.addEventListener("focus", () => refreshWorldDataIfStale(3_000));
+  window.addEventListener("pageshow", () => refreshWorldDataIfStale(3_000));
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") refreshWorldDataIfStale(3_000);
+  });
   window.addEventListener("unhandledrejection", (event) => {
     event.preventDefault();
     toast(event.reason?.message || t("common.unexpectedError"), "error");
@@ -102,6 +124,7 @@ function bindEvents() {
   $("detectiveNodeForm").addEventListener("submit", wrap(saveDetectiveNode));
   $("detectiveConnectionForm").addEventListener("submit", wrap(saveDetectiveConnection));
   $("chatForm").addEventListener("submit", sendChat);
+  $("assistantForm").addEventListener("submit", runAssistantScenario);
   $("manualProposalForm").addEventListener("submit", wrap(createManualProposal));
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
@@ -217,6 +240,13 @@ function bindEvents() {
   });
   $("newChatThread").addEventListener("click", startNewChatThread);
   $("branchChatThread").addEventListener("click", branchChatThread);
+  $("clearAssistantHistory").addEventListener("click", clearAssistantHistory);
+  $("assistantOpenDrafts").addEventListener("click", () => activateTab("proposals"));
+  $("assistantConfirm").addEventListener("change", renderAssistant);
+  $("assistantDocument").addEventListener("change", renderAssistant);
+  document.querySelectorAll("[data-assistant-scenario]").forEach((button) => {
+    button.addEventListener("click", () => selectAssistantScenario(button.dataset.assistantScenario));
+  });
   document.querySelectorAll("[data-chat-template]").forEach((button) => {
     button.addEventListener("click", () => insertChatTemplate(button.dataset.chatTemplate));
   });
@@ -299,11 +329,13 @@ export async function boot() {
     renderChatTemplates();
     renderChatThreads();
     renderChat();
+    renderAssistant();
     await loadHealth();
     if ($("viewerRole").value === "master") {
       await loadLlmConfig();
     }
     await loadWorlds();
+    automaticRefreshReady = true;
   } catch (error) {
     toast(`${t("boot.failed")}: ${error.message}`, "error");
   }

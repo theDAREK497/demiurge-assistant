@@ -6,5 +6,6 @@ if not exist ".venv\Scripts\python.exe" (
   pause
   exit /b 1
 )
-title Worldbuilder Embedding Worker
+title Worldbuilder AI Worker
+echo Dedicated worker mode. Disable the built-in worker on the API process first.
 ".venv\Scripts\python.exe" -m worldbuilder_core.embedding_worker

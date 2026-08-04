@@ -18,7 +18,11 @@ from worldbuilder_core.schemas import (
     KnowledgeDocumentProcessResult,
     KnowledgeDocumentRead,
 )
-from worldbuilder_core.services.document_extraction_jobs import enqueue_document_extraction
+from worldbuilder_core.services.document_extraction_jobs import (
+    enqueue_document_extraction,
+    pause_document_extraction_job,
+    resume_document_extraction_job,
+)
 from worldbuilder_core.services.embedding_index import (
     EmbeddingConfigurationError,
     clear_embedding_index,
@@ -211,6 +215,32 @@ def get_document_extraction_job(job_id: str, session: DbSession) -> DocumentExtr
     if job is None:
         raise HTTPException(status_code=404, detail="Document extraction job not found")
     return job
+
+
+@router.post(
+    "/document-extraction-jobs/{job_id}/pause",
+    response_model=DocumentExtractionJobRead,
+)
+def pause_extraction_job(job_id: str, session: DbSession) -> DocumentExtractionJob:
+    try:
+        return pause_document_extraction_job(session, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post(
+    "/document-extraction-jobs/{job_id}/resume",
+    response_model=DocumentExtractionJobRead,
+)
+def resume_extraction_job(job_id: str, session: DbSession) -> DocumentExtractionJob:
+    try:
+        return resume_document_extraction_job(session, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post("/documents/{document_id}/process", response_model=KnowledgeDocumentProcessResult)

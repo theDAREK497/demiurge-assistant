@@ -486,6 +486,7 @@ class LLMChatRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0, le=1_000_000)
+    reasoning_effort: Literal["none", "low", "medium", "high"] | None = None
     response_format: dict[str, Any] | None = None
 
 
@@ -636,6 +637,8 @@ class DocumentExtractionJobRead(ORMModel):
     lease_owner: str | None
     lease_expires_at: datetime | None
     heartbeat_at: datetime | None
+    retry_at: datetime | None
+    pause_requested: bool
     error: str | None
     created_at: datetime
     updated_at: datetime
@@ -779,6 +782,21 @@ class ExtractionFromTextRequest(BaseModel):
     max_entities: int | None = Field(default=None, ge=1, le=50)
 
 
+class AdventureGenerationRequest(BaseModel):
+    premise: str = Field(min_length=1, max_length=4_000)
+    scale: Literal["small", "medium", "large"] = "small"
+    tone: str | None = Field(default=None, max_length=120)
+    enabled_modules: list[str] = Field(
+        default_factory=lambda: ["graph", "timeline", "quests", "randomTables", "detectiveBoard"],
+        max_length=20,
+    )
+    role: ViewerRole = ViewerRole.master
+    output_language: OutputLanguage = "ru"
+    query: str | None = Field(default=None, max_length=2_000)
+    model: str | None = Field(default=None, max_length=200)
+    max_entities: int = Field(default=8, ge=4, le=50)
+
+
 class ExtractionProposalRead(ORMModel):
     id: str
     world_id: str
@@ -814,6 +832,7 @@ class ProposalItemSelection(BaseModel):
 
 class HealthRead(BaseModel):
     status: str = "ok"
+    local_worker_enabled: bool = False
 
 
 class RoleQuery(BaseModel):
