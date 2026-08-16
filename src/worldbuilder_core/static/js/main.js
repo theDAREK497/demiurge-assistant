@@ -49,10 +49,10 @@ import {
   testLlmConnection,
   uploadEntityImage,
   uploadKnowledgeDocument,
-} from "./actions.js?v=20260804.2";
-import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260804.2";
-import { $, toast, wrap } from "./dom.js?v=20260804.2";
-import { language, setLanguage, t } from "./i18n.js?v=20260804.2";
+} from "./actions.js?v=20260816.1";
+import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260816.1";
+import { $, toast, wrap } from "./dom.js?v=20260816.1";
+import { language, setLanguage, t } from "./i18n.js?v=20260816.1";
 import {
   activateModuleView,
   activateTab,
@@ -68,9 +68,9 @@ import {
   renderInviteLinks,
   renderModuleVisibility,
   zoomGraph,
-} from "./render.js?v=20260804.2";
-import { defaultModuleSettings, state } from "./state.js?v=20260804.2";
-import { setTheme, theme } from "./theme.js?v=20260804.2";
+} from "./render.js?v=20260816.1";
+import { defaultModuleSettings, state } from "./state.js?v=20260816.1";
+import { setTheme, theme } from "./theme.js?v=20260816.1";
 
 let automaticRefreshReady = false;
 

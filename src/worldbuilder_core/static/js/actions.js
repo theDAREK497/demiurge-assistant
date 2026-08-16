@@ -1,6 +1,6 @@
-import { api, apiRaw } from "./api.js?v=20260804.2";
-import { $, toast } from "./dom.js?v=20260804.2";
-import { language, t } from "./i18n.js?v=20260804.2";
+import { api, apiRaw } from "./api.js?v=20260816.1";
+import { $, toast } from "./dom.js?v=20260816.1";
+import { language, t } from "./i18n.js?v=20260816.1";
 import {
   addAssistantRun,
   clearAssistantRuns as clearStoredAssistantRuns,
@@ -14,7 +14,7 @@ import {
   state,
   switchChatThread,
   updateAssistantRun,
-} from "./state.js?v=20260804.2";
+} from "./state.js?v=20260816.1";
 import {
   activateTab,
   closeEntityDrawer,
@@ -36,7 +36,7 @@ import {
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
-} from "./render.js?v=20260804.2";
+} from "./render.js?v=20260816.1";
 
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 let worldDataAbortController = null;

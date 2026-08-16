@@ -1,6 +1,6 @@
-import { $, escapeHtml } from "./dom.js?v=20260804.2";
-import { selectedWorld, state } from "./state.js?v=20260804.2";
-import { language, t } from "./i18n.js?v=20260804.2";
+import { $, escapeHtml } from "./dom.js?v=20260816.1";
+import { selectedWorld, state } from "./state.js?v=20260816.1";
+import { language, t } from "./i18n.js?v=20260816.1";
 import {
   applyProposal,
   applySelectedProposal,
@@ -50,7 +50,7 @@ import {
   startCreateEntityWithType,
   updateEntityType,
   updateQuestStatus,
-} from "./actions.js?v=20260804.2";
+} from "./actions.js?v=20260816.1";
 
 let graphInstance = null;
 let graphViewportSaveTimer = null;
