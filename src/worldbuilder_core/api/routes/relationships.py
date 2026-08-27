@@ -10,6 +10,10 @@ from worldbuilder_core.schemas import (
     RelationshipRevisionRead,
     RelationshipUpdate,
 )
+from worldbuilder_core.services.change_history import (
+    record_relationship_change,
+    relationship_snapshot,
+)
 from worldbuilder_core.services.relationship_history import build_relationship_revision
 
 router = APIRouter(tags=["relationships"])
@@ -49,6 +53,7 @@ def create_relationship(world_id: str, payload: RelationshipCreate, session: DbS
     session.add(relationship)
     session.flush()
     session.add(build_relationship_revision(relationship))
+    record_relationship_change(session, relationship, "created")
     session.commit()
     session.refresh(relationship)
     return relationship
@@ -121,6 +126,7 @@ def update_relationship(
     if relationship is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
 
+    previous_state = relationship_snapshot(relationship)
     data = payload.model_dump(exclude_unset=True)
     effective_at = data.pop("effective_at", None)
     change_note = data.pop("change_note", None)
@@ -141,6 +147,13 @@ def update_relationship(
             change_note=change_note,
         )
     )
+    record_relationship_change(
+        session,
+        relationship,
+        "updated",
+        before_state=previous_state,
+        summary=change_note,
+    )
     session.commit()
     session.refresh(relationship)
     return relationship
@@ -151,5 +164,7 @@ def delete_relationship(relationship_id: str, session: DbSession) -> None:
     relationship = session.get(Relationship, relationship_id)
     if relationship is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
+    previous_state = relationship_snapshot(relationship)
+    record_relationship_change(session, relationship, "deleted", before_state=previous_state)
     session.delete(relationship)
     session.commit()

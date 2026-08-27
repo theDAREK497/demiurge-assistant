@@ -8,6 +8,7 @@ from worldbuilder_core.models import (
     DetectiveBoardConnection,
     DetectiveBoardNode,
     Entity,
+    EntityRevision,
     EntityTypeDefinition,
     ExtractionProposal,
     MapPin,
@@ -16,12 +17,14 @@ from worldbuilder_core.models import (
     QuestStatusDefinition,
     Relationship,
     World,
+    WorldChange,
     WorldRule,
 )
 from worldbuilder_core.schemas import (
     DetectiveBoardConnectionSnapshot,
     DetectiveBoardNodeSnapshot,
     EntitySnapshot,
+    EntityRevisionSnapshot,
     EntityTypeDefinitionSnapshot,
     ExtractionProposalSnapshot,
     ExportMetadata,
@@ -31,6 +34,7 @@ from worldbuilder_core.schemas import (
     QuestStatusDefinitionSnapshot,
     RelationshipSnapshot,
     WorldExport,
+    WorldChangeSnapshot,
     WorldImportResult,
     WorldRuleSnapshot,
     WorldSnapshot,
@@ -136,6 +140,20 @@ def export_world(session: Session, world_id: str) -> WorldExport:
             .order_by(DetectiveBoardConnection.created_at.asc(), DetectiveBoardConnection.id.asc())
         )
     )
+    entity_revisions = list(
+        session.scalars(
+            select(EntityRevision)
+            .where(EntityRevision.world_id == world_id)
+            .order_by(EntityRevision.created_at.asc(), EntityRevision.id.asc())
+        )
+    )
+    world_changes = list(
+        session.scalars(
+            select(WorldChange)
+            .where(WorldChange.world_id == world_id)
+            .order_by(WorldChange.created_at.asc(), WorldChange.id.asc())
+        )
+    )
 
     return WorldExport(
         metadata=ExportMetadata(
@@ -157,6 +175,8 @@ def export_world(session: Session, world_id: str) -> WorldExport:
             DetectiveBoardConnectionSnapshot.model_validate(connection) for connection in detective_connections
         ],
         proposals=[ExtractionProposalSnapshot.model_validate(proposal) for proposal in proposals],
+        entity_revisions=[EntityRevisionSnapshot.model_validate(revision) for revision in entity_revisions],
+        world_changes=[WorldChangeSnapshot.model_validate(change) for change in world_changes],
     )
 
 
@@ -214,6 +234,12 @@ def import_world(session: Session, snapshot: WorldExport, *, replace_existing: b
         data["payload"] = proposal_data.payload.model_dump(mode="json")
         session.add(ExtractionProposal(**data))
 
+    for revision_data in snapshot.entity_revisions:
+        session.add(EntityRevision(**revision_data.model_dump()))
+
+    for change_data in snapshot.world_changes:
+        session.add(WorldChange(**change_data.model_dump()))
+
     session.commit()
 
     return WorldImportResult(
@@ -227,6 +253,8 @@ def import_world(session: Session, snapshot: WorldExport, *, replace_existing: b
         imported_detective_board_nodes=len(snapshot.detective_board_nodes),
         imported_detective_board_connections=len(snapshot.detective_board_connections),
         imported_proposals=len(snapshot.proposals),
+        imported_entity_revisions=len(snapshot.entity_revisions),
+        imported_world_changes=len(snapshot.world_changes),
     )
 
 
@@ -246,6 +274,8 @@ def validate_snapshot(snapshot: WorldExport) -> None:
     detective_node_ids = [node.id for node in snapshot.detective_board_nodes]
     detective_connection_ids = [connection.id for connection in snapshot.detective_board_connections]
     proposal_ids = [proposal.id for proposal in snapshot.proposals]
+    entity_revision_ids = [revision.id for revision in snapshot.entity_revisions]
+    world_change_ids = [change.id for change in snapshot.world_changes]
 
     _ensure_unique(entity_ids, "entity ids")
     _ensure_unique(relationship_ids, "relationship ids")
@@ -256,6 +286,8 @@ def validate_snapshot(snapshot: WorldExport) -> None:
     _ensure_unique(detective_node_ids, "detective board node ids")
     _ensure_unique(detective_connection_ids, "detective board connection ids")
     _ensure_unique(proposal_ids, "proposal ids")
+    _ensure_unique(entity_revision_ids, "entity revision ids")
+    _ensure_unique(world_change_ids, "world change ids")
 
     entity_id_set = set(entity_ids)
     for entity in snapshot.entities:
@@ -310,7 +342,44 @@ def validate_snapshot(snapshot: WorldExport) -> None:
         if proposal.world_id != world_id:
             raise InvalidSnapshotError(f"Proposal {proposal.id!r} belongs to another world")
 
+    entity_revision_id_set = set(entity_revision_ids)
+    for revision in snapshot.entity_revisions:
+        if revision.world_id != world_id:
+            raise InvalidSnapshotError(f"Entity revision {revision.id!r} belongs to another world")
+        if revision.supersedes_revision_id and revision.supersedes_revision_id not in entity_revision_id_set:
+            raise InvalidSnapshotError(f"Entity revision {revision.id!r} supersedes a missing revision")
+
+    world_change_id_set = set(world_change_ids)
+    for change in snapshot.world_changes:
+        if change.world_id != world_id:
+            raise InvalidSnapshotError(f"World change {change.id!r} belongs to another world")
+        if any(cause_id not in world_change_id_set for cause_id in change.causal_change_ids):
+            raise InvalidSnapshotError(f"World change {change.id!r} has a missing cause")
+        if change.supersedes_change_id and change.supersedes_change_id not in world_change_id_set:
+            raise InvalidSnapshotError(f"World change {change.id!r} supersedes a missing change")
+    _ensure_acyclic_changes(snapshot.world_changes)
+
 
 def _ensure_unique(values: list[str], label: str) -> None:
     if len(values) != len(set(values)):
         raise InvalidSnapshotError(f"Snapshot contains duplicate {label}")
+
+
+def _ensure_acyclic_changes(changes: list[WorldChangeSnapshot]) -> None:
+    causes_by_id = {change.id: change.causal_change_ids for change in changes}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(change_id: str) -> None:
+        if change_id in visiting:
+            raise InvalidSnapshotError("World change causal links contain a cycle")
+        if change_id in visited:
+            return
+        visiting.add(change_id)
+        for cause_id in causes_by_id.get(change_id, []):
+            visit(cause_id)
+        visiting.remove(change_id)
+        visited.add(change_id)
+
+    for change_id in causes_by_id:
+        visit(change_id)

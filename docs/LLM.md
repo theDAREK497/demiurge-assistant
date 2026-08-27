@@ -64,6 +64,20 @@ the provider default for technical experiments. Extraction output tokens scale
 from 1536 to 4096 with the requested entity count; this avoids truncated JSON
 and a second repair generation.
 
+Document extraction treats prose as evidence, not as a list of entities. The
+extractor keeps explicit reusable canon facts and ignores document navigation,
+front matter, literary decoration, internal monologue, unnamed background
+details, and ordinary scene actions. A source segment without canon facts may
+produce an empty extraction payload and no draft changes. This is a model-backed
+semantic filter, so pending proposals remain the human review boundary.
+
+Extraction accepts strict JSON first. Malformed local-model output falls back to
+the MIT-licensed `json-repair` parser and is still validated against the strict
+Pydantic extraction schema. Responses that cannot produce a valid schema continue
+through the model-repair and retry flow instead of being silently accepted.
+Long-running document jobs show elapsed wall time and an ETA derived from average
+completed-chunk time; retries and pauses can move the ETA.
+
 ## API
 
 Inspect current config:

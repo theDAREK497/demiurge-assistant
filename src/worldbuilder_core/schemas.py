@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from worldbuilder_core.models import ProposalStatus, VerificationStatus, ViewerRole
 from worldbuilder_core.services.world_configuration import normalize_key
 
+ChangeKind = Literal["created", "updated", "deleted", "published", "world_event", "correction", "retcon"]
+ChangeSubjectType = Literal["world", "entity", "relationship", "proposal"]
+
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -81,8 +84,122 @@ class EntityRead(EntityBase, ORMModel):
     updated_at: datetime
 
 
+class EntityDuplicateCandidate(BaseModel):
+    left: EntityRead
+    right: EntityRead
+    score: float = Field(ge=0.0, le=1.0)
+    confidence: Literal["strong", "possible", "ambiguous"]
+    reasons: list[str]
+    shared_relationship_names: list[str]
+
+
+class EntityMergeRequest(EntityBase):
+    primary_entity_id: str = Field(min_length=1, max_length=36)
+    duplicate_entity_id: str = Field(min_length=1, max_length=36)
+
+
+class EntityMergeResult(BaseModel):
+    entity: EntityRead
+    deleted_entity_id: str
+    rewired_relationships: int = Field(ge=0)
+    merged_relationships: int = Field(ge=0)
+    removed_self_relationships: int = Field(ge=0)
+    updated_references: int = Field(ge=0)
+
+
 class EntitySnapshot(EntityRead):
     pass
+
+
+class EntityRevisionRead(ORMModel):
+    id: str
+    world_id: str
+    entity_id: str
+    change_kind: str
+    source_type: str
+    source_id: str | None
+    effective_at: str | None
+    before_state: dict[str, Any] | None
+    after_state: dict[str, Any] | None
+    change_note: str | None
+    evidence: str | None
+    confidence: float
+    causal_change_ids: list[str]
+    supersedes_revision_id: str | None
+    is_secret: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class EntityRevisionSnapshot(EntityRevisionRead):
+    pass
+
+
+class WorldChangeCreate(BaseModel):
+    subject_type: ChangeSubjectType = "world"
+    subject_id: str | None = Field(default=None, max_length=36)
+    subject_name: str | None = Field(default=None, max_length=200)
+    change_kind: ChangeKind = "world_event"
+    summary: str = Field(min_length=1, max_length=10_000)
+    effective_at: str | None = Field(default=None, max_length=120)
+    evidence: str | None = Field(default=None, max_length=10_000)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    causal_change_ids: list[str] = Field(default_factory=list, max_length=100)
+    supersedes_change_id: str | None = Field(default=None, max_length=36)
+    is_secret: bool = False
+
+    @field_validator("causal_change_ids")
+    @classmethod
+    def validate_unique_causes(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("causal_change_ids must be unique")
+        return value
+
+
+class WorldChangeUpdate(BaseModel):
+    subject_type: ChangeSubjectType | None = None
+    subject_id: str | None = Field(default=None, max_length=36)
+    subject_name: str | None = Field(default=None, max_length=200)
+    change_kind: ChangeKind | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=10_000)
+    effective_at: str | None = Field(default=None, max_length=120)
+    evidence: str | None = Field(default=None, max_length=10_000)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    causal_change_ids: list[str] | None = Field(default=None, max_length=100)
+    supersedes_change_id: str | None = Field(default=None, max_length=36)
+    is_secret: bool | None = None
+
+    @field_validator("causal_change_ids")
+    @classmethod
+    def validate_unique_causes(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None and len(value) != len(set(value)):
+            raise ValueError("causal_change_ids must be unique")
+        return value
+
+
+class WorldChangeRead(ORMModel):
+    id: str
+    world_id: str
+    subject_type: str
+    subject_id: str | None
+    subject_name: str | None
+    change_kind: str
+    source_type: str
+    source_id: str | None
+    summary: str
+    effective_at: str | None
+    evidence: str | None
+    confidence: float
+    causal_change_ids: list[str]
+    supersedes_change_id: str | None
+    is_secret: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorldChangeSnapshot(WorldChangeRead):
+    before_state: dict[str, Any] | None
+    after_state: dict[str, Any] | None
 
 
 class EntityTypeDefinitionBase(BaseModel):
@@ -457,6 +574,8 @@ class WorldExport(BaseModel):
     proposals: list[ExtractionProposalSnapshot] = Field(default_factory=list)
     entity_types: list[EntityTypeDefinitionSnapshot] = Field(default_factory=list)
     quest_statuses: list[QuestStatusDefinitionSnapshot] = Field(default_factory=list)
+    entity_revisions: list[EntityRevisionSnapshot] = Field(default_factory=list)
+    world_changes: list[WorldChangeSnapshot] = Field(default_factory=list)
 
 
 class WorldImportResult(BaseModel):
@@ -470,6 +589,8 @@ class WorldImportResult(BaseModel):
     imported_detective_board_nodes: int = 0
     imported_detective_board_connections: int = 0
     imported_proposals: int = 0
+    imported_entity_revisions: int = 0
+    imported_world_changes: int = 0
 
 
 LLMMessageRole = Literal["system", "user", "assistant"]
@@ -551,6 +672,7 @@ class WorldContextRead(BaseModel):
     world_rules: list[WorldRuleRead] = Field(default_factory=list)
     random_tables: list[RandomTableRead] = Field(default_factory=list)
     document_chunks: list["KnowledgeChunkExcerpt"] = Field(default_factory=list)
+    experience_changes: list[WorldChangeRead] = Field(default_factory=list)
     context_text: str
 
 
@@ -749,12 +871,14 @@ class ExtractedRandomTableRowDraft(BaseModel):
 
 
 class ExtractionPayload(BaseModel):
-    entities: list[ExtractedEntityDraft] = Field(default_factory=list, max_length=50)
-    relationships: list[ExtractedRelationshipDraft] = Field(default_factory=list, max_length=100)
-    world_rules: list[ExtractedWorldRuleDraft] = Field(default_factory=list, max_length=25)
-    random_tables: list[ExtractedRandomTableDraft] = Field(default_factory=list, max_length=25)
-    random_table_rows: list[ExtractedRandomTableRowDraft] = Field(default_factory=list, max_length=100)
-    notes: list[str] = Field(default_factory=list, max_length=25)
+    # A document job can consolidate many bounded model responses into one review draft.
+    # Per-request extraction limits remain small; these limits cover the reviewed aggregate.
+    entities: list[ExtractedEntityDraft] = Field(default_factory=list, max_length=2_000)
+    relationships: list[ExtractedRelationshipDraft] = Field(default_factory=list, max_length=5_000)
+    world_rules: list[ExtractedWorldRuleDraft] = Field(default_factory=list, max_length=1_000)
+    random_tables: list[ExtractedRandomTableDraft] = Field(default_factory=list, max_length=500)
+    random_table_rows: list[ExtractedRandomTableRowDraft] = Field(default_factory=list, max_length=5_000)
+    notes: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
     def validate_client_ids(self) -> "ExtractionPayload":
@@ -769,6 +893,11 @@ class ExtractionPayload(BaseModel):
 
 class ExtractionProposalCreate(BaseModel):
     source_text: str = Field(min_length=1, max_length=200_000)
+    payload: ExtractionPayload
+
+
+class ExtractionProposalUpdate(BaseModel):
+    source_text: str | None = Field(default=None, min_length=1, max_length=200_000)
     payload: ExtractionPayload
 
 

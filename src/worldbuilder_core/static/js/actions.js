@@ -1,6 +1,6 @@
-import { api, apiRaw } from "./api.js?v=20260816.1";
-import { $, toast } from "./dom.js?v=20260816.1";
-import { language, t } from "./i18n.js?v=20260816.1";
+import { api, apiRaw } from "./api.js?v=20260826.4";
+import { $, toast } from "./dom.js?v=20260826.4";
+import { language, t } from "./i18n.js?v=20260826.4";
 import {
   addAssistantRun,
   clearAssistantRuns as clearStoredAssistantRuns,
@@ -14,9 +14,10 @@ import {
   state,
   switchChatThread,
   updateAssistantRun,
-} from "./state.js?v=20260816.1";
+} from "./state.js?v=20260826.4";
 import {
   activateTab,
+  closeProposalEditor,
   closeEntityDrawer,
   closeEntityReader,
   currentRole,
@@ -28,6 +29,8 @@ import {
   renderDetectiveConnectionFormMode,
   renderDetectiveNodeFormMode,
   renderEntityFormMode,
+  renderEntityMergeResolver,
+  renderExperience,
   renderLlmConfig,
   renderDocuments,
   renderMapPinFormMode,
@@ -36,7 +39,7 @@ import {
   renderRandomTableRowFormMode,
   renderSelectedWorld,
   renderWorlds,
-} from "./render.js?v=20260816.1";
+} from "./render.js?v=20260826.4";
 
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 let worldDataAbortController = null;
@@ -176,6 +179,7 @@ export async function loadWorldData() {
     state.detectiveConnections = [];
     state.proposals = [];
     state.documents = [];
+    state.worldChanges = [];
     state.documentExtractionJobs = {};
     state.embeddingStatus = null;
     state.worldDataLoadedAt = Date.now();
@@ -213,6 +217,7 @@ export async function loadWorldData() {
         : Promise.resolve([]),
       role === "master" ? api(`/worlds/${worldId}/embedding-status`, { signal }) : Promise.resolve(null),
       role === "master" && !state.llmConfig ? api("/llm/config", { signal }) : Promise.resolve(null),
+      role === "master" ? api(`/worlds/${worldId}/changes?limit=200`, { signal }) : Promise.resolve([]),
     ]);
   } catch (error) {
     if (error.name === "AbortError") return;
@@ -234,7 +239,21 @@ export async function loadWorldData() {
     extractionJobs,
     embeddingStatus,
     llmConfig,
+    worldChanges,
   ] = results;
+  let consolidatedProposals = proposals;
+  const pendingProposals = proposals.filter((proposal) => proposal.status === "pending");
+  if (role === "master" && pendingProposals.length > 1) {
+    const activeProposal = await api(`/worlds/${worldId}/proposals/consolidate`, {
+      method: "POST",
+      signal,
+    });
+    consolidatedProposals = [
+      ...(activeProposal ? [activeProposal] : []),
+      ...proposals.filter((proposal) => proposal.status !== "pending"),
+    ];
+    toast(t("proposal.consolidated", { count: pendingProposals.length }));
+  }
   state.entities = entities;
   state.relationships = relationships;
   state.relationshipRevisions = relationshipRevisions;
@@ -245,8 +264,9 @@ export async function loadWorldData() {
   state.detectiveConnections = detectiveBoard.connections;
   state.entityTypes = entityTypes;
   state.questStatuses = questStatuses;
-  state.proposals = proposals;
+  state.proposals = consolidatedProposals;
   state.documents = documents;
+  state.worldChanges = worldChanges;
   state.documentExtractionJobs = Object.fromEntries(
     extractionJobs.map((job) => [job.document_id, job]).reverse(),
   );
@@ -423,6 +443,7 @@ export function selectAssistantScenario(scenario) {
 
 export function clearAssistantHistory() {
   if (!state.assistantRuns.length || !confirm(t("assistant.clearConfirm"))) return;
+  closeAssistantAuditResolver();
   clearStoredAssistantRuns();
   renderAssistant();
 }
@@ -509,6 +530,7 @@ export async function runAssistantScenario(event) {
       updateAssistantRun(run.id, {
         status: "completed",
         result: response.completion.message.content,
+        auditFindings: parseAssistantAuditFindings(response.completion.message.content),
       });
     }
     $("assistantConfirm").checked = false;
@@ -524,7 +546,9 @@ export async function runAssistantScenario(event) {
 
 function reconcileAssistantSourceRuns() {
   state.assistantRuns
-    .filter((run) => run.scenario === "source" && ["running", "interrupted"].includes(run.status))
+    .filter((run) => (
+      run.scenario === "source" && ["running", "interrupted", "failed"].includes(run.status)
+    ))
     .forEach((run) => {
       const job = state.documentExtractionJobs[run.documentId];
       if (!job) return;
@@ -601,11 +625,243 @@ function buildAssistantAuditPrompt(focus, full) {
     `Focus: ${focus}`,
     `Produce a ${reportSize} Markdown report.`,
     "Use sections: Summary, Contradictions, Probable duplicates, Missing links, Weak evidence, Next actions.",
+    "Write every finding as a numbered item under exactly one section.",
+    "If a section has no findings, write only 'None' under that heading and do not create a numbered item.",
     "For every finding, name the exact entities, relationships, rules, or sources that support it.",
     "Separate confirmed problems from hypotheses. If evidence is insufficient, say so.",
+    "A duplicate requires direct same-identity evidence or matching identity markers. A shared location, group membership, relationship, similar role, or participation in the same event is not duplicate evidence.",
+    "For each supported duplicate, give an explicit resolution: which card stays canonical, which unique facts and aliases move into it, and which card can be removed after manual confirmation.",
+    "A short name such as Alexander must not be merged when it can refer to several full-name entities. In that case list the competing candidates and the exact missing identity evidence.",
+    "Never infer reincarnation, transformation, kinship, or identity replacement unless the world context states it directly.",
+    "Do not put ordinary clusters or strong relationships in Probable duplicates. Do not expose UUIDs, client IDs, or database keys.",
     "Do not create drafts and do not rewrite the world.",
     languageRule,
   ].join("\n");
+}
+
+export function parseAssistantAuditFindings(markdown) {
+  const findings = [];
+  let section = null;
+  let current = null;
+
+  const flush = () => {
+    if (!current) return;
+    if (auditFindingIsEmpty(current.title, current.body)) {
+      current = null;
+      return;
+    }
+    findings.push({
+      id: `audit-${findings.length + 1}`,
+      kind: section?.kind || "review",
+      title: current.title,
+      body: current.body.trim(),
+      defaultSelected: section?.kind === "confirmed",
+    });
+    current = null;
+  };
+
+  String(markdown || "").split(/\r?\n/).forEach((line) => {
+    const heading = line.match(/^#{2,3}\s+(.+?)\s*$/);
+    if (heading) {
+      flush();
+      section = auditSection(heading[1]);
+      return;
+    }
+    if (!section || section.kind === "skip") return;
+
+    const item = line.match(/^\s*(?:\*\*)?(\d+)[.)]\s+(.+?)\s*$/);
+    if (item) {
+      flush();
+      const cleaned = item[2].replace(/\*\*/g, "").trim();
+      const separator = cleaned.indexOf(":");
+      const title = (separator >= 0 ? cleaned.slice(0, separator) : cleaned).trim().slice(0, 200);
+      const body = separator >= 0 ? cleaned.slice(separator + 1).trim() : "";
+      current = { title, body };
+      return;
+    }
+    if (current) current.body += `\n${line}`;
+  });
+  flush();
+  return findings;
+}
+
+function auditSection(title) {
+  const normalized = String(title || "").toLocaleLowerCase();
+  if (/резюме|summary|следующ|next action/.test(normalized)) return { kind: "skip" };
+  if (/подтверж|проблем|contradiction|confirmed/.test(normalized)) return { kind: "confirmed" };
+  if (/гипотез|probable|possible|предполага/.test(normalized)) return { kind: "probable" };
+  if (/отсутств|missing|пробел/.test(normalized)) return { kind: "missing" };
+  if (/слаб|weak/.test(normalized)) return { kind: "weak" };
+  return { kind: "review" };
+}
+
+function auditFindingIsEmpty(title, body) {
+  const normalizedTitle = String(title || "").replace(/\*/g, "").trim().toLocaleLowerCase();
+  if (/^(?:отсутствуют|отсутствует|нет|none|no findings?|not found)(?:\s|[:.,-]|$)/.test(normalizedTitle)) return true;
+  const normalizedBody = String(body || "").replace(/[*_`#>-]/g, " ").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  return /^(?:\d+[.)]\s*)?(?:отсутствуют|отсутствует|нет|none|no findings?)(?:\s|[:.,-]|$)/.test(normalizedBody);
+}
+
+export function openAssistantAuditResolver(runId) {
+  const run = state.assistantRuns.find((item) => item.id === runId && item.scenario === "audit" && item.result);
+  if (!run) return;
+  const auditFindings = parseAssistantAuditFindings(run.result);
+  updateAssistantRun(run.id, { auditFindings });
+  state.activeAuditRunId = run.id;
+  state.auditFindingSelection = auditFindings
+    .filter((finding) => finding.defaultSelected)
+    .map((finding) => finding.id);
+  state.duplicateCandidatesBusy = true;
+  renderAssistant();
+  void loadEntityDuplicateCandidates();
+}
+
+export function closeAssistantAuditResolver() {
+  state.activeAuditRunId = null;
+  state.auditFindingSelection = [];
+  $("assistantAuditResolverBackdrop")?.classList.add("hidden");
+  document.body.classList.remove("drawer-open");
+}
+
+export async function loadEntityDuplicateCandidates() {
+  if (!state.selectedWorldId) return;
+  state.duplicateCandidatesBusy = true;
+  renderAssistant();
+  try {
+    state.duplicateCandidates = await api(`/worlds/${state.selectedWorldId}/entities/duplicate-candidates`);
+  } catch (error) {
+    state.duplicateCandidates = [];
+    toast(t("duplicates.loadFailed", { message: error.message }), "error");
+  } finally {
+    state.duplicateCandidatesBusy = false;
+    renderAssistant();
+  }
+}
+
+export function openEntityMergeResolver(leftId, rightId) {
+  const candidate = state.duplicateCandidates.find(
+    (item) => item.left.id === leftId && item.right.id === rightId,
+  );
+  if (!candidate) return;
+  state.activeDuplicateCandidate = candidate;
+  state.entityMergePrimaryId = entityCompleteness(candidate.left) >= entityCompleteness(candidate.right)
+    ? candidate.left.id
+    : candidate.right.id;
+  renderEntityMergeResolver();
+}
+
+export function closeEntityMergeResolver() {
+  state.activeDuplicateCandidate = null;
+  state.entityMergePrimaryId = null;
+  $("entityMergeBackdrop")?.classList.add("hidden");
+  renderAssistant();
+}
+
+export function selectEntityMergePrimary(entityId) {
+  const candidate = state.activeDuplicateCandidate;
+  if (!candidate || ![candidate.left.id, candidate.right.id].includes(entityId)) return;
+  state.entityMergePrimaryId = entityId;
+  renderEntityMergeResolver();
+}
+
+export async function submitEntityMerge(event) {
+  event.preventDefault();
+  const candidate = state.activeDuplicateCandidate;
+  if (!candidate || state.entityMergeBusy || !requireWorld()) return;
+  const primary = candidate.left.id === state.entityMergePrimaryId ? candidate.left : candidate.right;
+  const duplicate = primary.id === candidate.left.id ? candidate.right : candidate.left;
+  if (!window.confirm(t("duplicates.confirm", { primary: primary.name, duplicate: duplicate.name }))) return;
+  const requestPayload = {
+    primary_entity_id: primary.id,
+    duplicate_entity_id: duplicate.id,
+    type: primary.type,
+    name: $("entityMergeName").value.trim(),
+    summary: $("entityMergeSummary").value.trim() || null,
+    description: $("entityMergeDescription").value.trim() || null,
+    aliases: splitTags($("entityMergeAliases").value),
+    tags: splitTags($("entityMergeTags").value),
+    is_secret: $("entityMergeSecret").checked,
+    status: primary.status,
+    attributes: { ...(duplicate.attributes || {}), ...(primary.attributes || {}) },
+  };
+
+  state.entityMergeBusy = true;
+  renderEntityMergeResolver();
+  try {
+    const result = await api(`/worlds/${state.selectedWorldId}/entities/merge`, {
+      method: "POST",
+      body: JSON.stringify(requestPayload),
+    });
+    closeEntityMergeResolver();
+    await loadWorldData();
+    await loadEntityDuplicateCandidates();
+    toast(t("duplicates.merged", {
+      name: result.entity.name,
+      relationships: result.rewired_relationships + result.merged_relationships,
+    }));
+  } catch (error) {
+    toast(t("duplicates.mergeFailed", { message: error.message }), "error");
+  } finally {
+    state.entityMergeBusy = false;
+    renderEntityMergeResolver();
+  }
+}
+
+function entityCompleteness(entity) {
+  return String(entity.name || "").length * 2
+    + String(entity.summary || "").length
+    + String(entity.description || "").length
+    + (entity.aliases || []).length * 20
+    + (entity.tags || []).length * 10
+    + Object.keys(entity.attributes || {}).length * 15;
+}
+
+export async function createAssistantAuditDraft(event) {
+  event.preventDefault();
+  if (!requireWorld() || state.assistantBusy) return;
+  const run = state.assistantRuns.find((item) => item.id === state.activeAuditRunId);
+  const selectedIds = new Set(state.auditFindingSelection);
+  const selectedFindings = (run?.auditFindings || []).filter((finding) => selectedIds.has(finding.id));
+  if (!selectedFindings.length) {
+    toast(t("assistant.audit.selectRequired"), "error");
+    return;
+  }
+
+  state.assistantBusy = true;
+  renderAssistant();
+  try {
+    const sourceText = selectedFindings.map((finding) => `## ${finding.title}\n${finding.body}`).join("\n\n");
+    const proposal = await api(`/worlds/${state.selectedWorldId}/proposals/extract`, {
+      method: "POST",
+      body: JSON.stringify({
+        role: currentRole(),
+        output_language: language(),
+        query: selectedFindings.map((finding) => finding.title).join("; ").slice(0, 2_000),
+        source_text: sourceText,
+        intent_text: [
+          "Prepare one review draft only from the audit findings explicitly selected by the user.",
+          "Do not turn hypotheses into facts. Do not invent identity, aliases, dates, or relationships.",
+          "For a duplicate, update aliases only when the selected finding directly proves the same identity; otherwise add a note for manual review.",
+          "For missing objects or links, create them only when the selected evidence states the fact directly.",
+        ].join(" "),
+        max_entities: 50,
+      }),
+    });
+    state.proposals = [proposal, ...state.proposals.filter((item) => item.id !== proposal.id)];
+    updateAssistantRun(run.id, {
+      proposalId: proposal.id,
+      resolvedFindingIds: Array.from(selectedIds),
+    });
+    closeAssistantAuditResolver();
+    renderAllWorldData();
+    activateTab("proposals");
+    toast(t("assistant.audit.draftCreated"));
+  } catch (error) {
+    toast(t("assistant.audit.draftFailed", { message: error.message }), "error");
+  } finally {
+    state.assistantBusy = false;
+    renderAllWorldData();
+  }
 }
 
 function replaceDocument(document) {
@@ -712,6 +968,73 @@ export async function createEntity(event) {
   closeEntityDrawer();
   toast(t("entity.created"));
   await loadWorldData();
+}
+
+export async function saveWorldChange(event) {
+  event.preventDefault();
+  if (!requireWorld()) return;
+  const subjectValue = $("experienceSubject").value;
+  const isEntity = subjectValue.startsWith("entity:");
+  const payload = {
+    subject_type: isEntity ? "entity" : "world",
+    subject_id: isEntity ? subjectValue.slice("entity:".length) : null,
+    change_kind: $("experienceKind").value,
+    summary: $("experienceSummary").value.trim(),
+    effective_at: $("experienceEffectiveAt").value.trim() || null,
+    evidence: $("experienceEvidence").value.trim() || null,
+    confidence: Number($("experienceConfidence").value),
+    causal_change_ids: Array.from($("experienceCauses").selectedOptions, (option) => option.value),
+    supersedes_change_id: $("experienceSupersedes").value || null,
+    is_secret: $("experienceSecret").checked,
+  };
+  if (state.editingWorldChangeId) {
+    await api(`/changes/${state.editingWorldChangeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    toast(t("experience.updated"));
+  } else {
+    await api(`/worlds/${state.selectedWorldId}/changes`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    toast(t("experience.created"));
+  }
+  resetWorldChangeForm();
+  await loadWorldData();
+}
+
+export function editWorldChange(changeId) {
+  const change = state.worldChanges.find((item) => item.id === changeId && item.source_type === "manual");
+  if (!change) return;
+  state.editingWorldChangeId = change.id;
+  renderExperience();
+  $("experienceSummary").value = change.summary || "";
+  $("experienceSubject").value = change.subject_type === "entity" && change.subject_id
+    ? `entity:${change.subject_id}`
+    : "world";
+  $("experienceKind").value = change.change_kind;
+  $("experienceEffectiveAt").value = change.effective_at || "";
+  $("experienceEvidence").value = change.evidence || "";
+  $("experienceConfidence").value = String(change.confidence ?? 1);
+  $("experienceSecret").checked = Boolean(change.is_secret);
+  Array.from($("experienceCauses").options).forEach((option) => {
+    option.selected = change.causal_change_ids.includes(option.value);
+  });
+  $("experienceSupersedes").value = change.supersedes_change_id || "";
+  $("experienceSubmit").textContent = t("common.save");
+  $("experienceFormTitle").textContent = t("experience.editTitle");
+  $("cancelExperienceEdit").classList.remove("hidden");
+  $("experienceSummary").focus();
+}
+
+export function resetWorldChangeForm() {
+  state.editingWorldChangeId = null;
+  $("experienceForm")?.reset();
+  if ($("experienceConfidence")) $("experienceConfidence").value = "1";
+  if ($("experienceFormTitle")) $("experienceFormTitle").textContent = t("experience.createTitle");
+  $("cancelExperienceEdit")?.classList.add("hidden");
+  renderExperience();
 }
 
 export function startCreateEntity() {
@@ -1572,6 +1895,67 @@ export async function createManualProposal(event) {
   $("proposalPayload").value = '{ "entities": [], "relationships": [], "world_rules": [], "random_tables": [], "random_table_rows": [], "notes": [] }';
   toast(t("proposal.created"));
   await loadWorldData();
+}
+
+export async function saveProposalEdits(event) {
+  event.preventDefault();
+  if (!state.editingProposalId || !state.editingProposalPayload) return;
+
+  const sourceText = $("proposalEditorSource").value.trim();
+  if (!sourceText) return;
+  const proposal = await api(`/proposals/${state.editingProposalId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      source_text: sourceText,
+      payload: state.editingProposalPayload,
+    }),
+  });
+  state.proposals = [proposal, ...state.proposals.filter((item) => item.id !== proposal.id)];
+  closeProposalEditor();
+  renderAllWorldData();
+  toast(t("proposal.saved"));
+}
+
+export async function setProposalItemSecret(proposalId, collection, index, isSecret) {
+  const allowedCollections = new Set([
+    "entities",
+    "relationships",
+    "world_rules",
+    "random_tables",
+    "random_table_rows",
+  ]);
+  const proposal = state.proposals.find((item) => item.id === proposalId && item.status === "pending");
+  const draftItem = allowedCollections.has(collection) ? proposal?.payload?.[collection]?.[index] : null;
+  if (!proposal || !draftItem) return;
+
+  const previousValue = Boolean(draftItem.is_secret);
+  draftItem.is_secret = Boolean(isSecret);
+  document.querySelectorAll(`[data-proposal-secret="${proposalId}"]`).forEach((input) => {
+    input.disabled = true;
+  });
+  document
+    .querySelectorAll(
+      `[data-apply-proposal="${proposalId}"], [data-edit-proposal="${proposalId}"], [data-delete-proposal="${proposalId}"]`,
+    )
+    .forEach((button) => {
+      button.disabled = true;
+    });
+  try {
+    const updated = await api(`/proposals/${proposalId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        source_text: proposal.source_text,
+        payload: proposal.payload,
+      }),
+    });
+    state.proposals = [updated, ...state.proposals.filter((item) => item.id !== updated.id)];
+    renderAllWorldData();
+    toast(t("proposal.visibilitySaved"));
+  } catch (error) {
+    draftItem.is_secret = previousValue;
+    renderAllWorldData();
+    toast(t("proposal.visibilityFailed", { message: error.message }), "error");
+  }
 }
 
 export async function applyProposal(id) {

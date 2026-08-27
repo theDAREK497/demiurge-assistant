@@ -8,9 +8,12 @@ from worldbuilder_core.services.extraction import (
     build_extraction_request,
     compact_extracted_entity_text,
     ensure_requested_quest_entity,
+    parse_adventure_package,
     parse_extraction_payload,
+    prefer_source_language_names,
 )
 from worldbuilder_core.schemas import ExtractionPayload
+from worldbuilder_core.services.proposals import dedupe_extraction_payload
 
 
 def test_parse_extraction_payload_accepts_plain_json() -> None:
@@ -33,6 +36,59 @@ def test_parse_extraction_payload_accepts_plain_json() -> None:
     assert payload.notes == ["clean"]
 
 
+def test_parse_extraction_payload_caps_ambiguous_relationship_confidence() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id": "carter", "type": "character", "name": "Картер"},
+            {"client_id": "chen", "type": "character", "name": "Чен Лун"}
+          ],
+          "relationships": [
+            {
+              "source_client_id": "carter",
+              "target_client_id": "chen",
+              "type": "reports_to",
+              "label": "Подчиняется/Связан с (через отчеты)",
+              "confidence": 1.0
+            }
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert payload.relationships[0].confidence == 0.65
+
+
+def test_parse_adventure_package_repairs_missing_json_comma() -> None:
+    payload = parse_adventure_package(
+        """
+        {
+          "quest": {
+            "name": "Moon Bell", "summary": "Return it", "description": "Find the bell",
+            "quest_status": "planned", "timeline_date": "Day 1"
+          }
+          "clue": {"name": "Bell Shard", "summary": "Points north", "description": "A silver shard"},
+          "timeline_event": {
+            "name": "Bell Stolen", "summary": "The bell vanished", "description": "Thieves came",
+            "timeline_date": "Day 0"
+          },
+          "supporting_entities": [],
+          "relationships": [],
+          "random_table": {
+            "name": "Road Encounters", "description": "Travel events",
+            "rows": ["Rain", "Tracks"]
+          }
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert any("quest" in entity.tags for entity in payload.entities)
+    assert payload.random_tables[0].name == "Road Encounters"
+
+
 def test_parse_extraction_payload_recovers_missing_entity_name() -> None:
     payload = parse_extraction_payload(
         json.dumps(
@@ -48,8 +104,95 @@ def test_parse_extraction_payload_recovers_missing_entity_name() -> None:
         max_entities=12,
     )
 
-    assert payload.entities[0].name == "Blue seal points to Mira."
+    assert payload.entities[0].name == "Blue seal"
     assert payload.entities[0].type == "clue"
+
+
+def test_parse_extraction_payload_replaces_technical_and_descriptive_names() -> None:
+    payload = parse_extraction_payload(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "client_id": "fac_001",
+                        "type": "faction",
+                        "name": "Fac 001",
+                        "summary": "A large corporation.",
+                        "description": "Eon Industries является крупнейшей исследовательской корпорацией.",
+                    },
+                    {
+                        "client_id": "char_001",
+                        "type": "character",
+                        "name": "Перевозчик кристаллов, который направляется в Москву вместе с героями.",
+                        "description": "Парфирий Савельев везёт кристаллы для Eon Industries.",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        max_entities=12,
+    )
+
+    assert [entity.name for entity in payload.entities] == ["Eon Industries", "Парфирий Савельев"]
+
+
+def test_parse_extraction_payload_drops_unrecoverable_technical_name() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"cl_003","type":"item","name":"Cl 003","summary":"Unnamed object."}]}',
+        max_entities=12,
+    )
+
+    assert payload.entities == []
+
+
+def test_parse_extraction_payload_ignores_namespaced_technical_client_id() -> None:
+    payload = parse_extraction_payload(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "client_id": "c4-s2-faction_001",
+                        "type": "faction",
+                        "name": "Faction 001",
+                        "description": "Eon Industries является крупнейшей исследовательской корпорацией.",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        max_entities=12,
+    )
+
+    assert payload.entities[0].name == "Eon Industries"
+
+
+def test_prefer_source_language_name_matches_transliteration() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"alex","type":"character","name":"Aleksandr"}]}',
+        max_entities=12,
+    )
+
+    localized = prefer_source_language_names(payload, "Александр вернулся в Москву.", "ru")
+
+    assert localized.entities[0].name == "Александр"
+    assert localized.entities[0].aliases == ["Aleksandr"]
+
+
+def test_dedupe_extraction_payload_matches_cyrillic_and_latin_names() -> None:
+    payload = ExtractionPayload.model_validate(
+        {
+            "entities": [
+                {"client_id": "alex-ru", "type": "character", "name": "Александр"},
+                {"client_id": "alex-en", "type": "character", "name": "Alexander"},
+            ],
+            "relationships": [],
+        }
+    )
+
+    deduped = dedupe_extraction_payload(payload)
+
+    assert len(deduped.entities) == 1
+    assert deduped.entities[0].aliases == ["Alexander"]
 
 
 def test_parse_extraction_payload_prefers_meaningful_client_id_over_long_summary() -> None:
@@ -120,6 +263,23 @@ def test_parse_extraction_payload_accepts_json_fence() -> None:
     )
 
     assert payload.world_rules[0].priority == 5
+
+
+def test_parse_extraction_payload_repairs_missing_commas() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id": "mira", "type": "character", "name": "Mira"}
+            {"client_id": "guild", "type": "faction", "name": "Brass Guild"}
+          ]
+          "relationships": []
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert [entity.name for entity in payload.entities] == ["Mira", "Brass Guild"]
 
 
 def test_parse_extraction_payload_rejects_invalid_json() -> None:
@@ -235,6 +395,21 @@ def test_parse_extraction_payload_normalizes_random_table_rows() -> None:
     assert row.is_secret is True
 
 
+def test_parse_extraction_payload_prunes_new_random_table_without_real_rows() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "random_tables": [{"client_id": "empty", "name": "Reference matrix"}],
+          "random_table_rows": [{"table_client_id": "empty", "result": "Only one row"}]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert payload.random_tables == []
+    assert payload.random_table_rows == []
+
+
 def test_build_extraction_request_contains_context_and_limit() -> None:
     request = build_extraction_request(
         source_text="Mira founded the Brass Guild.",
@@ -251,6 +426,9 @@ def test_build_extraction_request_contains_context_and_limit() -> None:
     assert "at most 12 entities" in request.messages[0].content
     assert "random_table_rows" in request.messages[0].content
     assert "in Russian" in request.messages[0].content
+    assert "Ignore tables of contents" in request.messages[0].content
+    assert "ordinary moment-to-moment scene actions" in request.messages[0].content
+    assert "empty payload is correct" in request.messages[0].content
     assert "World: Asterion" in request.messages[1].content
     assert "Mira founded the Brass Guild." in request.messages[1].content
 
@@ -297,6 +475,24 @@ def test_extraction_promotes_clues_dates_and_relationship_strength() -> None:
     assert payload.entities[1].attributes["timeline_date"] == "Year 315"
     assert payload.relationships[0].confidence == 0.65
     assert payload.relationships[0].weight == 7
+
+
+def test_extraction_rebalances_uniformly_high_relationship_weights() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "relationships": [
+            {"source_client_id":"a","target_client_id":"b","type":"one","weight":7},
+            {"source_client_id":"b","target_client_id":"c","type":"two","weight":8},
+            {"source_client_id":"c","target_client_id":"d","type":"three","weight":9},
+            {"source_client_id":"d","target_client_id":"a","type":"four","weight":10}
+          ]
+        }
+        """,
+        max_entities=12,
+    )
+
+    assert [relationship.weight for relationship in payload.relationships] == [1, 4, 7, 10]
 
 
 def test_compact_extracted_entity_text_drops_copied_full_chat() -> None:

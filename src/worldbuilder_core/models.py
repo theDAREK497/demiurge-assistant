@@ -104,6 +104,14 @@ class World(TimestampMixin, Base):
         back_populates="world",
         cascade="all, delete-orphan",
     )
+    entity_revisions: Mapped[list["EntityRevision"]] = relationship(
+        back_populates="world",
+        cascade="all, delete-orphan",
+    )
+    changes: Mapped[list["WorldChange"]] = relationship(
+        back_populates="world",
+        cascade="all, delete-orphan",
+    )
 
 
 class EntityTypeDefinition(TimestampMixin, Base):
@@ -158,6 +166,52 @@ class Entity(TimestampMixin, Base):
     attributes: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
 
     world: Mapped[World] = relationship(back_populates="entities")
+
+
+class EntityRevision(TimestampMixin, Base):
+    __tablename__ = "entity_revisions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    entity_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    change_kind: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    effective_at: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    change_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    causal_change_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    supersedes_revision_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="entity_revisions")
+
+
+class WorldChange(TimestampMixin, Base):
+    __tablename__ = "world_changes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    world_id: Mapped[str] = mapped_column(ForeignKey("worlds.id", ondelete="CASCADE"), index=True, nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    subject_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    subject_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    change_kind: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(40), default="manual", nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_at: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    causal_change_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    supersedes_change_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    world: Mapped[World] = relationship(back_populates="changes")
 
 
 class Relationship(TimestampMixin, Base):

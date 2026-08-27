@@ -1,9 +1,8 @@
-import { $, escapeHtml } from "./dom.js?v=20260816.1";
-import { selectedWorld, state } from "./state.js?v=20260816.1";
-import { language, t } from "./i18n.js?v=20260816.1";
+import { $, escapeHtml } from "./dom.js?v=20260826.4";
+import { selectedWorld, state } from "./state.js?v=20260826.4";
+import { language, t } from "./i18n.js?v=20260826.4";
 import {
   applyProposal,
-  applySelectedProposal,
   cancelChatMessageEdit,
   cancelChatThreadRename,
   changeChatThread,
@@ -26,14 +25,20 @@ import {
   editDetectiveConnection,
   editDetectiveNode,
   editEntity,
+  editWorldChange,
   editRelationship,
   editMapPin,
   editRandomTable,
   editRandomTableRow,
   extractKnowledgeDocument,
+  closeAssistantAuditResolver,
+  closeEntityMergeResolver,
+  createAssistantAuditDraft,
+  loadEntityDuplicateCandidates,
+  openAssistantAuditResolver,
+  openEntityMergeResolver,
   openMapPinEditor,
   persistDetectiveNodePosition,
-  rejectProposal,
   renameChatThread,
   loadWorldData,
   pauseDocumentExtraction,
@@ -45,15 +50,19 @@ import {
   saveChatMessageEdit,
   saveChatThreadRename,
   saveAssistantMessageToWiki,
+  selectEntityMergePrimary,
+  setProposalItemSecret,
   setDetectiveNodeDraft,
   setMapPinDraft,
   startCreateEntityWithType,
+  submitEntityMerge,
   updateEntityType,
   updateQuestStatus,
-} from "./actions.js?v=20260816.1";
+} from "./actions.js?v=20260826.4";
 
 let graphInstance = null;
 let graphViewportSaveTimer = null;
+let documentTimingInterval = null;
 
 export function activateTab(tabName) {
   const requestedTab = document.querySelector(`.tab[data-tab="${tabName}"]:not(.hidden)`);
@@ -129,6 +138,7 @@ export function renderAllWorldData() {
   renderRelationships();
   renderRules();
   renderProposals();
+  renderExperience();
   renderDocuments();
   renderAssistant();
   renderGraph();
@@ -215,6 +225,90 @@ function renderWorldConfiguration() {
       button.addEventListener("click", () => deleteEntityType(button.dataset.deleteType));
     });
   }
+}
+
+export function renderExperience() {
+  const subjectSelect = $("experienceSubject");
+  const causeSelect = $("experienceCauses");
+  const supersedesSelect = $("experienceSupersedes");
+  const list = $("experienceList");
+  if (!subjectSelect || !causeSelect || !supersedesSelect || !list) return;
+
+  const selectedSubject = subjectSelect.value;
+  subjectSelect.innerHTML = [
+    `<option value="world">${escapeHtml(t("experience.subjectWorld"))}</option>`,
+    ...state.entities
+      .slice()
+      .sort((left, right) => left.name.localeCompare(right.name, language()))
+      .map((entity) => `<option value="entity:${escapeHtml(entity.id)}">${escapeHtml(entity.name)}</option>`),
+  ].join("");
+  if (Array.from(subjectSelect.options).some((option) => option.value === selectedSubject)) {
+    subjectSelect.value = selectedSubject;
+  }
+
+  const selectedCauses = new Set(Array.from(causeSelect.selectedOptions, (option) => option.value));
+  const selectedSupersedes = supersedesSelect.value;
+  const availableChanges = state.worldChanges.filter((change) => change.id !== state.editingWorldChangeId);
+  const changeOptions = availableChanges.map((change) => {
+    const label = `${change.effective_at || formatExperienceDate(change.created_at)} · ${change.subject_name || t("experience.subjectWorld")} · ${change.summary}`;
+    return `<option value="${escapeHtml(change.id)}">${escapeHtml(label.slice(0, 180))}</option>`;
+  }).join("");
+  causeSelect.innerHTML = changeOptions;
+  Array.from(causeSelect.options).forEach((option) => {
+    option.selected = selectedCauses.has(option.value);
+  });
+  supersedesSelect.innerHTML = `<option value="">${escapeHtml(t("common.none"))}</option>${changeOptions}`;
+  if (Array.from(supersedesSelect.options).some((option) => option.value === selectedSupersedes)) {
+    supersedesSelect.value = selectedSupersedes;
+  }
+
+  if (!state.worldChanges.length) {
+    list.className = "experience-list empty";
+    list.innerHTML = `<p class="muted">${escapeHtml(t("experience.empty"))}</p>`;
+    return;
+  }
+  const changeById = new Map(state.worldChanges.map((change) => [change.id, change]));
+  list.className = "experience-list";
+  list.innerHTML = state.worldChanges.map((change) => {
+    const causes = change.causal_change_ids
+      .map((id) => changeById.get(id))
+      .filter(Boolean)
+      .map((cause) => cause.subject_name || cause.summary)
+      .join(", ");
+    const sourceKey = `experience.source.${change.source_type}`;
+    const sourceLabel = t(sourceKey) === sourceKey ? change.source_type : t(sourceKey);
+    return `<article class="experience-entry ${change.is_secret ? "secret" : ""}">
+      <div class="experience-entry-head">
+        <div>
+          <span class="badge">${escapeHtml(experienceKindLabel(change.change_kind))}</span>
+          <strong>${escapeHtml(change.subject_name || t("experience.subjectWorld"))}</strong>
+        </div>
+        <span class="muted">${escapeHtml(change.effective_at || formatExperienceDate(change.created_at))}</span>
+      </div>
+      <p>${escapeHtml(change.summary)}</p>
+      ${causes ? `<p class="experience-meta"><strong>${escapeHtml(t("experience.causes"))}:</strong> ${escapeHtml(causes)}</p>` : ""}
+      ${change.evidence ? `<p class="experience-meta"><strong>${escapeHtml(t("experience.evidence"))}:</strong> ${escapeHtml(change.evidence)}</p>` : ""}
+      <div class="experience-entry-foot">
+        <span>${escapeHtml(t("experience.confidenceValue", { value: Math.round(change.confidence * 100) }))}</span>
+        <span>${escapeHtml(sourceLabel)}</span>
+        ${change.is_secret ? `<span>${escapeHtml(t("common.secretValue"))}</span>` : ""}
+        ${change.source_type === "manual" ? `<button class="ghost" data-edit-change="${escapeHtml(change.id)}" type="button">${escapeHtml(t("common.edit"))}</button>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+  list.querySelectorAll("[data-edit-change]").forEach((button) => {
+    button.addEventListener("click", () => editWorldChange(button.dataset.editChange));
+  });
+}
+
+function experienceKindLabel(kind) {
+  const key = `experience.kind.${kind}`;
+  return t(key) === key ? kind : t(key);
+}
+
+function formatExperienceDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value || "") : date.toLocaleString(language());
 }
 
 function renderRoleVisibility() {
@@ -399,6 +493,8 @@ export function renderWorlds() {
     button.addEventListener("click", async () => {
       state.selectedWorldId = button.dataset.worldId;
       state.chatMessages = [];
+      state.graphFocusEntityId = null;
+      state.graphMinWeight = 0;
       document.querySelector(".shell")?.classList.remove("sidebar-open");
       renderWorlds();
       renderSelectedWorld();
@@ -421,7 +517,7 @@ export function renderEntities() {
   const list = $("entityList");
   const master = isMasterMode();
   if (!state.selectedWorldId) {
-    list.className = "grid-list empty";
+    list.className = "grid-list encyclopedia-list empty";
     list.textContent = t("entity.selectWorld");
     return;
   }
@@ -437,12 +533,12 @@ export function renderEntities() {
   }
 
   if (!filteredEntities.length) {
-    list.className = "grid-list empty";
+    list.className = "grid-list encyclopedia-list empty";
     list.textContent = t("entity.empty");
     return;
   }
 
-  list.className = "grid-list";
+  list.className = "grid-list encyclopedia-list";
   list.innerHTML = filteredEntities
     .map(
       (entity) => `
@@ -1081,6 +1177,7 @@ export function renderGraph() {
   const view = $("graphView");
   if (!view) return;
   if (!$("tab-graph")?.classList.contains("active")) return;
+  renderGraphControls();
   if (graphInstance) {
     saveCytoscapeState();
     graphInstance.destroy();
@@ -1098,11 +1195,15 @@ export function renderGraph() {
   }
 
   loadGraphPositions();
-  const activeEntityIds = new Set(state.entities.map((entity) => entity.id));
+  const worldEntityIds = new Set(state.entities.map((entity) => entity.id));
   for (const entityId of Object.keys(state.graphPositions)) {
-    if (!activeEntityIds.has(entityId)) delete state.graphPositions[entityId];
+    if (!worldEntityIds.has(entityId)) delete state.graphPositions[entityId];
   }
-  const hasSavedLayout = state.entities.every((entity) => state.graphPositions[entity.id]);
+  const graphData = visibleGraphData();
+  const activeEntities = graphData.entities;
+  const activeRelationships = graphData.relationships;
+  const activeEntityIds = new Set(activeEntities.map((entity) => entity.id));
+  const hasSavedLayout = activeEntities.every((entity) => state.graphPositions[entity.id]);
   const rootStyle = getComputedStyle(document.documentElement);
   const textColor = rootStyle.getPropertyValue("--text").trim() || "#20242A";
   const weightColors = {
@@ -1111,9 +1212,16 @@ export function renderGraph() {
     high: rootStyle.getPropertyValue("--graph-weight-high").trim() || "#C24951",
   };
   const panelColor = rootStyle.getPropertyValue("--panel").trim() || "#FFFFFF";
-  const viewport = loadGraphViewport();
+  const viewport = state.graphFocusEntityId ? null : loadGraphViewport();
+  const weightedDegree = new Map(activeEntities.map((entity) => [entity.id, 0]));
+  activeRelationships.forEach((relationship) => {
+    const weight = normalizedRelationshipWeight(relationship.weight);
+    weightedDegree.set(relationship.source_entity_id, (weightedDegree.get(relationship.source_entity_id) || 0) + weight);
+    weightedDegree.set(relationship.target_entity_id, (weightedDegree.get(relationship.target_entity_id) || 0) + weight);
+  });
+  const maxWeightedDegree = Math.max(1, ...weightedDegree.values());
   const elements = [
-    ...state.entities.map((entity) => ({
+    ...activeEntities.map((entity) => ({
       group: "nodes",
       data: {
         id: entity.id,
@@ -1121,20 +1229,22 @@ export function renderGraph() {
         type: entityTypeLabel(entity.type),
         color: entityColor(entity),
         summary: entity.summary || entity.description || t("common.noSummary"),
+        weightedDegree: weightedDegree.get(entity.id) || 0,
+        size: 50 + Math.round(28 * Math.sqrt((weightedDegree.get(entity.id) || 0) / maxWeightedDegree)),
       },
       position: state.graphPositions[entity.id],
     })),
-    ...state.relationships.map((relationship) => ({
+    ...activeRelationships.map((relationship) => ({
       group: "edges",
       data: {
         id: relationship.id,
         source: relationship.source_entity_id,
         target: relationship.target_entity_id,
-        label: `${relationshipDisplayLabel(relationship)} · ${t("graph.weightShort", {
-          value: Number(relationship.weight ?? 1),
-        })}`,
+        label: String(Number(relationship.weight ?? 1)),
         confidence: Number(relationship.confidence ?? 0.65),
         weight: Number(relationship.weight ?? 1),
+        idealLength: relationshipIdealLength(relationship.weight),
+        elasticity: 80 + normalizedRelationshipWeight(relationship.weight) * 24,
         weightColor: relationshipWeightColor(relationship.weight, weightColors),
         validFrom: relationship.valid_from || "",
         validTo: relationship.valid_to || "",
@@ -1148,9 +1258,9 @@ export function renderGraph() {
   graphInstance = window.cytoscape({
     container: view,
     elements,
-    minZoom: 0.2,
-    maxZoom: 3.5,
-    wheelSensitivity: 0.18,
+    minZoom: 0.1,
+    maxZoom: 5,
+    wheelSensitivity: 0.42,
     boxSelectionEnabled: false,
     autoungrabify: !isMasterMode(),
     zoom: viewport?.zoom,
@@ -1163,10 +1273,10 @@ export function renderGraph() {
           "border-color": panelColor,
           "border-width": 3,
           color: textColor,
-          label: "data(label)",
+          label: state.graphShowLabels || activeEntities.length <= 35 ? "data(label)" : "",
           "font-size": 11,
           "font-weight": 600,
-          height: 54,
+          height: "data(size)",
           "text-background-color": panelColor,
           "text-background-opacity": 0.88,
           "text-background-padding": 3,
@@ -1175,7 +1285,7 @@ export function renderGraph() {
           "text-outline-width": 1,
           "text-valign": "bottom",
           "text-wrap": "ellipsis",
-          width: 54,
+          width: "data(size)",
         },
       },
       {
@@ -1183,6 +1293,13 @@ export function renderGraph() {
         style: {
           "border-color": textColor,
           "border-width": 5,
+          label: "data(label)",
+        },
+      },
+      {
+        selector: "node.hovered",
+        style: {
+          label: "data(label)",
         },
       },
       {
@@ -1214,18 +1331,8 @@ export function renderGraph() {
       },
     ],
     layout: hasSavedLayout
-      ? { name: "preset", fit: viewport == null, padding: 50 }
-      : {
-          name: "cose",
-          animate: false,
-          componentSpacing: 90,
-          fit: true,
-          idealEdgeLength: 120,
-          nodeOverlap: 24,
-          nodeRepulsion: 9000,
-          padding: 55,
-          randomize: true,
-        },
+      ? { name: "preset", fit: state.graphFocusEntityId != null || viewport == null, padding: 50 }
+      : weightedCoseLayoutOptions({ animate: false, fit: true, randomize: true }),
   });
 
   const tooltip = view.querySelector(".graph-tooltip");
@@ -1237,33 +1344,47 @@ export function renderGraph() {
     tooltip.classList.remove("hidden");
   };
   graphInstance.on("mouseover", "node", (event) => {
+    event.target.addClass("hovered");
     const entity = state.entities.find((item) => item.id === event.target.id());
     if (!entity) return;
-    const relatedCount = state.relationships.filter(
+    const relatedCount = activeRelationships.filter(
       (item) => item.source_entity_id === entity.id || item.target_entity_id === entity.id,
     ).length;
+    const totalWeight = activeRelationships
+      .filter((item) => item.source_entity_id === entity.id || item.target_entity_id === entity.id)
+      .reduce((sum, item) => sum + normalizedRelationshipWeight(item.weight), 0);
     showTooltip(
       event.target,
       `<strong>${escapeHtml(entity.name)}</strong>
        <span>${escapeHtml(entityTypeLabel(entity.type))}</span>
        <p>${escapeHtml(entity.summary || entity.description || t("common.noSummary"))}</p>
-       <small>${escapeHtml(t("graph.relationshipCount", { count: relatedCount }))}</small>`,
+       <small>${escapeHtml(t("graph.relationshipCount", { count: relatedCount }))}</small>
+       <small>${escapeHtml(t("graph.weightedDegree", { value: Number(totalWeight.toFixed(1)) }))}</small>`,
     );
   });
   graphInstance.on("mouseover", "edge", (event) => {
     const relationship = state.relationships.find((item) => item.id === event.target.id());
     if (!relationship) return;
     const period = [relationship.valid_from, relationship.valid_to].filter(Boolean).join(" - ");
+    const description = relationship.description || "";
+    const evidence = relationship.evidence || "";
     showTooltip(
       event.target,
       `<strong>${escapeHtml(relationshipDisplayLabel(relationship))}</strong>
+       <span>${escapeHtml(entityName(relationship.source_entity_id))} &rarr; ${escapeHtml(entityName(relationship.target_entity_id))}</span>
+       <small>${escapeHtml(t("relationship.type"))}: ${escapeHtml(relationship.type || "-")}</small>
        <span>${escapeHtml(t("relationship.weightValue", { value: relationship.weight ?? 1 }))}</span>
        <small>${escapeHtml(relationshipConfidenceText(relationship.confidence))}</small>
        ${period ? `<small>${escapeHtml(t("relationship.period"))}: ${escapeHtml(period)}</small>` : ""}
-       ${relationship.evidence ? `<p>${escapeHtml(relationship.evidence)}</p>` : ""}`,
+       ${description ? `<p>${escapeHtml(description)}</p>` : ""}
+       ${evidence ? `<p><strong>${escapeHtml(t("relationship.evidence"))}</strong>${escapeHtml(evidence)}</p>` : ""}`,
     );
   });
-  graphInstance.on("mouseout", "node, edge", () => tooltip.classList.add("hidden"));
+  graphInstance.on("mouseout", "node", (event) => {
+    event.target.removeClass("hovered");
+    tooltip.classList.add("hidden");
+  });
+  graphInstance.on("mouseout", "edge", () => tooltip.classList.add("hidden"));
   graphInstance.on("tap", "node", (event) => openEntityReader(event.target.id()));
   if (isMasterMode()) {
     graphInstance.on("tap", "edge", (event) => editRelationship(event.target.id()));
@@ -1277,6 +1398,62 @@ export function renderGraph() {
   });
   graphInstance.one("layoutstop", saveCytoscapeState);
   if ($("zoomGraphReset")) $("zoomGraphReset").textContent = `${Math.round(graphInstance.zoom() * 100)}%`;
+  if ($("graphVisibleCount")) {
+    $("graphVisibleCount").textContent = t("graph.visibleCount", {
+      entities: activeEntityIds.size,
+      relationships: activeRelationships.length,
+    });
+  }
+}
+
+function renderGraphControls() {
+  const focus = $("graphFocusEntity");
+  if (!focus) return;
+  if (state.graphFocusEntityId && !state.entities.some((entity) => entity.id === state.graphFocusEntityId)) {
+    state.graphFocusEntityId = null;
+  }
+  focus.innerHTML = [
+    `<option value="">${escapeHtml(t("graph.allEntities"))}</option>`,
+    ...state.entities.map((entity) => (
+      `<option value="${escapeHtml(entity.id)}" ${entity.id === state.graphFocusEntityId ? "selected" : ""}>${escapeHtml(entity.name)} (${escapeHtml(entityTypeLabel(entity.type))})</option>`
+    )),
+  ].join("");
+  document.querySelectorAll("[data-graph-depth]").forEach((button) => {
+    const value = button.dataset.graphDepth;
+    button.classList.toggle("active", String(state.graphDepth) === value);
+    button.disabled = !state.graphFocusEntityId;
+  });
+  if ($("graphMinWeight")) $("graphMinWeight").value = String(state.graphMinWeight);
+  if ($("graphMinWeightValue")) $("graphMinWeightValue").textContent = String(state.graphMinWeight);
+  if ($("graphShowLabels")) $("graphShowLabels").checked = state.graphShowLabels;
+  if ($("graphClearFocus")) $("graphClearFocus").disabled = !state.graphFocusEntityId && state.graphMinWeight === 0;
+}
+
+function visibleGraphData() {
+  const relationshipCandidates = state.relationships.filter((relationship) => (
+    normalizedRelationshipWeight(relationship.weight) >= state.graphMinWeight
+  ));
+  if (!state.graphFocusEntityId) {
+    return { entities: state.entities, relationships: relationshipCandidates };
+  }
+  const visibleIds = new Set([state.graphFocusEntityId]);
+  const depth = state.graphDepth === "all" ? Number.POSITIVE_INFINITY : Number(state.graphDepth || 1);
+  let frontier = new Set(visibleIds);
+  for (let step = 0; frontier.size && step < depth; step += 1) {
+    const next = new Set();
+    relationshipCandidates.forEach((relationship) => {
+      if (frontier.has(relationship.source_entity_id)) next.add(relationship.target_entity_id);
+      if (frontier.has(relationship.target_entity_id)) next.add(relationship.source_entity_id);
+    });
+    frontier = new Set(Array.from(next).filter((entityId) => !visibleIds.has(entityId)));
+    frontier.forEach((entityId) => visibleIds.add(entityId));
+    if (depth === Number.POSITIVE_INFINITY && visibleIds.size >= state.entities.length) break;
+  }
+  const entities = state.entities.filter((entity) => visibleIds.has(entity.id));
+  const relationships = relationshipCandidates.filter((relationship) => (
+    visibleIds.has(relationship.source_entity_id) && visibleIds.has(relationship.target_entity_id)
+  ));
+  return { entities, relationships };
 }
 
 function renderGraphLegacy() {
@@ -1564,7 +1741,9 @@ function renderGraphLegacy() {
 
 export function zoomGraph(delta) {
   if (!graphInstance) return;
-  const zoom = Math.max(0.2, Math.min(3.5, graphInstance.zoom() + delta));
+  const zoom = delta === 0
+    ? 1
+    : Math.max(0.1, Math.min(5, graphInstance.zoom() * (1 + delta)));
   graphInstance.zoom({
     level: zoom,
     renderedPosition: {
@@ -1586,25 +1765,42 @@ export function arrangeGraph() {
     return;
   }
   graphInstance
-    .layout({
-      name: "cose",
+    .layout(weightedCoseLayoutOptions({
       animate: true,
       animationDuration: 350,
-      componentSpacing: 90,
       fit: true,
-      idealEdgeLength: 120,
-      nodeOverlap: 24,
-      nodeRepulsion: 9000,
-      padding: 55,
       randomize: true,
       stop: saveCytoscapeState,
-    })
+    }))
     .run();
+}
+
+function normalizedRelationshipWeight(value) {
+  return Math.max(0, Math.min(10, Number(value ?? 1)));
+}
+
+function relationshipIdealLength(value) {
+  return Math.round(190 - normalizedRelationshipWeight(value) * 12);
+}
+
+function weightedCoseLayoutOptions(overrides = {}) {
+  return {
+    name: "cose",
+    animate: false,
+    componentSpacing: 110,
+    fit: true,
+    idealEdgeLength: (edge) => Number(edge.data("idealLength") || 120),
+    edgeElasticity: (edge) => Number(edge.data("elasticity") || 100),
+    nodeOverlap: 24,
+    nodeRepulsion: 9200,
+    padding: 55,
+    randomize: true,
+    ...overrides,
+  };
 }
 
 function applyForceDirectedLayout(nodes, edges, width, height) {
   const velocities = new Map(nodes.map((node) => [node.entity.id, { x: 0, y: 0 }]));
-  const desiredDistance = nodes.length > 24 ? 105 : 145;
   const repulsion = nodes.length > 24 ? 5200 : 7600;
 
   for (let iteration = 0; iteration < 180; iteration += 1) {
@@ -1631,11 +1827,13 @@ function applyForceDirectedLayout(nodes, edges, width, height) {
       }
     });
 
-    edges.forEach(({ source, target }) => {
+    edges.forEach(({ source, target, relationship }) => {
       const dx = target.x - source.x;
       const dy = target.y - source.y;
       const distance = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-      const force = (distance - desiredDistance) * 0.018;
+      const weight = normalizedRelationshipWeight(relationship.weight);
+      const weightedDistance = relationshipIdealLength(weight);
+      const force = (distance - weightedDistance) * (0.009 + weight * 0.0025);
       if (!source.fixed) {
         const velocity = velocities.get(source.entity.id);
         velocity.x += (dx / distance) * force;
@@ -2395,12 +2593,13 @@ function loadGraphViewport() {
 
 function saveCytoscapeState() {
   if (!graphInstance || !state.selectedWorldId) return;
-  state.graphPositions = Object.fromEntries(
-    graphInstance.nodes().map((node) => [node.id(), node.position()]),
-  );
+  state.graphPositions = {
+    ...state.graphPositions,
+    ...Object.fromEntries(graphInstance.nodes().map((node) => [node.id(), node.position()])),
+  };
   saveGraphPositions();
   const viewportKey = graphViewportStorageKey();
-  if (viewportKey) {
+  if (viewportKey && !state.graphFocusEntityId) {
     localStorage.setItem(
       viewportKey,
       JSON.stringify({ zoom: graphInstance.zoom(), pan: graphInstance.pan() }),
@@ -2782,57 +2981,292 @@ export function renderRules() {
 
 export function renderProposals() {
   const list = $("proposalList");
-  if (!state.proposals.length) {
+  const active = state.proposals.find((proposal) => proposal.status === "pending");
+  const history = state.proposals.filter((proposal) => proposal.status !== "pending");
+  if (!active && !history.length) {
     list.className = "grid-list empty";
     list.textContent = t("proposal.empty");
     return;
   }
 
   list.className = "grid-list";
-  list.innerHTML = state.proposals
-    .map((proposal) => {
-      const counts = [
-        `${proposal.payload.entities.length} ${t("proposal.entities")}`,
-        `${proposal.payload.relationships.length} ${t("proposal.relationships")}`,
-        `${proposal.payload.world_rules.length} ${t("proposal.rules")}`,
-        `${(proposal.payload.random_tables || []).length} ${t("proposal.randomTables")}`,
-        `${(proposal.payload.random_table_rows || []).length} ${t("proposal.randomRows")}`,
-      ].join(" - ");
-      return `
-        <article class="item">
-          <div class="item-top">
-            <div>
-              <div class="item-title">${escapeHtml(t(`proposal.status.${proposal.status}`))}</div>
-              <div class="item-meta">${counts} - ${escapeHtml(proposal.id.slice(0, 8))}</div>
-            </div>
-            <span class="badge">${new Date(proposal.created_at).toLocaleString()}</span>
-          </div>
-          <div class="item-body proposal-source">${renderMarkdown(proposal.source_text)}</div>
-          ${proposal.error ? `<div class="item-body danger">${escapeHtml(proposal.error)}</div>` : ""}
-          ${renderProposalReview(proposal)}
-          <div class="item-actions">
-            <button data-apply-proposal="${proposal.id}" type="button" title="${escapeHtml(t("proposal.applyTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.apply")}</button>
-            <button data-apply-selected-proposal="${proposal.id}" class="ghost" type="button" title="${escapeHtml(t("proposal.applySelectedTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.applySelected")}</button>
-            <button data-reject-proposal="${proposal.id}" class="ghost danger" type="button" title="${escapeHtml(t("proposal.rejectTitle"))}" ${proposal.status !== "pending" ? "disabled" : ""}>${t("proposal.reject")}</button>
-            <button data-delete-proposal="${proposal.id}" class="ghost danger" type="button" title="${escapeHtml(t("proposal.deleteTitle"))}">${t("common.delete")}</button>
-          </div>
-        </article>
-      `;
-    })
-    .join("");
+  list.innerHTML = `
+    ${active ? renderActiveProposal(active) : `<p class="muted">${escapeHtml(t("proposal.empty"))}</p>`}
+    ${history.length ? renderProposalHistory(history) : ""}
+  `;
 
   list.querySelectorAll("[data-apply-proposal]").forEach((button) => {
     button.addEventListener("click", () => applyProposal(button.dataset.applyProposal));
   });
-  list.querySelectorAll("[data-apply-selected-proposal]").forEach((button) => {
-    button.addEventListener("click", () => applySelectedProposal(button.dataset.applySelectedProposal));
-  });
-  list.querySelectorAll("[data-reject-proposal]").forEach((button) => {
-    button.addEventListener("click", () => rejectProposal(button.dataset.rejectProposal));
+  list.querySelectorAll("[data-edit-proposal]").forEach((button) => {
+    button.addEventListener("click", () => openProposalEditor(button.dataset.editProposal));
   });
   list.querySelectorAll("[data-delete-proposal]").forEach((button) => {
     button.addEventListener("click", () => deleteProposal(button.dataset.deleteProposal));
   });
+  list.querySelectorAll("[data-proposal-secret]").forEach((input) => {
+    input.addEventListener("change", () => {
+      setProposalItemSecret(
+        input.dataset.proposalSecret,
+        input.dataset.draftCollection,
+        Number(input.dataset.draftIndex),
+        input.checked,
+      );
+    });
+  });
+}
+
+function proposalCounts(proposal) {
+  return [
+    `${proposal.payload.entities.length} ${t("proposal.entities")}`,
+    `${proposal.payload.relationships.length} ${t("proposal.relationships")}`,
+    `${proposal.payload.world_rules.length} ${t("proposal.rules")}`,
+    `${(proposal.payload.random_tables || []).length} ${t("proposal.randomTables")}`,
+    `${(proposal.payload.random_table_rows || []).length} ${t("proposal.randomRows")}`,
+  ].join(" · ");
+}
+
+function renderActiveProposal(proposal) {
+  return `
+    <article class="item proposal-active">
+      <div class="item-top">
+        <div>
+          <div class="item-title">${escapeHtml(t("proposal.activeTitle"))}</div>
+          <div class="item-meta">${escapeHtml(proposalCounts(proposal))}</div>
+        </div>
+        <span class="badge">${new Date(proposal.updated_at).toLocaleString()}</span>
+      </div>
+      <details class="proposal-source-details">
+        <summary>${escapeHtml(t("proposal.sourceDetails"))}</summary>
+        <div class="item-body proposal-source">${renderMarkdown(proposal.source_text)}</div>
+      </details>
+      ${proposal.error ? `<div class="item-body danger">${escapeHtml(proposal.error)}</div>` : ""}
+      ${renderProposalReview(proposal)}
+      <div class="item-actions proposal-primary-actions">
+        <button data-apply-proposal="${proposal.id}" type="button" title="${escapeHtml(t("proposal.applyTitle"))}">${escapeHtml(t("proposal.apply"))}</button>
+        <button data-edit-proposal="${proposal.id}" class="ghost" type="button" title="${escapeHtml(t("proposal.editTitle"))}">${escapeHtml(t("proposal.edit"))}</button>
+        <button data-delete-proposal="${proposal.id}" class="ghost danger" type="button" title="${escapeHtml(t("proposal.deleteTitle"))}">${escapeHtml(t("common.delete"))}</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderProposalHistory(history) {
+  return `
+    <details class="proposal-history">
+      <summary>${escapeHtml(t("proposal.history"))} (${history.length})</summary>
+      <div class="proposal-history-list">
+        ${history.map((proposal) => `
+          <div class="proposal-history-row">
+            <div>
+              <strong>${escapeHtml(t(`proposal.status.${proposal.status}`))}</strong>
+              <small>${escapeHtml(proposalCounts(proposal))}</small>
+            </div>
+            <time>${new Date(proposal.updated_at).toLocaleString()}</time>
+          </div>
+        `).join("")}
+      </div>
+    </details>
+  `;
+}
+
+export function openProposalEditor(proposalId) {
+  const proposal = state.proposals.find((item) => item.id === proposalId && item.status === "pending");
+  if (!proposal) return;
+  state.editingProposalId = proposal.id;
+  state.editingProposalSource = proposal.source_text;
+  state.editingProposalPayload = JSON.parse(JSON.stringify(proposal.payload));
+  $("proposalEditorSource").value = proposal.source_text;
+  renderProposalEditor();
+  $("proposalEditorBackdrop").classList.remove("hidden");
+  document.body.classList.add("drawer-open");
+}
+
+export function closeProposalEditor() {
+  state.editingProposalId = null;
+  state.editingProposalSource = "";
+  state.editingProposalPayload = null;
+  $("proposalEditorBackdrop")?.classList.add("hidden");
+  document.body.classList.remove("drawer-open");
+}
+
+function renderProposalEditor() {
+  const root = $("proposalEditorContent");
+  const payload = state.editingProposalPayload;
+  if (!root || !payload) return;
+
+  const sections = [
+    renderDraftEditorSection(t("proposal.entities"), "entities", payload.entities || [], renderDraftEntityEditor),
+    renderDraftEditorSection(t("proposal.relationships"), "relationships", payload.relationships || [], renderDraftRelationshipEditor),
+    renderDraftEditorSection(t("proposal.rules"), "world_rules", payload.world_rules || [], renderDraftRuleEditor),
+    renderDraftEditorSection(t("proposal.randomTables"), "random_tables", payload.random_tables || [], renderDraftTableEditor),
+    renderDraftEditorSection(t("proposal.randomRows"), "random_table_rows", payload.random_table_rows || [], renderDraftTableRowEditor),
+    renderDraftNotesEditor(payload.notes || []),
+  ].filter(Boolean);
+  root.innerHTML = sections.join("");
+
+  root.querySelectorAll("[data-draft-field]").forEach((input) => {
+    const updateValue = () => {
+      const collection = payload[input.dataset.draftCollection];
+      const item = collection?.[Number(input.dataset.draftIndex)];
+      if (!item) return;
+      const kind = input.dataset.valueKind || "string";
+      if (kind === "boolean") item[input.dataset.draftField] = input.checked;
+      else if (kind === "number") item[input.dataset.draftField] = Number(input.value);
+      else if (kind === "list") {
+        item[input.dataset.draftField] = input.value.split(",").map((value) => value.trim()).filter(Boolean);
+      } else item[input.dataset.draftField] = input.value || null;
+    };
+    input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" ? "change" : "input", updateValue);
+  });
+  root.querySelectorAll("[data-draft-note]").forEach((input) => {
+    input.addEventListener("input", () => {
+      payload.notes[Number(input.dataset.draftNote)] = input.value;
+    });
+  });
+  root.querySelectorAll("[data-remove-draft-item]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const collection = payload[button.dataset.removeDraftItem];
+      collection.splice(Number(button.dataset.draftIndex), 1);
+      renderProposalEditor();
+    });
+  });
+  root.querySelectorAll("[data-remove-draft-note]").forEach((button) => {
+    button.addEventListener("click", () => {
+      payload.notes.splice(Number(button.dataset.removeDraftNote), 1);
+      renderProposalEditor();
+    });
+  });
+}
+
+function renderDraftEditorSection(title, collection, items, renderer) {
+  if (!items.length) return "";
+  return `
+    <section class="proposal-editor-section">
+      <div class="proposal-editor-section-head">
+        <h4>${escapeHtml(title)}</h4>
+        <span class="badge">${items.length}</span>
+      </div>
+      <div class="proposal-editor-items">
+        ${items.map((item, index) => renderer(item, index, collection)).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderDraftEditorItem(collection, index, title, body) {
+  return `
+    <article class="proposal-editor-item">
+      <div class="proposal-editor-item-head">
+        <strong>${escapeHtml(title)}</strong>
+        <button class="ghost danger icon-button" data-remove-draft-item="${collection}" data-draft-index="${index}" type="button" title="${escapeHtml(t("proposal.removeItem"))}">×</button>
+      </div>
+      <div class="proposal-editor-grid">${body}</div>
+    </article>
+  `;
+}
+
+function renderDraftEntityEditor(entity, index, collection) {
+  const knownTypes = state.entityTypes.map((definition) => definition.key);
+  const types = knownTypes.includes(entity.type) ? knownTypes : [entity.type, ...knownTypes];
+  const typeOptions = types.map((type) => `<option value="${escapeHtml(type)}" ${type === entity.type ? "selected" : ""}>${escapeHtml(entityTypeLabel(type))}</option>`).join("");
+  return renderDraftEditorItem(collection, index, entity.name, `
+    ${draftSelect(collection, index, "type", t("entity.type"), typeOptions)}
+    ${draftInput(collection, index, "name", t("common.name"), entity.name, { required: true })}
+    ${draftInput(collection, index, "summary", t("entity.summary"), entity.summary || "")}
+    ${draftInput(collection, index, "description", t("common.description"), entity.description || "", { textarea: true, wide: true })}
+    ${draftInput(collection, index, "aliases", "Aliases", (entity.aliases || []).join(", "), { kind: "list" })}
+    ${draftInput(collection, index, "tags", t("common.tags"), (entity.tags || []).join(", "), { kind: "list" })}
+    ${draftCheckbox(collection, index, "is_secret", t("common.secret"), entity.is_secret)}
+  `);
+}
+
+function renderDraftRelationshipEditor(relationship, index, collection) {
+  const source = proposalRelationshipEndpointName(relationship, "source");
+  const target = proposalRelationshipEndpointName(relationship, "target");
+  return renderDraftEditorItem(collection, index, `${source} → ${target}`, `
+    ${draftInput(collection, index, "type", t("relationship.type"), relationship.type, { required: true })}
+    ${draftInput(collection, index, "label", t("relationship.label"), relationship.label || "")}
+    ${draftInput(collection, index, "weight", t("relationship.weightLabel"), relationship.weight ?? 1, { kind: "number", type: "number", min: 0, max: 10, step: 0.1 })}
+    ${draftInput(collection, index, "confidence", t("relationship.confidence"), relationship.confidence ?? 0.65, { kind: "number", type: "number", min: 0, max: 1, step: 0.05 })}
+    ${draftInput(collection, index, "valid_from", t("relationship.validFrom"), relationship.valid_from || "")}
+    ${draftInput(collection, index, "valid_to", t("relationship.validTo"), relationship.valid_to || "")}
+    ${draftInput(collection, index, "description", t("common.description"), relationship.description || "", { textarea: true, wide: true })}
+    ${draftInput(collection, index, "evidence", t("relationship.evidence"), relationship.evidence || "", { textarea: true, wide: true })}
+    ${draftCheckbox(collection, index, "is_secret", t("common.secret"), relationship.is_secret)}
+  `);
+}
+
+function renderDraftRuleEditor(rule, index, collection) {
+  return renderDraftEditorItem(collection, index, rule.condition, `
+    ${draftInput(collection, index, "priority", t("rule.priority"), rule.priority ?? 3, { kind: "number", type: "number", min: 1, max: 5, step: 1 })}
+    ${draftInput(collection, index, "tags", t("common.tags"), (rule.tags || []).join(", "), { kind: "list" })}
+    ${draftInput(collection, index, "condition", t("rule.condition"), rule.condition, { textarea: true, wide: true, required: true })}
+    ${draftInput(collection, index, "effect", t("rule.effect"), rule.effect, { textarea: true, wide: true, required: true })}
+    ${draftCheckbox(collection, index, "is_active", t("rule.active"), rule.is_active)}
+    ${draftCheckbox(collection, index, "is_secret", t("common.secret"), rule.is_secret)}
+  `);
+}
+
+function renderDraftTableEditor(table, index, collection) {
+  return renderDraftEditorItem(collection, index, table.name, `
+    ${draftInput(collection, index, "name", t("common.name"), table.name, { required: true })}
+    ${draftInput(collection, index, "description", t("common.description"), table.description || "", { textarea: true, wide: true })}
+    ${draftCheckbox(collection, index, "is_secret", t("common.secret"), table.is_secret)}
+  `);
+}
+
+function renderDraftTableRowEditor(row, index, collection) {
+  const tableName = row.table_id ? randomTableName(row.table_id) : (state.editingProposalPayload.random_tables || []).find((table) => table.client_id === row.table_client_id)?.name || t("proposal.randomTables");
+  return renderDraftEditorItem(collection, index, tableName, `
+    ${draftInput(collection, index, "label", t("randomTable.rowLabel"), row.label || "")}
+    ${draftInput(collection, index, "weight", t("randomTable.weight"), row.weight ?? 1, { kind: "number", type: "number", min: 1, max: 1000, step: 1 })}
+    ${draftInput(collection, index, "result", t("randomTable.result"), row.result, { textarea: true, wide: true, required: true })}
+    ${draftCheckbox(collection, index, "is_secret", t("common.secret"), row.is_secret)}
+  `);
+}
+
+function renderDraftNotesEditor(notes) {
+  if (!notes.length) return "";
+  return `
+    <section class="proposal-editor-section">
+      <div class="proposal-editor-section-head"><h4>${escapeHtml(t("proposal.notes"))}</h4><span class="badge">${notes.length}</span></div>
+      <div class="proposal-editor-items">
+        ${notes.map((note, index) => `
+          <article class="proposal-editor-item proposal-editor-note">
+            <textarea data-draft-note="${index}" rows="3">${escapeHtml(note)}</textarea>
+            <button class="ghost danger icon-button" data-remove-draft-note="${index}" type="button" title="${escapeHtml(t("proposal.removeItem"))}">×</button>
+          </article>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function draftInput(collection, index, field, label, value, options = {}) {
+  const classes = options.wide ? "proposal-editor-wide" : "";
+  const data = `data-draft-collection="${collection}" data-draft-index="${index}" data-draft-field="${field}" data-value-kind="${options.kind || "string"}"`;
+  const required = options.required ? "required" : "";
+  if (options.textarea) {
+    return `<label class="${classes}"><span>${escapeHtml(label)}</span><textarea ${data} rows="4" ${required}>${escapeHtml(value ?? "")}</textarea></label>`;
+  }
+  const limits = ["min", "max", "step"].filter((key) => options[key] !== undefined).map((key) => `${key}="${options[key]}"`).join(" ");
+  return `<label class="${classes}"><span>${escapeHtml(label)}</span><input ${data} type="${options.type || "text"}" value="${escapeHtml(value ?? "")}" ${limits} ${required} /></label>`;
+}
+
+function draftSelect(collection, index, field, label, options) {
+  return `<label><span>${escapeHtml(label)}</span><select data-draft-collection="${collection}" data-draft-index="${index}" data-draft-field="${field}">${options}</select></label>`;
+}
+
+function draftCheckbox(collection, index, field, label, checked) {
+  return `<label class="check"><input data-draft-collection="${collection}" data-draft-index="${index}" data-draft-field="${field}" data-value-kind="boolean" type="checkbox" ${checked ? "checked" : ""} /><span>${escapeHtml(label)}</span></label>`;
+}
+
+function proposalRelationshipEndpointName(relationship, side, payload = state.editingProposalPayload) {
+  const entityId = relationship[`${side}_entity_id`];
+  if (entityId) return entityName(entityId);
+  const clientId = relationship[`${side}_client_id`];
+  return (payload?.entities || []).find((entity) => entity.client_id === clientId)?.name || t("proposal.unknownEntity");
 }
 
 export function renderDocuments() {
@@ -2844,6 +3278,7 @@ export function renderDocuments() {
   const activeExtraction = Object.values(state.documentExtractionJobs).some((job) =>
     ["queued", "running"].includes(job.status),
   );
+  syncDocumentTimingInterval(activeExtraction);
   if (documentsTab) {
     documentsTab.classList.toggle("is-processing", activeExtraction || state.embeddingBusy);
     documentsTab.setAttribute("aria-busy", String(activeExtraction || state.embeddingBusy));
@@ -2927,6 +3362,14 @@ export function renderDocuments() {
                   )}</div>
                   <progress value="${extractionJob.processed_chunks}" max="${Math.max(extractionJob.total_chunks, 1)}"></progress>
                   <div class="item-meta">${extractionPercent}%</div>
+                  <div class="item-meta document-extraction-timing"
+                       data-extraction-created-at="${escapeHtml(extractionJob.created_at)}"
+                       data-extraction-updated-at="${escapeHtml(extractionJob.updated_at)}"
+                       data-extraction-status="${escapeHtml(extractionJob.status)}"
+                       data-extraction-processed="${extractionJob.processed_chunks}"
+                       data-extraction-total="${extractionJob.total_chunks}"
+                       data-extraction-current-segment="${extractionJob.current_segment || 0}"
+                       data-extraction-total-segments="${extractionJob.total_segments || 0}"></div>
                   ${
                     extractionJob.status === "running" && extractionJob.total_segments
                       ? `<div class="item-meta">${escapeHtml(
@@ -2970,6 +3413,7 @@ export function renderDocuments() {
       `;
     })
     .join("");
+  updateDocumentExtractionTimings();
   list.querySelectorAll("[data-pause-document]").forEach((button) => {
     button.addEventListener("click", () => pauseKnowledgeDocument(button.dataset.pauseDocument));
   });
@@ -2991,6 +3435,59 @@ export function renderDocuments() {
   list.querySelectorAll("[data-open-document-proposals]").forEach((button) => {
     button.addEventListener("click", () => activateTab("proposals"));
   });
+}
+
+function syncDocumentTimingInterval(active) {
+  if (active && documentTimingInterval === null) {
+    documentTimingInterval = window.setInterval(updateDocumentExtractionTimings, 1_000);
+  } else if (!active && documentTimingInterval !== null) {
+    window.clearInterval(documentTimingInterval);
+    documentTimingInterval = null;
+  }
+}
+
+function updateDocumentExtractionTimings() {
+  document.querySelectorAll("[data-extraction-created-at]").forEach((element) => {
+    const startedAt = parseApiDateTime(element.dataset.extractionCreatedAt);
+    if (!Number.isFinite(startedAt)) return;
+    const status = element.dataset.extractionStatus;
+    const updatedAt = parseApiDateTime(element.dataset.extractionUpdatedAt);
+    const active = ["queued", "running"].includes(status);
+    const endAt = active || !Number.isFinite(updatedAt) ? Date.now() : updatedAt;
+    const elapsedSeconds = Math.max(0, (endAt - startedAt) / 1_000);
+    const processed = Number(element.dataset.extractionProcessed || 0);
+    const total = Number(element.dataset.extractionTotal || 0);
+    const currentSegment = Number(element.dataset.extractionCurrentSegment || 0);
+    const totalSegments = Number(element.dataset.extractionTotalSegments || 0);
+    const partialChunk = totalSegments > 0 ? Math.min(currentSegment / totalSegments, 0.99) : 0;
+    const effectiveProgress = Math.min(processed + partialChunk, total);
+    const remainingSeconds = effectiveProgress > 0 && total > effectiveProgress
+      ? (elapsedSeconds / effectiveProgress) * (total - effectiveProgress)
+      : total <= effectiveProgress
+        ? 0
+        : null;
+    element.textContent = t("documents.extractionTiming", {
+      elapsed: formatDuration(elapsedSeconds),
+      remaining: remainingSeconds === null
+        ? t("documents.extractionEstimating")
+        : formatDuration(remainingSeconds),
+    });
+  });
+}
+
+function parseApiDateTime(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return Number.NaN;
+  const hasTimezone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(normalized);
+  return new Date(hasTimezone ? normalized : `${normalized}Z`).getTime();
+}
+
+function formatDuration(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainder = seconds % 60;
+  return [hours, minutes, remainder].map((value) => String(value).padStart(2, "0")).join(":");
 }
 
 function renderExtractionRetryStatus(job) {
@@ -3121,12 +3618,188 @@ export function renderAssistant() {
                  </div>`
               : ""
           }
+          ${
+            run.scenario === "audit" && run.status === "completed" && run.result
+              ? `<div class="item-actions">
+                   <button class="ghost" data-resolve-assistant-audit="${escapeHtml(run.id)}" type="button">${escapeHtml(t("assistant.audit.resolve"))}</button>
+                 </div>`
+              : ""
+          }
         </article>`;
     })
     .join("");
   history.querySelectorAll("[data-open-assistant-proposal]").forEach((button) => {
     button.addEventListener("click", () => activateTab("proposals"));
   });
+  history.querySelectorAll("[data-resolve-assistant-audit]").forEach((button) => {
+    button.addEventListener("click", () => openAssistantAuditResolver(button.dataset.resolveAssistantAudit));
+  });
+  renderAssistantAuditResolver();
+}
+
+export function renderAssistantAuditResolver() {
+  const backdrop = $("assistantAuditResolverBackdrop");
+  const content = $("assistantAuditResolverContent");
+  if (!backdrop || !content) return;
+  const run = state.assistantRuns.find((item) => item.id === state.activeAuditRunId);
+  if (!run) {
+    backdrop.classList.add("hidden");
+    return;
+  }
+
+  const findings = Array.isArray(run.auditFindings) ? run.auditFindings : [];
+  const selected = new Set(state.auditFindingSelection);
+  renderDuplicateCandidates();
+  content.innerHTML = findings.length
+    ? findings.map((finding) => `
+        <label class="audit-finding ${escapeHtml(finding.kind)}">
+          <input data-audit-finding-id="${escapeHtml(finding.id)}" type="checkbox" ${selected.has(finding.id) ? "checked" : ""} />
+          <div class="audit-finding-content">
+            <div class="audit-finding-head">
+              <strong>${escapeHtml(finding.title)}</strong>
+              <span class="status-pill">${escapeHtml(t(`assistant.audit.kind.${finding.kind}`))}</span>
+            </div>
+            ${finding.body ? `<div class="markdown-body">${renderMarkdown(finding.body)}</div>` : ""}
+          </div>
+        </label>
+      `).join("")
+    : `<p class="muted">${escapeHtml(t("assistant.audit.noFindings"))}</p>`;
+
+  const selectedCount = findings.filter((finding) => selected.has(finding.id)).length;
+  $("assistantAuditSelectionCount").textContent = t("assistant.audit.selected", { count: selectedCount });
+  const submit = $("assistantAuditCreateDraft");
+  submit.disabled = state.assistantBusy || selectedCount === 0;
+  submit.textContent = state.assistantBusy ? t("assistant.running") : t("assistant.audit.createDraft");
+  backdrop.classList.remove("hidden");
+  document.body.classList.add("drawer-open");
+
+  content.querySelectorAll("[data-audit-finding-id]").forEach((input) => {
+    input.addEventListener("change", () => {
+      const next = new Set(state.auditFindingSelection);
+      if (input.checked) next.add(input.dataset.auditFindingId);
+      else next.delete(input.dataset.auditFindingId);
+      state.auditFindingSelection = Array.from(next);
+      renderAssistantAuditResolver();
+    });
+  });
+  $("assistantAuditResolverClose").onclick = closeAssistantAuditResolver;
+  $("assistantAuditResolverCancel").onclick = closeAssistantAuditResolver;
+  $("assistantAuditResolverForm").onsubmit = createAssistantAuditDraft;
+}
+
+function renderDuplicateCandidates() {
+  const container = $("assistantDuplicateCandidates");
+  if (!container) return;
+  const candidates = state.duplicateCandidates || [];
+  if (state.duplicateCandidatesBusy) {
+    container.innerHTML = `<p class="muted loading-inline">${escapeHtml(t("duplicates.loading"))}</p>`;
+  } else if (!candidates.length) {
+    container.innerHTML = `<p class="muted">${escapeHtml(t("duplicates.empty"))}</p>`;
+  } else {
+    container.innerHTML = candidates.map((candidate) => {
+      const reasons = candidate.reasons.map(duplicateReasonLabel).join(" · ");
+      const shared = candidate.shared_relationship_names?.length
+        ? `<small>${escapeHtml(t("duplicates.shared", { names: candidate.shared_relationship_names.join(", ") }))}</small>`
+        : "";
+      return `
+        <article class="duplicate-candidate ${escapeHtml(candidate.confidence)}">
+          <div class="duplicate-candidate-head">
+            <div class="duplicate-pair-names">
+              <strong>${escapeHtml(candidate.left.name)}</strong>
+              <span aria-hidden="true">&harr;</span>
+              <strong>${escapeHtml(candidate.right.name)}</strong>
+            </div>
+            <span class="status-pill">${escapeHtml(t(`duplicates.confidence.${candidate.confidence}`))} ${Math.round(candidate.score * 100)}%</span>
+          </div>
+          <span>${escapeHtml(entityTypeLabel(candidate.left.type))}</span>
+          <small>${escapeHtml(reasons)}</small>
+          ${shared}
+          <div class="item-actions">
+            <button class="ghost" type="button" data-compare-duplicates="${escapeHtml(candidate.left.id)}:${escapeHtml(candidate.right.id)}">${escapeHtml(t("duplicates.compare"))}</button>
+          </div>
+        </article>`;
+    }).join("");
+  }
+  container.querySelectorAll("[data-compare-duplicates]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const [leftId, rightId] = button.dataset.compareDuplicates.split(":");
+      openEntityMergeResolver(leftId, rightId);
+    });
+  });
+  const refresh = $("refreshDuplicateCandidates");
+  if (refresh) {
+    refresh.disabled = state.duplicateCandidatesBusy;
+    refresh.onclick = loadEntityDuplicateCandidates;
+  }
+}
+
+export function renderEntityMergeResolver() {
+  const backdrop = $("entityMergeBackdrop");
+  const comparison = $("entityMergeComparison");
+  const candidate = state.activeDuplicateCandidate;
+  if (!backdrop || !comparison || !candidate) {
+    backdrop?.classList.add("hidden");
+    return;
+  }
+  const entities = [candidate.left, candidate.right];
+  const primary = entities.find((entity) => entity.id === state.entityMergePrimaryId) || entities[0];
+  const duplicate = entities.find((entity) => entity.id !== primary.id) || entities[1];
+  const draft = mergedEntityDraft(primary, duplicate);
+  comparison.innerHTML = entities.map((entity) => `
+    <label class="entity-merge-option ${entity.id === primary.id ? "selected" : ""}">
+      <input type="radio" name="entityMergePrimary" value="${escapeHtml(entity.id)}" ${entity.id === primary.id ? "checked" : ""} />
+      <span class="entity-merge-role">${escapeHtml(entity.id === primary.id ? t("duplicates.canonical") : t("duplicates.willDelete"))}</span>
+      <strong>${escapeHtml(entity.name)}</strong>
+      <small>${escapeHtml(entityTypeLabel(entity.type))}</small>
+      <p>${escapeHtml(entity.summary || entity.description || t("common.noSummary"))}</p>
+      <small>${escapeHtml(t("duplicates.facts", {
+        aliases: entity.aliases?.length || 0,
+        tags: entity.tags?.length || 0,
+      }))}</small>
+    </label>
+  `).join("");
+  $("entityMergeName").value = draft.name;
+  $("entityMergeSummary").value = draft.summary || "";
+  $("entityMergeAliases").value = draft.aliases.join(", ");
+  $("entityMergeTags").value = draft.tags.join(", ");
+  $("entityMergeDescription").value = draft.description || "";
+  $("entityMergeSecret").checked = draft.is_secret;
+  comparison.querySelectorAll("[name=entityMergePrimary]").forEach((input) => {
+    input.addEventListener("change", () => selectEntityMergePrimary(input.value));
+  });
+  $("entityMergeClose").onclick = closeEntityMergeResolver;
+  $("entityMergeCancel").onclick = closeEntityMergeResolver;
+  $("entityMergeForm").onsubmit = submitEntityMerge;
+  $("entityMergeSubmit").disabled = state.entityMergeBusy;
+  $("entityMergeSubmit").textContent = state.entityMergeBusy ? t("common.saving") : t("duplicates.mergeAction");
+  backdrop.classList.remove("hidden");
+  document.body.classList.add("drawer-open");
+}
+
+function mergedEntityDraft(primary, duplicate) {
+  const unique = (values, excluded = "") => {
+    const seen = new Set();
+    return values.filter((value) => {
+      const normalized = String(value || "").trim().toLocaleLowerCase();
+      if (!normalized || normalized === excluded.toLocaleLowerCase() || seen.has(normalized)) return false;
+      seen.add(normalized);
+      return true;
+    });
+  };
+  const descriptions = unique([primary.description, duplicate.description]);
+  return {
+    name: primary.name,
+    summary: [primary.summary, duplicate.summary].filter(Boolean).sort((a, b) => b.length - a.length)[0] || "",
+    description: descriptions.join("\n\n"),
+    aliases: unique([...(primary.aliases || []), ...(duplicate.aliases || []), duplicate.name], primary.name),
+    tags: unique([...(primary.tags || []), ...(duplicate.tags || [])]),
+    is_secret: Boolean(primary.is_secret || duplicate.is_secret),
+  };
+}
+
+function duplicateReasonLabel(reason) {
+  const [code, count] = String(reason).split(":");
+  return t(`duplicates.reason.${code}`, { count: Number(count || 0) });
 }
 
 function assistantDocumentJobText(job) {
@@ -3143,24 +3816,26 @@ function assistantDocumentJobText(job) {
 }
 
 function renderProposalReview(proposal) {
-  const disabled = proposal.status !== "pending" ? "disabled" : "";
   const sections = [
     {
       title: t("proposal.entities"),
       kind: "entity",
+      collection: "entities",
       items: proposal.payload.entities.map((entity) => ({
         summary: `${entityTypeLabel(entity.type)}: ${entity.name}${entity.summary ? ` - ${entity.summary}` : ""}`,
         excerpt: entity.source_excerpt || "",
         intent: entityReviewIntent(entity),
         changes: entityReviewChanges(entity),
         changeDetails: entityReviewChangeDetails(entity),
+        isSecret: Boolean(entity.is_secret),
       })),
     },
     {
       title: t("proposal.relationships"),
       kind: "relationship",
+      collection: "relationships",
       items: proposal.payload.relationships.map((relationship) => ({
-        summary: `${relationship.source_client_id || relationship.source_entity_id} -> ${relationship.target_client_id || relationship.target_entity_id}: ${relationshipDisplayLabel(relationship)}`,
+        summary: `${proposalRelationshipEndpointName(relationship, "source", proposal.payload)} → ${proposalRelationshipEndpointName(relationship, "target", proposal.payload)}: ${relationshipDisplayLabel(relationship)}`,
         excerpt: relationship.source_excerpt || "",
         changes: [
           relationshipConfidenceText(relationship.confidence),
@@ -3169,28 +3844,34 @@ function renderProposalReview(proposal) {
             ? `${t("relationship.period")}: ${[relationship.valid_from, relationship.valid_to].filter(Boolean).join(" - ")}`
             : "",
         ].filter(Boolean),
+        isSecret: Boolean(relationship.is_secret),
       })),
     },
     {
       title: t("proposal.rules"),
       kind: "rule",
+      collection: "world_rules",
       items: proposal.payload.world_rules.map((rule) => ({
         summary: `${t("rule.if")}: ${rule.condition} ${t("rule.then")}: ${rule.effect}`,
         excerpt: rule.source_excerpt || "",
+        isSecret: Boolean(rule.is_secret),
       })),
     },
     {
       title: t("proposal.randomTables"),
       kind: "random-table",
+      collection: "random_tables",
       items: (proposal.payload.random_tables || []).map((table) => ({
         summary: `${table.name}${table.description ? ` - ${table.description}` : ""}`,
         excerpt: table.source_excerpt || "",
         changes: [table.is_secret ? t("common.secretValue") : t("common.public")],
+        isSecret: Boolean(table.is_secret),
       })),
     },
     {
       title: t("proposal.randomRows"),
       kind: "random-table-row",
+      collection: "random_table_rows",
       items: (proposal.payload.random_table_rows || []).map((row) => ({
         summary: `${proposalRandomTableName(proposal, row)}: ${row.label ? `${row.label} - ` : ""}${row.result}`,
         excerpt: row.source_excerpt || "",
@@ -3198,6 +3879,7 @@ function renderProposalReview(proposal) {
           `${t("randomTable.weight")}: ${row.weight}`,
           row.is_secret ? t("common.secretValue") : t("common.public"),
         ],
+        isSecret: Boolean(row.is_secret),
       })),
     },
   ];
@@ -3211,8 +3893,7 @@ function renderProposalReview(proposal) {
                 ${section.items
                   .map(
                     (item, index) => `
-                      <label class="check proposal-check">
-                        <input data-proposal-id="${proposal.id}" data-proposal-kind="${section.kind}" data-proposal-index="${index}" type="checkbox" checked ${disabled} />
+                      <div class="proposal-check proposal-review-item">
                         <div class="proposal-check-content">
                           ${renderMarkdown(item.summary)}
                           ${item.intent ? `<small class="proposal-intent">${escapeHtml(item.intent)}</small>` : ""}
@@ -3220,7 +3901,11 @@ function renderProposalReview(proposal) {
                           ${item.changeDetails?.length ? item.changeDetails.map((detail) => `<small class="proposal-change-detail">${escapeHtml(detail)}</small>`).join("") : ""}
                           ${item.excerpt ? `<div class="proposal-evidence"><small>${escapeHtml(t("proposal.sourceText"))}</small>${renderMarkdown(item.excerpt)}</div>` : ""}
                         </div>
-                      </label>
+                        <label class="proposal-visibility-toggle ${item.isSecret ? "secret" : "public"}">
+                          <input data-proposal-secret="${escapeHtml(proposal.id)}" data-draft-collection="${escapeHtml(section.collection)}" data-draft-index="${index}" type="checkbox" ${item.isSecret ? "checked" : ""} />
+                          <span>${escapeHtml(t(item.isSecret ? "proposal.visibilitySecret" : "proposal.visibilityPublic"))}</span>
+                        </label>
+                      </div>
                     `,
                   )
                   .join("")}

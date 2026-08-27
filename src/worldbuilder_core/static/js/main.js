@@ -7,6 +7,7 @@ import {
   createEntityType,
   createManualProposal,
   saveMapPin,
+  saveProposalEdits,
   createRelationship,
   createRule,
   createQuestStatus,
@@ -33,6 +34,7 @@ import {
   resetEntityForm,
   resetMapPinForm,
   resetRelationshipForm,
+  resetWorldChangeForm,
   resetRandomTableForm,
   resetRandomTableRowForm,
   saveDetectiveConnection,
@@ -40,6 +42,7 @@ import {
   saveRandomTable,
   saveRandomTableRow,
   saveLlmConfig,
+  saveWorldChange,
   runAssistantScenario,
   selectAssistantScenario,
   sendChat,
@@ -49,14 +52,15 @@ import {
   testLlmConnection,
   uploadEntityImage,
   uploadKnowledgeDocument,
-} from "./actions.js?v=20260816.1";
-import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260816.1";
-import { $, toast, wrap } from "./dom.js?v=20260816.1";
-import { language, setLanguage, t } from "./i18n.js?v=20260816.1";
+} from "./actions.js?v=20260826.4";
+import { masterAccessToken, setMasterAccessToken } from "./api.js?v=20260826.4";
+import { $, toast, wrap } from "./dom.js?v=20260826.4";
+import { language, setLanguage, t } from "./i18n.js?v=20260826.4";
 import {
   activateModuleView,
   activateTab,
   arrangeGraph,
+  closeProposalEditor,
   closeEntityReader,
   openSelectedEntityForEdit,
   renderChat,
@@ -65,12 +69,13 @@ import {
   renderChatThreads,
   renderEntities,
   renderEntityFormMode,
+  renderGraph,
   renderInviteLinks,
   renderModuleVisibility,
   zoomGraph,
-} from "./render.js?v=20260816.1";
-import { defaultModuleSettings, state } from "./state.js?v=20260816.1";
-import { setTheme, theme } from "./theme.js?v=20260816.1";
+} from "./render.js?v=20260826.4";
+import { defaultModuleSettings, state } from "./state.js?v=20260826.4";
+import { setTheme, theme } from "./theme.js?v=20260826.4";
 
 let automaticRefreshReady = false;
 
@@ -126,6 +131,10 @@ function bindEvents() {
   $("chatForm").addEventListener("submit", sendChat);
   $("assistantForm").addEventListener("submit", runAssistantScenario);
   $("manualProposalForm").addEventListener("submit", wrap(createManualProposal));
+  $("proposalEditorForm").addEventListener("submit", wrap(saveProposalEdits));
+  $("experienceForm").addEventListener("submit", wrap(saveWorldChange));
+  $("closeProposalEditor").addEventListener("click", closeProposalEditor);
+  $("cancelProposalEditor").addEventListener("click", closeProposalEditor);
   $("llmSettingsForm").addEventListener("submit", wrap(saveLlmConfig));
   $("importForm").addEventListener("submit", wrap(importWorld));
   $("documentUploadForm").addEventListener("submit", wrap(uploadKnowledgeDocument));
@@ -133,6 +142,7 @@ function bindEvents() {
   $("clearEmbeddingIndex").addEventListener("click", wrap(clearEmbeddingIndex));
   $("cancelEntityEdit").addEventListener("click", resetEntityForm);
   $("cancelRelationshipEdit").addEventListener("click", resetRelationshipForm);
+  $("cancelExperienceEdit").addEventListener("click", resetWorldChangeForm);
   $("openEntityDrawer").addEventListener("click", startCreateEntity);
   $("closeEntityDrawer").addEventListener("click", resetEntityForm);
   $("closeEntityReader").addEventListener("click", closeEntityReader);
@@ -193,14 +203,38 @@ function bindEvents() {
   $("refreshRelationships").addEventListener("click", wrap(loadWorldData));
   $("refreshRules").addEventListener("click", wrap(loadWorldData));
   $("refreshProposals").addEventListener("click", wrap(loadWorldData));
+  $("refreshExperience").addEventListener("click", wrap(loadWorldData));
   $("refreshGraph").addEventListener("click", wrap(loadWorldData));
   $("arrangeGraph").addEventListener("click", arrangeGraph);
-  $("zoomGraphOut").addEventListener("click", () => zoomGraph(-0.2));
+  $("zoomGraphOut").addEventListener("click", () => zoomGraph(-0.3));
   $("zoomGraphReset").addEventListener("click", () => {
     state.graphZoom = 1;
     zoomGraph(0);
   });
-  $("zoomGraphIn").addEventListener("click", () => zoomGraph(0.2));
+  $("zoomGraphIn").addEventListener("click", () => zoomGraph(0.4));
+  $("graphFocusEntity").addEventListener("change", (event) => {
+    state.graphFocusEntityId = event.target.value || null;
+    renderGraph();
+  });
+  document.querySelectorAll("[data-graph-depth]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.graphDepth = button.dataset.graphDepth === "all" ? "all" : Number(button.dataset.graphDepth);
+      renderGraph();
+    });
+  });
+  $("graphMinWeight").addEventListener("input", (event) => {
+    state.graphMinWeight = Number(event.target.value);
+    renderGraph();
+  });
+  $("graphShowLabels").addEventListener("change", (event) => {
+    state.graphShowLabels = event.target.checked;
+    renderGraph();
+  });
+  $("graphClearFocus").addEventListener("click", () => {
+    state.graphFocusEntityId = null;
+    state.graphMinWeight = 0;
+    renderGraph();
+  });
   $("refreshTimeline").addEventListener("click", wrap(loadWorldData));
   $("refreshContext").addEventListener("click", wrap(buildContext));
   $("refreshLlmConfig").addEventListener("click", wrap(loadLlmConfig));

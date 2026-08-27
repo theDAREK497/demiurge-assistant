@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Worldbuilder Core</title>
-    <link rel="stylesheet" href="/app/styles.css?v=20260816.1" />
+    <link rel="stylesheet" href="/app/styles.css?v=20260826.4" />
   </head>
   <body>
     <div class="shell">
@@ -82,6 +82,7 @@
           <button class="tab" data-tab="chat" data-master-only="true" type="button" data-i18n="tabs.chat">Chat</button>
           <button class="tab" data-tab="proposals" data-master-only="true" type="button" data-i18n="tabs.proposals">Proposals</button>
           <button class="tab" data-tab="documents" data-master-only="true" type="button" data-i18n="tabs.documents">Sources</button>
+          <button class="tab" data-tab="experience" data-master-only="true" type="button" data-i18n="tabs.experience">Experience</button>
           <button class="tab" data-tab="graph" data-module-tab="graph" type="button" data-i18n="tabs.graph">Graph</button>
           <button class="tab" data-tab="timeline" data-module-tab="timeline" type="button" data-i18n="tabs.timeline">Timeline</button>
           <button class="tab" data-tab="modules" data-module-tab="modules" type="button" data-i18n="tabs.modules">Modules</button>
@@ -422,6 +423,28 @@
                 <button id="refreshGraph" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
             </div>
+            <div class="graph-filter-bar">
+              <label class="graph-focus-control">
+                <span data-i18n="graph.focus">Focus</span>
+                <select id="graphFocusEntity"></select>
+              </label>
+              <div class="graph-depth-control" role="group" aria-label="Graph depth" data-i18n-aria-label="graph.depth">
+                <button class="ghost" data-graph-depth="1" type="button" data-i18n="graph.oneStep">1 step</button>
+                <button class="ghost" data-graph-depth="2" type="button" data-i18n="graph.twoSteps">2 steps</button>
+                <button class="ghost" data-graph-depth="all" type="button" data-i18n="graph.allSteps">All</button>
+              </div>
+              <label class="graph-weight-filter">
+                <span data-i18n="graph.minWeight">Minimum weight</span>
+                <input id="graphMinWeight" type="range" min="0" max="10" step="1" value="0" />
+                <output id="graphMinWeightValue">0</output>
+              </label>
+              <label class="checkbox-row graph-label-toggle">
+                <input id="graphShowLabels" type="checkbox" />
+                <span data-i18n="graph.showLabels">Show all labels</span>
+              </label>
+              <button id="graphClearFocus" class="ghost" type="button" data-i18n="graph.clearFocus">Clear focus</button>
+              <span id="graphVisibleCount" class="muted"></span>
+            </div>
             <div class="graph-weight-legend" aria-label="Relationship weight">
               <span><i class="graph-weight-swatch low"></i><span data-i18n="graph.weightLow">Weak: 0-3</span></span>
               <span><i class="graph-weight-swatch medium"></i><span data-i18n="graph.weightMedium">Medium: 4-7</span></span>
@@ -439,7 +462,7 @@
                 <p class="muted" data-i18n="timeline.hint">Create Event entities and fill Timeline date to build a chronology.</p>
               </div>
               <div style="display:flex; gap:8px;">
-                <button id="addTimelineEventBtn" data-master-only="true" type="button" data-i18n="timeline.addEvent" style="background:var(--primary); color:#fff; font-weight:600; padding:6px 16px; border-radius:6px; border:none; cursor:pointer;">Add Event</button>
+                <button id="addTimelineEventBtn" data-master-only="true" type="button" data-i18n="timeline.addEvent">Add Event</button>
                 <button id="refreshTimeline" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
               </div>
             </div>
@@ -738,6 +761,75 @@
           </div>
         </section>
 
+        <section id="tab-experience" class="tab-panel">
+          <div class="experience-layout">
+            <form id="experienceForm" class="panel stack">
+              <div class="panel-head">
+                <div>
+                  <h3 id="experienceFormTitle" data-i18n="experience.createTitle">Record world event</h3>
+                  <p class="muted" data-i18n="experience.hint">Store causes and changes without retraining the model.</p>
+                </div>
+              </div>
+              <label>
+                <span data-i18n="experience.summary">What changed</span>
+                <textarea id="experienceSummary" rows="4" required maxlength="10000"></textarea>
+              </label>
+              <div class="form-grid">
+                <label>
+                  <span data-i18n="experience.subject">World object</span>
+                  <select id="experienceSubject"></select>
+                </label>
+                <label>
+                  <span data-i18n="experience.kind">Change type</span>
+                  <select id="experienceKind">
+                    <option value="world_event" data-i18n="experience.kind.world_event">World event</option>
+                    <option value="correction" data-i18n="experience.kind.correction">Correction</option>
+                    <option value="retcon" data-i18n="experience.kind.retcon">Retcon</option>
+                  </select>
+                </label>
+                <label>
+                  <span data-i18n="experience.effectiveAt">Date in world</span>
+                  <input id="experienceEffectiveAt" type="text" maxlength="120" data-i18n-placeholder="experience.effectiveAtPlaceholder" />
+                </label>
+                <label>
+                  <span data-i18n="experience.confidence">Confidence</span>
+                  <input id="experienceConfidence" type="number" min="0" max="1" step="0.05" value="1" required />
+                </label>
+              </div>
+              <label>
+                <span data-i18n="experience.evidence">Evidence or source</span>
+                <textarea id="experienceEvidence" rows="3" maxlength="10000"></textarea>
+              </label>
+              <label>
+                <span data-i18n="experience.causes">Caused by</span>
+                <select id="experienceCauses" multiple size="6"></select>
+              </label>
+              <label>
+                <span data-i18n="experience.supersedes">Replaces an earlier statement</span>
+                <select id="experienceSupersedes"></select>
+              </label>
+              <label class="check">
+                <input id="experienceSecret" type="checkbox" />
+                <span data-i18n="common.secret">Secret</span>
+              </label>
+              <div class="item-actions">
+                <button id="experienceSubmit" type="submit" data-i18n="common.save">Save</button>
+                <button id="cancelExperienceEdit" class="ghost hidden" type="button" data-i18n="common.cancel">Cancel</button>
+              </div>
+            </form>
+            <div class="panel stack">
+              <div class="panel-head">
+                <div>
+                  <h3 data-i18n="experience.history">Change history</h3>
+                  <p class="muted" data-i18n="experience.historyHint">Current canon stays in cards; this history helps explain why it changed.</p>
+                </div>
+                <button id="refreshExperience" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+              </div>
+              <div id="experienceList" class="experience-list empty"></div>
+            </div>
+          </div>
+        </section>
+
         <section id="tab-context" class="tab-panel">
           <div class="panel stack">
             <div class="panel-head">
@@ -1003,6 +1095,109 @@
       </aside>
     </div>
 
+    <div id="proposalEditorBackdrop" class="drawer-backdrop hidden">
+      <aside class="drawer-panel proposal-editor-panel" aria-label="Draft editor">
+        <form id="proposalEditorForm" class="stack">
+          <div class="panel-head">
+            <div>
+              <h3 data-i18n="proposal.editorTitle">Draft editor</h3>
+              <p class="muted" data-i18n="proposal.editorHint">Correct the generated facts before publishing them.</p>
+            </div>
+            <button id="closeProposalEditor" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+          <label>
+            <span data-i18n="proposal.sourceText">Source text</span>
+            <textarea id="proposalEditorSource" rows="4" required></textarea>
+          </label>
+          <div id="proposalEditorContent" class="proposal-editor-content"></div>
+          <div class="item-actions proposal-editor-actions">
+            <button type="submit" data-i18n="proposal.saveDraft">Save draft</button>
+            <button id="cancelProposalEditor" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <div id="assistantAuditResolverBackdrop" class="drawer-backdrop hidden">
+      <aside class="drawer-panel audit-resolver-panel" aria-label="Audit conflict resolver" data-i18n-aria-label="assistant.audit.resolverTitle">
+        <form id="assistantAuditResolverForm" class="stack">
+          <div class="panel-head">
+            <div>
+              <h3 data-i18n="assistant.audit.resolverTitle">Resolve audit findings</h3>
+              <p class="muted" data-i18n="assistant.audit.resolverHint">Choose supported corrections. They will become one review draft.</p>
+            </div>
+            <button id="assistantAuditResolverClose" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+          <div class="audit-resolver-notice" data-i18n="assistant.audit.resolverNotice">The report changes nothing by itself. Probable and weak findings are disabled by default.</div>
+          <section class="duplicate-resolver-section stack">
+            <div class="panel-head compact">
+              <div>
+                <h4 data-i18n="duplicates.title">Possible duplicate cards</h4>
+                <p class="muted" data-i18n="duplicates.hint">Names are only a signal. Compare facts and relationships before merging.</p>
+              </div>
+              <button id="refreshDuplicateCandidates" class="ghost" type="button" data-i18n="common.refresh">Refresh</button>
+            </div>
+            <div id="assistantDuplicateCandidates" class="duplicate-candidate-list"></div>
+          </section>
+          <div class="section-divider"></div>
+          <div id="assistantAuditResolverContent" class="audit-finding-list"></div>
+          <div class="audit-resolver-footer">
+            <span id="assistantAuditSelectionCount" class="muted"></span>
+            <div class="item-actions">
+              <button id="assistantAuditCreateDraft" type="submit" data-i18n="assistant.audit.createDraft">Create one draft</button>
+              <button id="assistantAuditResolverCancel" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+            </div>
+          </div>
+        </form>
+      </aside>
+    </div>
+
+    <div id="entityMergeBackdrop" class="drawer-backdrop hidden">
+      <aside class="drawer-panel entity-merge-panel" aria-label="Merge duplicate entities" data-i18n-aria-label="duplicates.mergeTitle">
+        <form id="entityMergeForm" class="stack">
+          <div class="panel-head">
+            <div>
+              <h3 data-i18n="duplicates.mergeTitle">Merge duplicate cards</h3>
+              <p class="muted" data-i18n="duplicates.mergeHint">Choose the canonical card and edit the final result. The other card will be deleted.</p>
+            </div>
+            <button id="entityMergeClose" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+          <div id="entityMergeComparison" class="entity-merge-comparison"></div>
+          <div class="form-grid">
+            <label>
+              <span data-i18n="entity.name">Name</span>
+              <input id="entityMergeName" maxlength="200" required />
+            </label>
+            <label>
+              <span data-i18n="entity.summary">Summary</span>
+              <input id="entityMergeSummary" maxlength="500" />
+            </label>
+          </div>
+          <label>
+            <span data-i18n="entity.aliases">Aliases</span>
+            <input id="entityMergeAliases" data-i18n-placeholder="duplicates.listPlaceholder" placeholder="Comma-separated" />
+          </label>
+          <label>
+            <span data-i18n="entity.tags">Tags</span>
+            <input id="entityMergeTags" data-i18n-placeholder="duplicates.listPlaceholder" placeholder="Comma-separated" />
+          </label>
+          <label>
+            <span data-i18n="entity.description">Description</span>
+            <textarea id="entityMergeDescription" rows="10" maxlength="100000"></textarea>
+          </label>
+          <label class="checkbox-row">
+            <input id="entityMergeSecret" type="checkbox" />
+            <span data-i18n="entity.secret">Secret</span>
+          </label>
+          <div class="merge-warning" data-i18n="duplicates.warning">Relationships and references will move to the canonical card. The duplicate will then be deleted.</div>
+          <div class="drawer-actions">
+            <button id="entityMergeSubmit" type="submit" data-i18n="duplicates.mergeAction">Merge and delete duplicate</button>
+            <button id="entityMergeCancel" class="ghost" type="button" data-i18n="common.cancel">Cancel</button>
+          </div>
+        </form>
+      </aside>
+    </div>
+
     <div id="entityReader" class="reader-backdrop hidden">
       <article class="reader-panel">
         <div class="reader-toolbar">
@@ -1018,6 +1213,6 @@
 
     <div id="toastRoot" class="toast-root" aria-live="polite"></div>
     <script src="/app/vendor/cytoscape/cytoscape.min.js?v=3.33.4"></script>
-    <script src="/app/app.js?v=20260816.1" type="module"></script>
+    <script src="/app/app.js?v=20260826.4" type="module"></script>
   </body>
 </html>

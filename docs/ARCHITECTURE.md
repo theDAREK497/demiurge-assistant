@@ -27,6 +27,7 @@ Current route modules:
 
 - `worlds`;
 - `entities`;
+- `experience`;
 - `relationships`;
 - `world_rules`;
 - `map_pins`;
@@ -52,7 +53,7 @@ explicit user confirmation
   -> source: document extraction job -> pending proposals
   -> audit: role-aware retrieval + chat -> read-only report
   -> adventure: one structured generation call -> validated pending proposal
-  -> manual proposal review/apply
+  -> merge into one active world draft -> edit/review -> publish
 ```
 
 Assistant run summaries are bounded to 20 entries and stored per world in
@@ -204,17 +205,58 @@ combined with cosine similarity from an OpenAI-compatible embedding endpoint.
 Indexing is resumable in bounded batches and falls back to lexical retrieval
 when no embedding model is configured or the provider is unavailable.
 
+### World Experience And Causality
+
+The experience log is retrieval memory, not model fine-tuning. Entity and
+relationship CRUD writes an immutable before/after audit entry in the same
+database transaction. Publishing a proposal records its entity and relationship
+changes with the proposal ID and available source evidence.
+
+Masters can also record a dated `world_event`, `correction`, or `retcon`, attach
+it to a world or entity, select causal predecessors, and mark the entry secret.
+Causal links are restricted to the same world and cycles are rejected.
+
+Current API:
+
+- `GET /api/worlds/{world_id}/changes`;
+- `POST /api/worlds/{world_id}/changes`;
+- `PATCH /api/changes/{change_id}`;
+- `GET /api/worlds/{world_id}/entity-revisions`.
+
+Retrieval scores at most 200 recent candidates and injects at most eight
+relevant changes, including the causes of selected changes. Full before/after
+JSON snapshots are never placed in the LLM context. Player retrieval excludes
+secret history.
+
 The relationship graph is rendered by a locally bundled Cytoscape.js build.
 Node positions and viewport state are stored per world and viewer role. Current
 relationship confidence controls edge opacity; relationship weight controls
-edge width. Relationships also carry free-form world dates, evidence, and an
+edge width and color. The directed layout is also weight-aware: strong edges
+pull their endpoints closer, weak edges keep a longer distance, and node size
+reflects total incoming and outgoing weight. Relationships also carry free-form world dates, evidence, and an
 append-only revision history.
+
+Dense worlds stay in 2D and expose a filtered subgraph rather than adding a 3D
+camera. A selected entity can show one, two, or all relationship hops; a weight
+threshold removes weak edges, and labels can remain hidden until hover. Filtering
+merges saved node positions instead of replacing positions for hidden nodes.
+
+Published duplicate cleanup is explicit and transactional. Candidate scoring is
+limited to entities of the same type and combines normalized names/aliases,
+name-token containment, shared graph neighbors, and shared descriptive facts.
+If a short name matches several longer names, every pair is marked ambiguous.
+On confirmation, the canonical card receives unique data and aliases, references
+are rewired, exact duplicate relationships are consolidated, and both entity and
+relationship history records are appended before the duplicate is deleted.
 
 ### Large Document Ingestion
 
 Master users can upload `.txt` and `.docx` sources as a raw streamed request.
 DOCX XML is parsed incrementally with the standard library, so large books do
 not require a full in-memory XML tree or an optional Word dependency.
+Word table rows are emitted as bounded `[DOCUMENT TABLE]` Markdown blocks instead
+of disconnected cell paragraphs, preserving roll ranges and outcomes for AI
+extraction.
 
 ```text
 streamed upload
@@ -253,6 +295,12 @@ OpenAI-compatible provider rejects JSON grammar, that capability failure is
 cached temporarily to avoid repeating a known failing request for every
 segment.
 
+Before extraction, the worker compares a chunk with the tail of its predecessor.
+Repeated overlap is supplied only as reference context and is removed from the
+extractable source, including manifests created by older splitters that began
+inside a word. A second boundary guard rejects a one-token lowercase fragment
+at the start of a source, while preserving an explicitly capitalized short name.
+
 The local SQLite runtime starts one sequential AI worker inside the API
 process. Document segments are capped at 2200 characters, four extracted
 entities, and 1280 output tokens, use strict JSON output with model reasoning disabled, and can be
@@ -284,6 +332,8 @@ World snapshots use `worldbuilder.snapshot.v1` and preserve stable UUIDs for:
 - relationships;
 - world rules.
 - extraction proposals.
+- entity revision history;
+- world changes and causal links.
 
 Import validates referential integrity before writing data. If a world with the
 same ID already exists, the caller must pass `replace_existing=true`.
@@ -297,8 +347,10 @@ LLM/chat text
   -> extraction prompt
   -> strict JSON schema
   -> Pydantic validation
-  -> proposal record
-  -> user apply/reject
+  -> deterministic conflict and duplicate cleanup
+  -> merge into the world's active proposal record
+  -> structured user edit/review
+  -> publish
   -> wiki update
 ```
 

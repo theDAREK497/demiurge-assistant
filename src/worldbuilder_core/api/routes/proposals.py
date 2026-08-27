@@ -8,6 +8,7 @@ from worldbuilder_core.schemas import (
     ExtractionFromTextRequest,
     ExtractionProposalCreate,
     ExtractionProposalRead,
+    ExtractionProposalUpdate,
     ProposalApplyResult,
     ProposalItemSelection,
 )
@@ -25,10 +26,12 @@ from worldbuilder_core.services.proposals import (
     ProposalWorldNotFoundError,
     apply_extraction_proposal,
     apply_selected_extraction_proposal,
+    consolidate_pending_proposals,
     create_extraction_proposal,
     delete_extraction_proposal,
     reject_extraction_proposal,
     sanitize_extraction_payload_for_world,
+    update_extraction_proposal,
 )
 from worldbuilder_core.services.retrieval import (
     RetrievalWorldNotFoundError,
@@ -43,6 +46,19 @@ router = APIRouter(tags=["proposals"])
 def create_proposal(world_id: str, payload: ExtractionProposalCreate, session: DbSession) -> ExtractionProposal:
     try:
         return create_extraction_proposal(session, world_id, payload)
+    except ProposalWorldNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found") from exc
+    except ProposalValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/worlds/{world_id}/proposals/consolidate",
+    response_model=ExtractionProposalRead | None,
+)
+def consolidate_proposals(world_id: str, session: DbSession) -> ExtractionProposal | None:
+    try:
+        return consolidate_pending_proposals(session, world_id)
     except ProposalWorldNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="World not found") from exc
     except ProposalValidationError as exc:
@@ -164,6 +180,22 @@ def get_proposal(proposal_id: str, session: DbSession) -> ExtractionProposal:
     if proposal is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
     return proposal
+
+
+@router.patch("/proposals/{proposal_id}", response_model=ExtractionProposalRead)
+def update_proposal(
+    proposal_id: str,
+    payload: ExtractionProposalUpdate,
+    session: DbSession,
+) -> ExtractionProposal:
+    try:
+        return update_extraction_proposal(session, proposal_id, payload)
+    except ProposalNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found") from exc
+    except ProposalInvalidStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except ProposalValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/proposals/{proposal_id}/apply", response_model=ProposalApplyResult)

@@ -3,16 +3,18 @@
 The write-back pipeline is the safety layer between LLM output and the wiki.
 
 The model is not allowed to directly mutate the world. It can only produce a
-structured extraction payload. The core stores that payload as a pending
-proposal, validates references, and lets the user apply or reject it.
+structured extraction payload. The core validates it, merges it into the
+world's single active draft, and lets the user edit it before publication.
 
 ## Proposal Flow
 
 ```text
 source text
   -> extraction payload
-  -> pending proposal
-  -> apply or reject
+  -> validation, conflict resolution, and deduplication
+  -> one active pending proposal per world
+  -> structured edit/review
+  -> publish
   -> wiki update
 ```
 
@@ -120,16 +122,18 @@ Flow:
 world-aware chat
   -> assistant completion
   -> extraction call over completion
-  -> pending proposal
-  -> user apply/reject
+  -> merge into the active pending proposal
+  -> user edit/publish
 ```
 
 The endpoint returns both the completion and the created proposal. If extraction
 fails, the completion is still returned with `wiki_save_error`.
 
-## Apply Or Reject
+## Edit Or Publish
 
 ```http
+PATCH /api/proposals/{proposal_id}
+POST /api/worlds/{world_id}/proposals/consolidate
 POST /api/proposals/{proposal_id}/apply
 POST /api/proposals/{proposal_id}/apply-selected
 POST /api/proposals/{proposal_id}/reject
@@ -138,9 +142,29 @@ DELETE /api/proposals/{proposal_id}
 
 Applying a proposal writes extracted entities, relationships, and rules into the
 wiki. It can also create reviewed random tables and add rows to new or existing
-tables. Applying the same proposal twice is blocked. The UI supports applying
-all draft items or only the checked items.
+tables. Applying the same proposal twice is blocked. The primary UI exposes a
+structured editor and one publish action; selected apply/reject remain API
+compatibility operations.
 Deleting a proposal removes the draft/review record without applying it.
+
+New chat answers, adventure packages, manual payloads, and document chunks do
+not create parallel pending drafts. The merge remaps temporary IDs, reconciles
+duplicate entities, keeps richer non-empty text, preserves the strongest
+relationship weight and confidence, and validates every reference again.
+Applied and rejected records remain as compact history.
+
+World-audit reports are also review input, not executable instructions. The UI
+splits report sections into selectable findings, leaves probable and weak items
+unchecked, removes explicit no-finding items, and sends only the master's
+selection through `/proposals/extract`. The result merges into the same pending
+proposal and still requires normal editing and publication.
+
+Already-published cards use a separate duplicate resolver. Name similarity only
+creates a candidate; it never deletes a card. The master chooses the canonical
+card and final fields, then confirms a transactional merge through
+`POST /worlds/{world_id}/entities/merge`. The operation preserves aliases and
+unique text, moves relationships and UI references, records history, and only
+then deletes the duplicate.
 
 ## Statuses
 

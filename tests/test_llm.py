@@ -138,6 +138,34 @@ def test_openai_compatible_client_reports_timeout_type_and_limit() -> None:
         asyncio.run(client.chat(LLMChatRequest(messages=[LLMMessage(role="user", content="Wait.")])))
 
 
+def test_openai_compatible_client_retries_lm_studio_channel_error() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(500, text="Channel Error")
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "Виктор Тимофеев найден."}}]},
+        )
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://llm.test/v1",
+        default_model="story-model",
+        timeout_seconds=12,
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(
+        client.chat(LLMChatRequest(messages=[LLMMessage(role="user", content="Кто такой Виктор Тимофеев?")]))
+    )
+
+    assert calls == 2
+    assert response.message.content == "Виктор Тимофеев найден."
+
+
 def test_openai_response_parser_accepts_multipart_message_content() -> None:
     response = parse_openai_chat_response(
         {

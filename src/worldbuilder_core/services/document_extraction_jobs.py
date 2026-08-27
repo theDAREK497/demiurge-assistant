@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select, text
@@ -8,10 +9,8 @@ from sqlalchemy.orm import Session
 from worldbuilder_core.models import (
     DocumentChunkLink,
     DocumentExtractionJob,
-    ExtractionProposal,
     KnowledgeChunk,
     KnowledgeDocument,
-    ProposalStatus,
 )
 from worldbuilder_core.schemas import ExtractionPayload, ExtractionProposalCreate
 from worldbuilder_core.services.embedding_jobs import LEASE_SECONDS
@@ -30,6 +29,8 @@ EXTRACTION_SEGMENT_CHARS = 2_200
 DOCUMENT_SEGMENT_MAX_ENTITIES = 4
 RETRY_BASE_SECONDS = 15
 RETRY_MAX_SECONDS = 120
+OVERLAP_SEARCH_CHARS = 2_000
+MIN_REPEATED_OVERLAP_CHARS = 80
 
 
 def enqueue_document_extraction(
@@ -172,6 +173,11 @@ async def run_document_extraction_batch(
         if row is None:
             return _finish_job(session, job)
         _, chunk = row
+        previous_chunk = _document_chunk_at_position(session, job.document_id, job.next_position - 1)
+        source_text, repeated_context = _split_repeated_chunk_overlap(
+            previous_chunk.content if previous_chunk is not None else "",
+            chunk.content,
+        )
         document = session.get(KnowledgeDocument, job.document_id)
         if document is None:
             raise ValueError("Source document no longer exists")
@@ -179,12 +185,19 @@ async def run_document_extraction_batch(
         context = build_world_context(
             session,
             job.world_id,
-            query=chunk.content[:1_000],
+            query=(source_text or chunk.content)[:1_000],
             max_entities=runtime.max_entities_per_extract,
             max_document_chunks=0,
         )
+        context_text = context.context_text
+        if repeated_context:
+            context_text = (
+                f"{context_text}\n\n"
+                "Previous chunk context (reference only; do not extract it again):\n"
+                f"{repeated_context[-800:]}"
+            ).strip()
         client = build_llm_client(runtime, default_model=runtime.model_for("extractor"))
-        segments = _split_for_extraction(chunk.content)
+        segments = _split_for_extraction(source_text) if source_text else []
         segment_payloads, completed_segments = _restore_segment_progress(job, len(segments))
         _save_segment_progress(
             session,
@@ -194,23 +207,25 @@ async def run_document_extraction_batch(
             partial_payloads=segment_payloads,
         )
         for segment_index in range(completed_segments, len(segments)):
-            segment_payloads.append(
-                await extract_payload_with_llm(
-                    llm_client=client,
-                    source_text=segments[segment_index],
-                    context_text=context.context_text,
-                    max_entities=min(runtime.max_entities_per_extract, DOCUMENT_SEGMENT_MAX_ENTITIES),
-                    output_language=job.output_language,
-                    model=runtime.model_for("extractor"),
-                    truncate_excess_entities=True,
-                    structured_output=True,
-                    max_output_tokens=1_280,
-                    intent_text=(
-                        "Extract only explicit world objects and structures present in this source segment. "
-                        "Do not invent missing content."
-                    ),
-                )
+            segment_source = segments[segment_index]
+            extracted = await extract_payload_with_llm(
+                llm_client=client,
+                source_text=segment_source,
+                context_text=context_text,
+                max_entities=min(runtime.max_entities_per_extract, DOCUMENT_SEGMENT_MAX_ENTITIES),
+                output_language=job.output_language,
+                model=runtime.model_for("extractor"),
+                truncate_excess_entities=True,
+                structured_output=True,
+                max_output_tokens=1_280,
+                intent_text=(
+                    "Extract only explicit, reusable world facts present in this source segment. "
+                    "Ignore literary decoration, ordinary scene actions, and document navigation or front matter. "
+                    "Return an empty payload when the segment contains no canon facts. Do not invent missing content. "
+                    "Never create an entity from a truncated boundary token or a grammatical status word."
+                ),
             )
+            segment_payloads.append(_drop_fragmentary_boundary_entities(extracted, segment_source))
             _save_segment_progress(
                 session,
                 job,
@@ -230,7 +245,7 @@ async def run_document_extraction_batch(
         if document.is_secret:
             payload = _apply_source_secrecy(payload)
         if _has_payload(payload):
-            job.proposal_id, created = _merge_into_proposal(session, job, chunk.content, payload)
+            job.proposal_id, created = _merge_into_proposal(session, job, source_text, payload)
             if created:
                 job.proposal_count += 1
         job.next_position += 1
@@ -320,42 +335,15 @@ def _merge_into_proposal(
     source_text: str,
     incoming: ExtractionPayload,
 ) -> tuple[str, bool]:
-    proposal = session.get(ExtractionProposal, job.proposal_id) if job.proposal_id else None
-    if proposal is not None and proposal.status == ProposalStatus.pending:
-        current = ExtractionPayload.model_validate(proposal.payload)
-        combined_source = f"{proposal.source_text}\n\n--- SOURCE CHUNK ---\n\n{source_text}"
-        combined_data = {
-            "entities": [*current.entities, *incoming.entities],
-            "relationships": [*current.relationships, *incoming.relationships],
-            "world_rules": [*current.world_rules, *incoming.world_rules],
-            "random_tables": [*current.random_tables, *incoming.random_tables],
-            "random_table_rows": [*current.random_table_rows, *incoming.random_table_rows],
-            "notes": [*current.notes, *incoming.notes],
-        }
-        if len(combined_source) <= 200_000 and all(
-            len(combined_data[key]) <= limit
-            for key, limit in {
-                "entities": 50,
-                "relationships": 100,
-                "world_rules": 25,
-                "random_tables": 25,
-                "random_table_rows": 100,
-                "notes": 25,
-            }.items()
-        ):
-            merged = dedupe_extraction_payload(ExtractionPayload.model_construct(**combined_data))
-            merged = ExtractionPayload.model_validate(merged.model_dump(mode="json"))
-            proposal.source_text = combined_source
-            proposal.payload = merged.model_dump(mode="json")
-            session.flush()
-            return proposal.id, False
+    incoming = _namespace_payload_references(incoming, f"c{job.next_position + 1}-")
+    previous_proposal_id = job.proposal_id
     proposal = create_extraction_proposal(
         session,
         job.world_id,
         ExtractionProposalCreate(source_text=source_text, payload=incoming),
         commit=False,
     )
-    return proposal.id, True
+    return proposal.id, proposal.id != previous_proposal_id
 
 
 def _finish_job(session: Session, job: DocumentExtractionJob) -> DocumentExtractionJob:
@@ -405,6 +393,90 @@ def _split_for_extraction(text_value: str, limit: int = EXTRACTION_SEGMENT_CHARS
     return segments
 
 
+def _document_chunk_at_position(
+    session: Session,
+    document_id: str,
+    position: int,
+) -> KnowledgeChunk | None:
+    if position < 0:
+        return None
+    return session.scalar(
+        select(KnowledgeChunk)
+        .join(DocumentChunkLink, DocumentChunkLink.chunk_id == KnowledgeChunk.id)
+        .where(
+            DocumentChunkLink.document_id == document_id,
+            DocumentChunkLink.position == position,
+        )
+    )
+
+
+def _split_repeated_chunk_overlap(previous: str, current: str) -> tuple[str, str]:
+    previous = previous.rstrip()
+    current = current.lstrip()
+    if len(previous) < MIN_REPEATED_OVERLAP_CHARS or len(current) < MIN_REPEATED_OVERLAP_CHARS:
+        return current, ""
+
+    needle = current[:48]
+    search_start = max(0, len(previous) - OVERLAP_SEARCH_CHARS)
+    search_end = len(previous)
+    while search_end > search_start:
+        match_start = previous.rfind(needle, search_start, search_end)
+        if match_start < 0:
+            break
+        repeated = previous[match_start:]
+        if len(repeated) >= MIN_REPEATED_OVERLAP_CHARS and current.startswith(repeated):
+            return current[len(repeated) :].lstrip(), repeated
+        search_end = match_start
+    return current, ""
+
+
+def _drop_fragmentary_boundary_entities(
+    payload: ExtractionPayload,
+    source_text: str,
+) -> ExtractionPayload:
+    stripped_source = source_text.lstrip()
+    if not stripped_source or not stripped_source[0].islower():
+        return payload
+
+    removed_client_ids = {
+        entity.client_id
+        for entity in payload.entities
+        if entity.client_id and _entity_looks_like_boundary_fragment(entity.name, entity.source_excerpt, stripped_source)
+    }
+    if not removed_client_ids:
+        return payload
+    return payload.model_copy(
+        update={
+            "entities": [entity for entity in payload.entities if entity.client_id not in removed_client_ids],
+            "relationships": [
+                relationship
+                for relationship in payload.relationships
+                if relationship.source_client_id not in removed_client_ids
+                and relationship.target_client_id not in removed_client_ids
+            ],
+        }
+    )
+
+
+def _entity_looks_like_boundary_fragment(
+    name: str,
+    source_excerpt: str | None,
+    source_text: str,
+) -> bool:
+    normalized_name = " ".join(re.findall(r"[\w-]+", name.casefold(), flags=re.UNICODE))
+    excerpt_tokens = re.findall(r"[\w-]+", (source_excerpt or "").casefold(), flags=re.UNICODE)
+    if not normalized_name or len(normalized_name) > 20 or excerpt_tokens != [normalized_name]:
+        return False
+    matches = list(
+        re.finditer(
+            rf"(?<!\w){re.escape(normalized_name)}(?!\w)",
+            source_text.casefold(),
+            flags=re.UNICODE,
+        )
+    )
+    return len(matches) == 1 and matches[0].start() <= 2
+
+
 def _merge_segment_payloads(payloads: list[ExtractionPayload]) -> ExtractionPayload:
     if not payloads:
         return ExtractionPayload()
@@ -424,16 +496,18 @@ def _merge_segment_payloads(payloads: list[ExtractionPayload]) -> ExtractionPayl
 
 
 def _namespace_segment_references(payload: ExtractionPayload, segment_index: int) -> ExtractionPayload:
-    prefix = f"s{segment_index + 1}-"
-    entity_ids = {
-        entity.client_id: f"{prefix}{entity.client_id}"[:80]
-        for entity in payload.entities
-        if entity.client_id
-    }
-    table_ids = {
-        table.client_id: f"{prefix}{table.client_id}"[:80]
-        for table in payload.random_tables
-    }
+    return _namespace_payload_references(payload, f"s{segment_index + 1}-")
+
+
+def _namespace_payload_references(payload: ExtractionPayload, prefix: str) -> ExtractionPayload:
+    entity_ids = _build_namespaced_ids(
+        [entity.client_id for entity in payload.entities if entity.client_id],
+        prefix,
+    )
+    table_ids = _build_namespaced_ids(
+        [table.client_id for table in payload.random_tables],
+        prefix,
+    )
     return payload.model_copy(
         update={
             "entities": [
@@ -473,6 +547,22 @@ def _namespace_segment_references(payload: ExtractionPayload, segment_index: int
             ],
         }
     )
+
+
+def _build_namespaced_ids(client_ids: list[str], prefix: str) -> dict[str, str]:
+    namespaced: dict[str, str] = {}
+    used: set[str] = set()
+    for client_id in client_ids:
+        base = f"{prefix}{client_id}"
+        candidate = base[:80]
+        suffix = 2
+        while candidate in used:
+            marker = f"-{suffix}"
+            candidate = f"{base[: 80 - len(marker)]}{marker}"
+            suffix += 1
+        namespaced[client_id] = candidate
+        used.add(candidate)
+    return namespaced
 
 
 def _apply_source_secrecy(payload: ExtractionPayload) -> ExtractionPayload:

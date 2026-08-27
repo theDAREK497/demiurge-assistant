@@ -2,6 +2,7 @@ import json
 import re
 from typing import Protocol
 
+from json_repair import repair_json
 from pydantic import ValidationError
 
 from worldbuilder_core.models import EntityType, VerificationStatus
@@ -94,6 +95,43 @@ QUEST_STAGE_PATTERN = re.compile(r"(?iu)\b(?:stage|act|этап|акт)\s*(?:[iv
 QUEST_SECTION_PATTERN = re.compile(
     r"(?iu)^(?:objective|goal|quest giver|reward|failure|цель|заказчик|награда|последств\w*|осложнен\w*)\b"
 )
+TECHNICAL_NAME_PATTERN = re.compile(
+    r"(?iu)^(?:(?:c|s)\d+[ _-]+)*(?:c|cl|clnt|char|character|fac|faction|loc|location|ent|entity|"
+    r"item|event|concept)[ _-]*\d+$"
+)
+GENERIC_SUBJECTS = {
+    "artifact",
+    "contains",
+    "character",
+    "concept",
+    "entity",
+    "event",
+    "faction",
+    "group",
+    "item",
+    "location",
+    "material",
+    "object",
+    "organization",
+    "person",
+    "place",
+    "region",
+    "артефакт",
+    "группа",
+    "концепт",
+    "локация",
+    "материал",
+    "место",
+    "объект",
+    "организация",
+    "персонаж",
+    "регион",
+    "событие",
+    "сущность",
+    "фракция",
+    "включает",
+    "это",
+}
 
 
 async def extract_payload_with_llm(
@@ -143,6 +181,7 @@ async def extract_payload_with_llm(
         source_text=source_text,
         intent_text=intent_text,
     )
+    payload = prefer_source_language_names(payload, source_text, output_language)
     payload = compact_extracted_entity_text(payload, source_text)
     return annotate_payload_with_source_excerpts(payload, source_text)
 
@@ -341,7 +380,7 @@ def _adventure_response_format(max_entities: int) -> dict:
 
 def parse_adventure_package(content: str, *, max_entities: int) -> ExtractionPayload:
     try:
-        raw = json.loads(_extract_json_text(content))
+        raw = _load_extraction_json(_extract_json_text(content))
         quest = raw["quest"]
         clue = raw["clue"]
         timeline_event = raw["timeline_event"]
@@ -485,6 +524,21 @@ def build_extraction_request(
                     "trace, document, testimony, anomaly, or fact that can lead to a conclusion; use type 'clue'. "
                     "Every entity must include a short name. Keep summaries to one sentence and descriptions under "
                     "800 characters. Omit optional fields that add no information. "
+                    "The name field is a display title, never a client ID and never a sentence: use the exact proper "
+                    "name from the source, normally one to six words. Values such as Cl 001, Fac 002, Faction 003, "
+                    "entity_1, or a descriptive sentence are forbidden. If the source does not name an object, do "
+                    "not create an entity for it. "
+                    "Extract reusable canon facts, not pieces of prose. Ignore tables of contents, chapter lists, "
+                    "page numbers, headers, footers, copyright text, publisher metadata, decorative headings, "
+                    "epigraphs, author notes, and navigation text. Do not turn metaphors, comparisons, dreams, "
+                    "internal monologue, rhetorical examples, unnamed background people or props, or ordinary "
+                    "moment-to-moment scene actions into entities. Narrative prose may still contain canon facts: "
+                    "extract a named or otherwise stable world object only when the text makes a concrete assertion "
+                    "about it. Create an event only for a distinct world-significant occurrence, not for every action. "
+                    "Never treat a truncated word at the beginning or end of the source, a grammatical fragment, or "
+                    "a status word such as alive/dead as an entity name. A short name must appear with its complete "
+                    "spelling as an explicit subject in the source. "
+                    "An entirely empty payload is correct when the passage contains no reusable world facts. "
                     "Never merge several events or quests into one entity and never copy the whole source text into "
                     "an entity description. Keep each summary under 500 characters and each description focused only "
                     "on that entity. "
@@ -494,13 +548,26 @@ def build_extraction_request(
                     "attributes.timeline_date. Do not invent a date when none is stated. "
                     "Every relationship must include confidence and weight. Confidence rubric: 1.0 only for an "
                     "explicitly confirmed statement, 0.85 for a direct but contextual statement, 0.65 for a strong "
-                    "inference, 0.4 for a weak hypothesis. Weight is relationship strength from 0 to 10. Include "
+                    "inference, 0.4 for a weak hypothesis. Weight is semantic importance, not confidence: 1-2 means "
+                    "incidental, 3-4 minor, 5-6 meaningful, 7-8 strong, 9 defining, and 10 inseparable. Most ordinary "
+                    "relationships should be 3-6; use 7-10 only when the connection defines both entities. Use the "
+                    "full scale instead of defaulting every relationship to a high value. Include "
                     "valid_from, valid_to, and evidence when the text provides them. "
                     "For a new random table use random_tables with client_id, name, description, and is_secret. "
                     "Its rows must use table_client_id. For an existing table use table_id from context. "
+                    "Create a random table only when the source explicitly describes a roll/dice/random table or "
+                    "rollable alternatives. Copy at least two actual rows. Do not convert ordinary reference, matrix, "
+                    "comparison, chronology, or statistics tables into random tables. Never create an empty table. "
+                    "Imported Word tables are enclosed in [DOCUMENT TABLE] markers. Preserve their row boundaries. "
+                    "Treat such a table as rollable when a column contains a die, roll, chance, percent, or result "
+                    "heading and its cells contain outcome ranges such as 1-4, d20, or percentages, even if the prose "
+                    "does not call it a random table. Use the range as row label and the outcome as row result. "
                     "Never represent random tables or their rows as entities or relationships. "
                     "Do not use LaTeX or dollar-delimited math. Write coordinates and symbols as plain text. "
-                    f"Write all names, summaries, descriptions, world rule conditions/effects, and notes in {language_name}. "
+                    f"Write all names, summaries, descriptions, labels, world rule conditions/effects, and notes in {language_name}. "
+                    "For proper names, use the spelling present in the source in that language. If both Cyrillic and "
+                    "Latin variants occur, choose the requested-language variant and put the other spelling in aliases. "
+                    "Keep a foreign spelling only when the source contains no requested-language spelling. "
                     f"Extract at most {max_entities} entities. "
                     "Use status 'unknown' when uncertain, otherwise use 'proposed'."
                 ),
@@ -669,9 +736,11 @@ def build_repair_request(
                     "Use condition/effect for world rules. "
                     "Use random_tables for new tables and random_table_rows for entries. New rows must reference "
                     "a new table_client_id; existing rows must use only table_id values from context. "
+                    "Remove empty random tables and ordinary non-random reference tables. "
                     "A quest must be an event entity with the tag 'quest'."
                     " Split distinct quests, events, and clues into separate entities. Put explicit event dates in "
-                    "attributes.timeline_date. Relationship confidence must follow the 1.0/0.85/0.65/0.4 rubric."
+                    "attributes.timeline_date. Relationship confidence must follow the 1.0/0.85/0.65/0.4 rubric. "
+                    "Relationship weight is independent from confidence and must use the full 1-10 importance scale."
                 ),
             ),
         ],
@@ -685,7 +754,7 @@ def parse_extraction_payload(
     truncate_excess_entities: bool = False,
 ) -> ExtractionPayload:
     try:
-        raw = json.loads(_extract_json_text(content))
+        raw = _load_extraction_json(_extract_json_text(content))
         payload = ExtractionPayload.model_validate(_normalize_extraction_payload(raw))
     except (json.JSONDecodeError, TypeError, ValidationError) as exc:
         raise ExtractionParseError(str(exc)) from exc
@@ -711,6 +780,16 @@ def parse_extraction_payload(
             )
         raise ExtractionParseError(f"Extracted {len(payload.entities)} entities; maximum is {max_entities}")
     return payload
+
+
+def _load_extraction_json(candidate: str) -> object:
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        repaired = repair_json(candidate, return_objects=True)
+        if not isinstance(repaired, (dict, list)):
+            return json.loads(candidate)
+        return repaired
 
 
 def ensure_requested_quest_entity(
@@ -917,6 +996,59 @@ def compact_extracted_entity_text(
     return payload.model_copy(update={"entities": entities})
 
 
+def prefer_source_language_names(
+    payload: ExtractionPayload,
+    source_text: str,
+    output_language: str,
+) -> ExtractionPayload:
+    if output_language == "ru":
+        pattern = r"\b[А-ЯЁ][а-яё]+(?:[-'][А-ЯЁа-яё]+)?(?:\s+[А-ЯЁ][а-яё]+(?:[-'][А-ЯЁа-яё]+)?){0,3}\b"
+        target_pattern = re.compile(r"[А-Яа-яЁё]")
+    elif output_language == "en":
+        pattern = r"\b[A-Z][a-z]+(?:[-'][A-Za-z]+)?(?:\s+[A-Z][a-z]+(?:[-'][A-Za-z]+)?){0,3}\b"
+        target_pattern = re.compile(r"[A-Za-z]")
+    else:
+        return payload
+
+    candidates_by_key: dict[str, list[str]] = {}
+    for candidate in re.findall(pattern, source_text):
+        key = _phonetic_name_key(candidate)
+        if len(key.replace(" ", "")) >= 4:
+            candidates_by_key.setdefault(key, []).append(candidate)
+
+    entities = []
+    for entity in payload.entities:
+        if target_pattern.search(entity.name):
+            entities.append(entity)
+            continue
+        matches = candidates_by_key.get(_phonetic_name_key(entity.name), [])
+        if not matches:
+            entities.append(entity)
+            continue
+        localized_name = min(matches, key=lambda value: (len(value.split()), len(value)))
+        aliases = _merge_unique_strings(entity.aliases, [entity.name])
+        entities.append(entity.model_copy(update={"name": localized_name, "aliases": aliases}))
+    return payload.model_copy(update={"entities": entities})
+
+
+CYRILLIC_TRANSLITERATION = str.maketrans(
+    {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+        "ж": "zh", "з": "z", "и": "i", "й": "i", "к": "k", "л": "l", "м": "m",
+        "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+        "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sh",
+        "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+    }
+)
+
+
+def _phonetic_name_key(value: str) -> str:
+    normalized = value.casefold().translate(CYRILLIC_TRANSLITERATION)
+    normalized = normalized.replace("x", "ks").replace("ph", "f").replace("w", "v")
+    words = re.findall(r"[a-z]+", normalized)
+    return " ".join(re.sub(r"[aeiouy]", "", word) for word in words)
+
+
 def _strip_markdown(value: str) -> str:
     value = re.sub(r"^[#>*\-\s]+", "", value.strip())
     value = re.sub(r"[*_`]+", "", value)
@@ -1013,6 +1145,9 @@ def _normalize_extraction_payload(raw: object) -> dict:
         ],
         table_aliases,
     )
+    random_tables, random_table_rows = _prune_unusable_random_tables(random_tables, random_table_rows)
+    relationships = _calibrate_relationship_weights(relationships)
+    relationships = _calibrate_relationship_confidence(relationships)
     notes = _normalize_notes(raw.get("notes"))
     return {
         "entities": entities,
@@ -1035,11 +1170,10 @@ def _normalize_entities(raw_entities: object, entity_aliases: dict[str, str]) ->
         name = _clean_string(raw_entity.get("name") or raw_entity.get("title"))
         summary_name = _clean_string(raw_entity.get("summary"))
         identifier_name = _name_from_client_id(raw_entity.get("client_id") or raw_entity.get("id"))
-        if identifier_name and (not name or _looks_like_descriptive_name(name)):
+        if identifier_name and (not name or _looks_like_descriptive_name(name) or _is_technical_name(name)):
             name = identifier_name
-        if not name:
-            if summary_name:
-                name = re.split(r"(?<=[.!?])\s", summary_name, maxsplit=1)[0][:200]
+        if not name or _looks_like_descriptive_name(name) or _is_technical_name(name):
+            name = _recover_entity_name(raw_entity, fallback=name or summary_name)
         if not name:
             continue
 
@@ -1112,16 +1246,25 @@ def _name_from_client_id(raw_value: object) -> str | None:
     prefixes = {
         "char",
         "character",
+        "cl",
         "clue",
         "concept",
         "entity",
         "event",
+        "fac",
+        "faction",
         "item",
+        "clnt",
         "loc",
         "location",
         "quest",
+        "rt",
+        "table",
     }
-    while parts and parts[0].casefold() in prefixes:
+    while parts and (
+        parts[0].casefold() in prefixes
+        or re.fullmatch(r"(?i)[cs]\d+", parts[0])
+    ):
         parts.pop(0)
     if not parts or all(part.isdigit() for part in parts):
         return None
@@ -1131,6 +1274,85 @@ def _name_from_client_id(raw_value: object) -> str | None:
 def _looks_like_descriptive_name(value: str) -> bool:
     words = value.split()
     return len(words) > 8 or "," in value or (len(words) >= 5 and value.rstrip().endswith((".", "!", "?")))
+
+
+def _is_technical_name(value: str) -> bool:
+    return bool(TECHNICAL_NAME_PATTERN.fullmatch(value.strip()))
+
+
+def _recover_entity_name(raw_entity: dict, *, fallback: str | None) -> str | None:
+    values = [
+        _clean_string(raw_entity.get("description")),
+        _clean_string(raw_entity.get("summary")),
+        _clean_string(raw_entity.get("source_excerpt")),
+    ]
+    for value in values:
+        candidate = _subject_from_text(value)
+        if candidate:
+            return candidate[:200]
+    if fallback and not _is_technical_name(fallback):
+        candidate = _subject_from_text(fallback)
+        if candidate:
+            return candidate[:200]
+    return None
+
+
+def _subject_from_text(value: str | None) -> str | None:
+    if not value:
+        return None
+    sentence = re.sub(r"\s+", " ", value).strip().strip("*#`_ ")
+    if not sentence:
+        return None
+
+    dash_match = re.match(r"^[\"'«“]?(.{2,100}?)[\"'»”]?\s+[—–-]\s+", sentence)
+    if dash_match:
+        candidate = _clean_subject(dash_match.group(1))
+        if candidate:
+            return candidate
+
+    verb_match = re.match(
+        r"(?iu)^[\"'«“]?(.{2,100}?)[\"'»”]?\s+(?:является|представляет\s+собой|находится|"
+        r"служит|считается|указывает|ведет|ведёт|раскрывает|was|is|are|represents|serves|points|leads|reveals)\b",
+        sentence,
+    )
+    if verb_match:
+        candidate = _clean_subject(verb_match.group(1))
+        if candidate:
+            return candidate
+
+    proper_match = re.match(
+        r"^((?:[A-ZА-ЯЁ][\wЁёА-Яа-я'-]*(?:\s+|$)){2,4})",
+        sentence,
+    )
+    if proper_match:
+        candidate = _clean_subject(proper_match.group(1))
+        if candidate:
+            return candidate
+
+    clause = re.split(r"[,;.!?]", sentence, maxsplit=1)[0].strip()
+    if 1 <= len(clause.split()) <= 6 and (
+        any(character.isdigit() for character in clause)
+        or len(re.findall(r"\b[A-ZА-ЯЁ][\wЁёА-Яа-я'-]+", clause)) >= 2
+    ):
+        return _clean_subject(clause)
+    return None
+
+
+def _clean_subject(value: str) -> str | None:
+    candidate = re.sub(r"\s+", " ", value).strip(" \"'«»“”.,:;()[]")
+    words = candidate.split()
+    if not words or len(words) > 6 or len(candidate) > 100 or "," in candidate:
+        return None
+    if words[0].casefold() in GENERIC_SUBJECTS:
+        return None
+    if any(
+        word.casefold() in {"где", "который", "которая", "которого", "котором", "которую", "which", "that"}
+        for word in words
+    ):
+        return None
+    if not any(character.isalpha() for character in candidate):
+        return None
+    return candidate
 
 
 def _normalize_relationships(raw_relationships: object, entity_aliases: dict[str, str]) -> list[dict]:
@@ -1333,6 +1555,19 @@ def _normalize_random_table_rows(raw_rows: object, table_aliases: dict[str, str]
         )
 
     return rows
+
+
+def _prune_unusable_random_tables(tables: list[dict], rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    row_counts: dict[str, int] = {}
+    for row in rows:
+        client_id = row.get("table_client_id")
+        if client_id:
+            row_counts[client_id] = row_counts.get(client_id, 0) + 1
+    usable_ids = {table["client_id"] for table in tables if row_counts.get(table["client_id"], 0) >= 2}
+    return (
+        [table for table in tables if table["client_id"] in usable_ids],
+        [row for row in rows if row.get("table_id") or row.get("table_client_id") in usable_ids],
+    )
 
 
 def _extract_table_rows_from_relationships(
@@ -1552,6 +1787,55 @@ def _normalize_relationship_weight(raw_weight: object) -> float:
     return max(0.0, min(weight, 10.0))
 
 
+def _calibrate_relationship_weights(relationships: list[dict]) -> list[dict]:
+    if len(relationships) < 4:
+        return relationships
+    weights = [float(relationship["weight"]) for relationship in relationships]
+    minimum = min(weights)
+    maximum = max(weights)
+    if minimum < 7:
+        return relationships
+    if maximum == minimum:
+        return [{**relationship, "weight": 5.0} for relationship in relationships]
+    return [
+        {
+            **relationship,
+            "weight": float(round(1 + ((float(relationship["weight"]) - minimum) / (maximum - minimum)) * 9)),
+        }
+        for relationship in relationships
+    ]
+
+
+def _calibrate_relationship_confidence(relationships: list[dict]) -> list[dict]:
+    generic_types = {
+        "related_to",
+        "associated_with",
+        "connected_to",
+        "linked_to",
+        "связан_с",
+    }
+    calibrated = []
+    for relationship in relationships:
+        relation_type = str(relationship.get("type") or "").casefold().replace(" ", "_")
+        label = str(relationship.get("label") or "").casefold()
+        is_ambiguous = (
+            relation_type in generic_types
+            or "связан с" in label
+            or "related to" in label
+            or "associated with" in label
+            or "/" in label
+        )
+        calibrated.append(
+            {
+                **relationship,
+                "confidence": min(float(relationship.get("confidence", 0.65)), 0.65)
+                if is_ambiguous
+                else relationship.get("confidence", 0.65),
+            }
+        )
+    return calibrated
+
+
 def _normalize_attributes(raw_attributes: object) -> dict:
     return dict(raw_attributes) if isinstance(raw_attributes, dict) else {}
 
@@ -1612,13 +1896,7 @@ def _build_client_id(raw_entity: dict, name: str, used_client_ids: set[str], ind
     if not candidate:
         candidate = f"entity-{index + 1}"
 
-    unique_candidate = candidate
-    suffix = 2
-    while unique_candidate in used_client_ids:
-        unique_candidate = f"{candidate}-{suffix}"
-        suffix += 1
-    used_client_ids.add(unique_candidate)
-    return unique_candidate
+    return _make_bounded_unique_id(candidate, used_client_ids)
 
 
 def _build_named_client_id(
@@ -1630,10 +1908,15 @@ def _build_named_client_id(
 ) -> str:
     preferred = _clean_string(raw_item.get("client_id")) or _clean_string(raw_item.get("id"))
     candidate = _slugify(preferred or name) or f"{fallback_prefix}-{index + 1}"
-    unique_candidate = candidate
+    return _make_bounded_unique_id(candidate, used_client_ids)
+
+
+def _make_bounded_unique_id(candidate: str, used_client_ids: set[str]) -> str:
+    unique_candidate = candidate[:80]
     suffix = 2
     while unique_candidate in used_client_ids:
-        unique_candidate = f"{candidate}-{suffix}"
+        marker = f"-{suffix}"
+        unique_candidate = f"{candidate[: 80 - len(marker)]}{marker}"
         suffix += 1
     used_client_ids.add(unique_candidate)
     return unique_candidate

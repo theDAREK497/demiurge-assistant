@@ -222,23 +222,67 @@ def _read_docx(path: Path) -> Iterator[str]:
             if info.file_size > MAX_DOCX_XML_BYTES:
                 raise InvalidDocumentError("DOCX document XML is too large")
             with archive.open(info) as source:
-                for _, paragraph in ElementTree.iterparse(source, events=("end",)):
-                    if paragraph.tag != f"{WORD_NS}p":
+                table_depth = 0
+                table_rows: list[list[str]] = []
+                for event, element in ElementTree.iterparse(source, events=("start", "end")):
+                    if event == "start" and element.tag == f"{WORD_NS}tbl":
+                        table_depth += 1
+                        if table_depth == 1:
+                            table_rows = []
                         continue
-                    parts: list[str] = []
-                    for node in paragraph.iter():
-                        if node.tag == f"{WORD_NS}t" and node.text:
-                            parts.append(node.text)
-                        elif node.tag == f"{WORD_NS}tab":
-                            parts.append("\t")
-                        elif node.tag in {f"{WORD_NS}br", f"{WORD_NS}cr"}:
-                            parts.append("\n")
-                    value = _normalize_text("".join(parts))
-                    paragraph.clear()
-                    if value:
-                        yield value
+                    if event != "end":
+                        continue
+                    if element.tag == f"{WORD_NS}p":
+                        if table_depth == 0:
+                            value = _word_element_text(element)
+                            element.clear()
+                            if value:
+                                yield value
+                        continue
+                    if element.tag == f"{WORD_NS}tr" and table_depth == 1:
+                        row = [_word_element_text(cell) for cell in element.findall(f"{WORD_NS}tc")]
+                        if any(row):
+                            table_rows.append(row)
+                        element.clear()
+                        continue
+                    if element.tag == f"{WORD_NS}tbl":
+                        table_depth -= 1
+                        if table_depth == 0:
+                            value = _render_document_table(table_rows)
+                            element.clear()
+                            if value:
+                                yield value
     except BadZipFile as exc:
         raise InvalidDocumentError("Invalid DOCX archive") from exc
+
+
+def _word_element_text(element: ElementTree.Element) -> str:
+    parts: list[str] = []
+    for node in element.iter():
+        if node.tag == f"{WORD_NS}t" and node.text:
+            parts.append(node.text)
+        elif node.tag == f"{WORD_NS}tab":
+            parts.append("\t")
+        elif node.tag in {f"{WORD_NS}br", f"{WORD_NS}cr"}:
+            parts.append("\n")
+    return _normalize_text("".join(parts))
+
+
+def _render_document_table(rows: list[list[str]]) -> str:
+    if not rows:
+        return ""
+    width = max(len(row) for row in rows)
+    normalized_rows = [row + [""] * (width - len(row)) for row in rows]
+
+    def markdown_row(row: list[str]) -> str:
+        cells = [cell.replace("|", "\\|").replace("\n", "<br>") for cell in row]
+        return f"| {' | '.join(cells)} |"
+
+    lines = ["[DOCUMENT TABLE]", markdown_row(normalized_rows[0])]
+    lines.append(f"| {' | '.join('---' for _ in range(width))} |")
+    lines.extend(markdown_row(row) for row in normalized_rows[1:])
+    lines.append("[/DOCUMENT TABLE]")
+    return "\n".join(lines)
 
 
 def _normalized_paragraphs(text: str) -> Iterator[str]:
@@ -263,12 +307,25 @@ def _chunk_paragraphs(paragraphs: Iterator[str]) -> Iterator[str]:
             candidate = f"{current}\n\n{part}".strip() if current else part
             if current and len(candidate) > TARGET_CHARS:
                 yield current
-                overlap = current[-OVERLAP_CHARS:].lstrip()
+                overlap = _tail_overlap_at_boundary(current, OVERLAP_CHARS)
                 current = f"{overlap}\n\n{part}".strip()
             else:
                 current = candidate
     if current:
         yield current
+
+
+def _tail_overlap_at_boundary(value: str, limit: int) -> str:
+    start = max(0, len(value) - limit)
+    if start == 0:
+        return value.strip()
+    tail = value[start:]
+    if tail and not value[start - 1].isspace() and not tail[0].isspace():
+        boundary = re.search(r"\s+", tail)
+        if boundary is None:
+            return ""
+        tail = tail[boundary.end() :]
+    return tail.lstrip()
 
 
 def _split_long_text(value: str, limit: int) -> Iterator[str]:

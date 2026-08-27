@@ -12,6 +12,7 @@ from worldbuilder_core.api.routes import (
     detective_board,
     documents,
     entities,
+    experience,
     import_export,
     llm,
     map_pins,
@@ -76,6 +77,7 @@ def create_app(*, create_tables_on_startup: bool = True) -> FastAPI:
     app.include_router(worlds.router, prefix=settings.api_prefix)
     app.include_router(world_configuration.router, prefix=settings.api_prefix)
     app.include_router(entities.router, prefix=settings.api_prefix)
+    app.include_router(experience.router, prefix=settings.api_prefix)
     app.include_router(relationships.router, prefix=settings.api_prefix)
     app.include_router(world_rules.router, prefix=settings.api_prefix)
     app.include_router(map_pins.router, prefix=settings.api_prefix)

@@ -18,13 +18,15 @@ from worldbuilder_core.models import (
 )
 from worldbuilder_core.schemas import LLMChatResponse, LLMMessage
 from worldbuilder_core.services.document_extraction_jobs import (
+    _drop_fragmentary_boundary_entities,
     _merge_segment_payloads,
+    _split_repeated_chunk_overlap,
     _split_for_extraction,
     claim_document_extraction_job,
     enqueue_document_extraction,
     run_document_extraction_batch,
 )
-from worldbuilder_core.services.extraction import parse_extraction_payload
+from worldbuilder_core.services.extraction import annotate_payload_with_source_excerpts, parse_extraction_payload
 from worldbuilder_core.services.llm import LLMProviderError
 
 
@@ -37,6 +39,58 @@ def test_long_chunk_is_split_into_bounded_extraction_segments() -> None:
     assert all(len(segment) <= 600 for segment in segments)
     assert "First paragraph." in segments[0]
     assert "Second paragraph." in segments[-1]
+
+
+def test_repeated_overlap_is_removed_even_when_it_starts_inside_a_word() -> None:
+    repeated = (
+        "ив. После побега из лаборатории и встречи с Элли находится на поезде. "
+        "Защищает Бориса и готовится к новой атаке."
+    )
+    previous = f"Статус к 2025 году\nЖ{repeated}"
+    current = f"{repeated}\n\nНовый сюжетный крючок начинается здесь."
+
+    novel, context = _split_repeated_chunk_overlap(previous, current)
+
+    assert novel == "Новый сюжетный крючок начинается здесь."
+    assert context == repeated
+
+
+def test_lowercase_boundary_fragment_cannot_become_an_entity() -> None:
+    payload = parse_extraction_payload(
+        """
+        {
+          "entities": [
+            {"client_id":"iv","type":"character","name":"Ив","source_excerpt":"ив."},
+            {"client_id":"boris","type":"character","name":"Борис","source_excerpt":"Борис"}
+          ],
+          "relationships": [
+            {"source_client_id":"iv","target_client_id":"boris","type":"protects"}
+          ]
+        }
+        """,
+        max_entities=10,
+    )
+
+    source = "ив. После побега из лаборатории находится на поезде и защищает Бориса."
+    filtered = _drop_fragmentary_boundary_entities(
+        annotate_payload_with_source_excerpts(payload, source),
+        source,
+    )
+
+    assert [entity.name for entity in filtered.entities] == ["Борис"]
+    assert filtered.relationships == []
+
+
+def test_explicit_capitalized_short_name_is_not_removed() -> None:
+    payload = parse_extraction_payload(
+        '{"entities":[{"client_id":"iv","type":"character","name":"Ив","source_excerpt":"Ив."}]}',
+        max_entities=10,
+    )
+
+    source = "Ив. Проводник северного отряда."
+    filtered = _drop_fragmentary_boundary_entities(annotate_payload_with_source_excerpts(payload, source), source)
+
+    assert [entity.name for entity in filtered.entities] == ["Ив"]
 
 
 def test_segment_merge_namespaces_reused_client_ids_and_relationships() -> None:
@@ -59,6 +113,29 @@ def test_segment_merge_namespaces_reused_client_ids_and_relationships() -> None:
     assert [entity.client_id for entity in merged.entities] == ["s1-char_001", "s2-char_001", "s2-loc_001"]
     assert merged.relationships[0].source_client_id == "s2-char_001"
     assert merged.relationships[0].target_client_id == "s2-loc_001"
+
+
+def test_segment_merge_keeps_long_client_ids_unique_after_namespacing() -> None:
+    shared_prefix = "x" * 77
+    first_id = f"{shared_prefix}aaa"
+    second_id = f"{shared_prefix}bbb"
+    payload = parse_extraction_payload(
+        '{"entities":['
+        f'{{"client_id":"{first_id}","type":"character","name":"Mira"}},'
+        f'{{"client_id":"{second_id}","type":"location","name":"Reed Village"}}],'
+        '"relationships":['
+        f'{{"source_client_id":"{first_id}","target_client_id":"{second_id}",'
+        '"type":"lives_in"}]}',
+        max_entities=4,
+    )
+
+    merged = _merge_segment_payloads([payload])
+
+    client_ids = [entity.client_id for entity in merged.entities]
+    assert len(client_ids) == len(set(client_ids)) == 2
+    assert all(client_id is not None and len(client_id) <= 80 for client_id in client_ids)
+    assert merged.relationships[0].source_client_id == client_ids[0]
+    assert merged.relationships[0].target_client_id == client_ids[1]
 
 
 def test_normal_knowledge_chunk_uses_one_extraction_request() -> None:
@@ -256,6 +333,11 @@ def test_worker_extracts_chunks_into_one_deduplicated_secret_proposal(monkeypatc
                 assert request.max_tokens == 1_280
                 assert request.response_format is not None
                 assert "Relevant source excerpts:" not in request.messages[-1].content
+                location_name = (
+                    "Roadside Shrine"
+                    if "Recover the Moon Bell" in request.messages[-1].content
+                    else "Harbor Shrine"
+                )
                 content = """
                 {
                   "entities": [
@@ -264,6 +346,11 @@ def test_worker_extracts_chunks_into_one_deduplicated_secret_proposal(monkeypatc
                       "type": "quest",
                       "name": "The Moon Bell",
                       "summary": "Return the bell."
+                    },
+                    {
+                      "client_id": "entity_001",
+                      "type": "location",
+                      "name": "__LOCATION_NAME__"
                     }
                   ],
                   "random_tables": [
@@ -276,10 +363,15 @@ def test_worker_extracts_chunks_into_one_deduplicated_secret_proposal(monkeypatc
                     {
                       "table_client_id": "road-rumors",
                       "result": "A bell rings beneath the road."
+                    },
+                    {
+                      "table_client_id": "road-rumors",
+                      "result": "A courier carries a moonlit map."
                     }
                   ]
                 }
                 """
+                content = content.replace("__LOCATION_NAME__", location_name)
                 return LLMChatResponse(
                     model=request.model or "extractor",
                     message=LLMMessage(role="assistant", content=content),
@@ -304,13 +396,15 @@ def test_worker_extracts_chunks_into_one_deduplicated_secret_proposal(monkeypatc
         proposals = list(session.scalars(select(ExtractionProposal)))
         assert len(proposals) == 1
         payload = proposals[0].payload
-        assert len(payload["entities"]) == 1
-        assert payload["entities"][0]["is_secret"] is True
-        assert "quest" in payload["entities"][0]["tags"]
+        assert len(payload["entities"]) == 3
+        assert len({entity["client_id"] for entity in payload["entities"]}) == 3
+        assert all(entity["is_secret"] is True for entity in payload["entities"])
+        quest = next(entity for entity in payload["entities"] if "quest" in entity["tags"])
+        assert "quest" in quest["tags"]
         assert len(payload["random_tables"]) == 1
         assert payload["random_tables"][0]["is_secret"] is True
-        assert len(payload["random_table_rows"]) == 1
-        assert payload["random_table_rows"][0]["is_secret"] is True
+        assert len(payload["random_table_rows"]) == 2
+        assert all(row["is_secret"] is True for row in payload["random_table_rows"])
 
 
 def test_running_extraction_pauses_after_current_segment(monkeypatch) -> None:

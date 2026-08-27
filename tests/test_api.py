@@ -44,6 +44,114 @@ def process_uploaded_document(client: TestClient, document_id: str) -> dict:
     raise AssertionError("Document did not finish processing")
 
 
+def test_duplicate_candidates_keep_ambiguous_short_names_separate() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Names"}).json()["id"]
+    for name in ("Александр", "Александр Тимофеев", "Александр Петров"):
+        response = client.post(
+            f"/api/worlds/{world_id}/entities",
+            json={"type": "character", "name": name},
+        )
+        assert response.status_code == 201, response.text
+
+    response = client.get(f"/api/worlds/{world_id}/entities/duplicate-candidates")
+
+    assert response.status_code == 200, response.text
+    candidates = response.json()
+    assert len(candidates) == 2
+    assert {candidate["confidence"] for candidate in candidates} == {"ambiguous"}
+    assert all("ambiguous_short_name" in candidate["reasons"] for candidate in candidates)
+
+
+def test_merge_entities_preserves_data_and_rewires_references() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Merge"}).json()["id"]
+    primary = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "character",
+            "name": "Александр Тимофеев",
+            "summary": "Исследователь",
+            "tags": ["ученый"],
+        },
+    ).json()
+    duplicate = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "character",
+            "name": "Александр",
+            "description": "Работал в северной лаборатории.",
+            "aliases": ["Саша"],
+            "tags": ["экспедиция"],
+        },
+    ).json()
+    target = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Северная лаборатория"},
+    ).json()
+    for source_id in (primary["id"], duplicate["id"]):
+        response = client.post(
+            f"/api/worlds/{world_id}/relationships",
+            json={
+                "source_entity_id": source_id,
+                "target_entity_id": target["id"],
+                "type": "works_at",
+                "label": "Работает в",
+                "weight": 6,
+            },
+        )
+        assert response.status_code == 201, response.text
+    pin = client.post(
+        f"/api/worlds/{world_id}/map-pins",
+        json={
+            "map_entity_id": target["id"],
+            "linked_entity_id": duplicate["id"],
+            "title": "Рабочее место",
+            "x": 0.2,
+            "y": 0.3,
+        },
+    )
+    assert pin.status_code == 201, pin.text
+    node = client.post(
+        f"/api/worlds/{world_id}/detective-board/nodes",
+        json={"entity_id": duplicate["id"], "title": "Подозреваемый"},
+    )
+    assert node.status_code == 201, node.text
+
+    response = client.post(
+        f"/api/worlds/{world_id}/entities/merge",
+        json={
+            "primary_entity_id": primary["id"],
+            "duplicate_entity_id": duplicate["id"],
+            "type": "character",
+            "name": "Александр Тимофеев",
+            "summary": "Исследователь",
+            "description": None,
+            "aliases": [],
+            "tags": [],
+            "is_secret": False,
+            "status": "verified",
+            "attributes": {},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["deleted_entity_id"] == duplicate["id"]
+    assert result["merged_relationships"] == 1
+    assert result["updated_references"] == 2
+    assert "Александр" in result["entity"]["aliases"]
+    assert "Саша" in result["entity"]["aliases"]
+    assert set(result["entity"]["tags"]) == {"ученый", "экспедиция"}
+    assert "северной лаборатории" in result["entity"]["description"]
+    assert client.get(f"/api/entities/{duplicate['id']}").status_code == 404
+    relationships = client.get(f"/api/worlds/{world_id}/relationships").json()
+    assert len(relationships) == 1
+    assert relationships[0]["source_entity_id"] == primary["id"]
+    assert client.get(f"/api/worlds/{world_id}/map-pins").json()[0]["linked_entity_id"] == primary["id"]
+    assert client.get(f"/api/worlds/{world_id}/detective-board").json()["nodes"][0]["entity_id"] == primary["id"]
+
+
 def test_remote_player_cannot_escalate_to_master_api(monkeypatch) -> None:
     trusted_client = build_client()
     world_id = trusted_client.post("/api/worlds", json={"name": "Guarded Vale"}).json()["id"]
@@ -510,7 +618,12 @@ def test_visual_app_is_served() -> None:
     assert 'data-tab="timeline"' in app_response.text
     assert 'data-tab="modules"' in app_response.text
     assert 'data-tab="assistant"' in app_response.text
+    assert 'data-tab="experience"' in app_response.text
+    assert 'id="experienceForm"' in app_response.text
+    assert 'id="experienceCauses"' in app_response.text
     assert 'id="assistantForm"' in app_response.text
+    assert 'id="assistantAuditResolverBackdrop"' in app_response.text
+    assert 'id="assistantAuditResolverContent"' in app_response.text
     assert app_response.text.count("data-assistant-scenario=") == 3
     assert 'data-module-toggle="quests"' in app_response.text
     assert 'data-i18n="chat.saveHint"' in app_response.text
@@ -532,7 +645,9 @@ def test_visual_app_is_served() -> None:
     assert ru_response.json()["tabs.rules"] == "Законы мира"
     assert ru_response.json()["tabs.proposals"] == "Черновики"
     assert ru_response.json()["tabs.assistant"] == "Помощник"
+    assert ru_response.json()["tabs.experience"] == "Опыт"
     assert ru_response.json()["assistant.adventure.title"] == "Подготовить приключение"
+    assert ru_response.json()["assistant.audit.resolve"] == "Разобрать конфликты"
     assert ru_response.json()["rule.condition"] == "Когда это важно"
     assert ru_response.json()["entity.open"] == "Открыть"
     assert ru_response.json()["chat.saveThis"] == "Сохранить в черновик"
@@ -555,9 +670,27 @@ def test_visual_app_is_served() -> None:
     assert "proposal-change-summary" in render_response.text
     assert "proposal-change-detail" in render_response.text
     assert "data-delete-proposal" in render_response.text
+    assert "openProposalEditor" in render_response.text
+    assert "weightedCoseLayoutOptions" in render_response.text
+    assert "relationshipIdealLength" in render_response.text
+    assert 'label: String(Number(relationship.weight ?? 1))' in render_response.text
+    assert 't("relationship.type")' in render_response.text
+    assert "data-extraction-created-at" in render_response.text
+    assert "documents.extractionTiming" in render_response.text
+    assert "data-proposal-secret" in render_response.text
+    assert "proposal.visibilitySecret" in render_response.text
     assert "#{1,6}" in render_response.text
     assert 'output.push("<hr>")' in render_response.text
     assert "export function renderAssistant" in render_response.text
+    assert "parseApiDateTime" in render_response.text
+    assert "`${normalized}Z`" in render_response.text
+    assert "proposalRelationshipEndpointName(relationship, \"source\", proposal.payload)" in render_response.text
+
+    actions_response = client.get("/app/js/actions.js")
+    assert actions_response.status_code == 200
+    assert "export function parseAssistantAuditFindings" in actions_response.text
+    assert "export async function createAssistantAuditDraft" in actions_response.text
+    assert "A shared location, group membership" in actions_response.text
 
     theme_response = client.get("/app/js/theme.js")
     assert theme_response.status_code == 200
@@ -744,6 +877,8 @@ def test_world_export_import_preserves_stable_ids() -> None:
             "imported_detective_board_nodes": 0,
             "imported_detective_board_connections": 0,
             "imported_proposals": 0,
+            "imported_entity_revisions": 2,
+            "imported_world_changes": 3,
         }
 
     imported_world = target_client.get(f"/api/worlds/{world_id}")
@@ -930,6 +1065,12 @@ def test_extraction_proposal_apply_and_reject_flow() -> None:
     assert exported_world.status_code == 200
     assert exported_world.json()["proposals"][0]["id"] == proposal_id
     assert exported_world.json()["proposals"][0]["status"] == "applied"
+    changes = client.get(f"/api/worlds/{world_id}/changes").json()
+    assert len(changes) == 4
+    assert {change["change_kind"] for change in changes} == {"created", "published"}
+    assert {change["source_id"] for change in changes} == {proposal_id}
+    assert len(exported_world.json()["entity_revisions"]) == 2
+    assert len(exported_world.json()["world_changes"]) == 4
 
     entities = client.get(f"/api/worlds/{world_id}/entities").json()
     assert {entity["name"] for entity in entities} == {"Mara", "Rust Garden"}
@@ -1414,6 +1555,122 @@ def test_extraction_proposal_deduplicates_repeated_draft_items() -> None:
     assert len(payload["random_table_rows"]) == 1
     assert payload["random_table_rows"][0]["weight"] == 3
     assert payload["notes"] == ["Review duplicates."]
+
+
+def test_pending_proposals_merge_into_one_review_draft() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Unified Draft"}).json()["id"]
+
+    first = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Mira serves the Brass Guild.",
+            "payload": {
+                "entities": [
+                    {"client_id": "mira", "type": "character", "name": "Mira", "summary": "Scout."},
+                    {"client_id": "guild", "type": "faction", "name": "Brass Guild"},
+                ],
+                "relationships": [
+                    {
+                        "source_client_id": "mira",
+                        "target_client_id": "guild",
+                        "type": "member_of",
+                        "weight": 2,
+                        "evidence": "A short mention.",
+                    }
+                ],
+            },
+        },
+    )
+    assert first.status_code == 201, first.text
+
+    second = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Mira is the senior scout of the Brass Guild.",
+            "payload": {
+                "entities": [
+                    {
+                        "client_id": "character-1",
+                        "type": "character",
+                        "name": "Mira",
+                        "summary": "Senior scout and pathfinder of the guild.",
+                    },
+                    {"client_id": "faction-1", "type": "faction", "name": "Brass Guild"},
+                ],
+                "relationships": [
+                    {
+                        "source_client_id": "character-1",
+                        "target_client_id": "faction-1",
+                        "type": "MEMBER_OF",
+                        "weight": 8,
+                        "confidence": 0.9,
+                        "evidence": "The guild ledger names Mira as its senior scout.",
+                    }
+                ],
+            },
+        },
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["id"] == first.json()["id"]
+    payload = second.json()["payload"]
+    assert len(payload["entities"]) == 2
+    assert len(payload["relationships"]) == 1
+    assert payload["entities"][0]["summary"] == "Senior scout and pathfinder of the guild."
+    assert payload["relationships"][0]["weight"] == 8
+    assert payload["relationships"][0]["confidence"] == 0.9
+    assert payload["relationships"][0]["evidence"] == "The guild ledger names Mira as its senior scout."
+    pending = client.get(f"/api/worlds/{world_id}/proposals?status_filter=pending").json()
+    assert len(pending) == 1
+    assert "Mira serves" in pending[0]["source_text"]
+    assert "senior scout" in pending[0]["source_text"]
+
+
+def test_pending_proposal_editor_revalidates_and_removes_dangling_links() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Draft Editor"}).json()["id"]
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Mira knows Oren.",
+            "payload": {
+                "entities": [
+                    {"client_id": "mira", "type": "character", "name": "Mira"},
+                    {"client_id": "oren", "type": "character", "name": "Oren"},
+                ],
+                "relationships": [
+                    {"source_client_id": "mira", "target_client_id": "oren", "type": "knows"}
+                ],
+            },
+        },
+    ).json()
+
+    edited = client.patch(
+        f"/api/proposals/{proposal['id']}",
+        json={
+            "source_text": "Mira the Pathfinder.",
+            "payload": {
+                "entities": [
+                    {
+                        "client_id": "mira",
+                        "type": "character",
+                        "name": "Mira the Pathfinder",
+                        "description": "Edited before publication.",
+                        "is_secret": True,
+                    }
+                ],
+                "relationships": proposal["payload"]["relationships"],
+            },
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["payload"]["entities"][0]["name"] == "Mira the Pathfinder"
+    assert edited.json()["payload"]["entities"][0]["is_secret"] is True
+    assert edited.json()["payload"]["relationships"] == []
+    assert edited.json()["source_text"] == "Mira the Pathfinder."
+    applied = client.post(f"/api/proposals/{proposal['id']}/apply")
+    assert applied.status_code == 200, applied.text
+    assert client.get(f"/api/worlds/{world_id}/entities?role=player").json() == []
 
 
 def test_extraction_proposal_can_apply_random_table_rows() -> None:
@@ -1949,3 +2206,77 @@ def test_relationship_tracks_strength_period_and_revision_history() -> None:
     assert revisions[0]["effective_at"] == "Year 317"
     assert revisions[0]["change_note"] == "Mira became the archive keeper."
     assert revisions[1]["weight"] == 4.5
+
+
+def test_world_experience_tracks_changes_and_retrieves_causal_history() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Causal Vale"}).json()["id"]
+    entity = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Old Bridge", "summary": "The only river crossing."},
+    ).json()
+    updated = client.patch(
+        f"/api/entities/{entity['id']}",
+        json={"summary": "The bridge collapsed during the flood."},
+    )
+    assert updated.status_code == 200, updated.text
+
+    automatic_changes = client.get(f"/api/worlds/{world_id}/changes").json()
+    assert [change["change_kind"] for change in automatic_changes] == ["updated", "created"]
+    revisions = client.get(f"/api/worlds/{world_id}/entity-revisions?entity_id={entity['id']}").json()
+    assert len(revisions) == 2
+    assert revisions[0]["before_state"]["summary"] == "The only river crossing."
+    assert revisions[0]["after_state"]["summary"] == "The bridge collapsed during the flood."
+
+    flood = client.post(
+        f"/api/worlds/{world_id}/changes",
+        json={
+            "change_kind": "world_event",
+            "summary": "A century flood destroyed the eastern roads.",
+            "effective_at": "Year 412",
+            "confidence": 0.8,
+            "evidence": "Harbor chronicle, volume 4.",
+        },
+    )
+    assert flood.status_code == 201, flood.text
+    flood_id = flood.json()["id"]
+    consequence = client.post(
+        f"/api/worlds/{world_id}/changes",
+        json={
+            "subject_type": "entity",
+            "subject_id": entity["id"],
+            "change_kind": "world_event",
+            "summary": "Old Bridge collapsed and trade moved north.",
+            "effective_at": "Year 412",
+            "causal_change_ids": [flood_id],
+        },
+    )
+    assert consequence.status_code == 201, consequence.text
+
+    cycle = client.patch(
+        f"/api/changes/{flood_id}",
+        json={"causal_change_ids": [consequence.json()["id"]]},
+    )
+    assert cycle.status_code == 422
+
+    context = client.get(f"/api/worlds/{world_id}/context?q=Old%20Bridge")
+    assert context.status_code == 200, context.text
+    assert "Relevant world changes and causal history" in context.json()["context_text"]
+    assert "trade moved north" in context.json()["context_text"]
+    assert "century flood" in context.json()["context_text"]
+
+    secret = client.post(
+        f"/api/worlds/{world_id}/changes",
+        json={"change_kind": "world_event", "summary": "Hidden plot moved the royal seal.", "is_secret": True},
+    )
+    assert secret.status_code == 201
+    player_context = client.get(f"/api/worlds/{world_id}/context?role=player&q=Hidden%20plot").json()
+    assert "Hidden plot" not in player_context["context_text"]
+    assert client.get(f"/api/worlds/{world_id}/changes?role=player&q=Hidden%20plot").json() == []
+
+    deleted = client.delete(f"/api/entities/{entity['id']}")
+    assert deleted.status_code == 204
+    retained = client.get(f"/api/worlds/{world_id}/changes?subject_id={entity['id']}").json()
+    assert retained[0]["change_kind"] == "deleted"
+    deleted_revision = client.get(f"/api/worlds/{world_id}/entity-revisions?entity_id={entity['id']}").json()[0]
+    assert deleted_revision["before_state"]["name"] == "Old Bridge"

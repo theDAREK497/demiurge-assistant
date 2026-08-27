@@ -1,3 +1,3 @@
-import { boot } from "./js/main.js?v=20260816.1";
+import { boot } from "./js/main.js?v=20260826.4";
 
 boot();

@@ -31,6 +31,7 @@ The main world model currently includes:
 - worlds;
 - wiki cards/entities;
 - directed relationships;
+- entity revision history and causal world changes;
 - world rules;
 - master/player visibility filtering;
 - extraction proposals for AI write-back.
@@ -57,8 +58,8 @@ The current intended UX flow is:
 2. Add or edit wiki cards manually.
 3. Chat with the AI co-author.
 4. If an assistant answer is good, click `Save as draft`.
-5. Review the created draft changes.
-6. Apply all changes or only checked items.
+5. The result is checked and merged into the world's single active draft.
+6. Edit or remove draft items in the structured editor, then publish the draft.
 
 This is the preferred manual-testing path.
 
@@ -97,7 +98,11 @@ The `/app/` UI already supports:
 - quick actions and content summaries in maps and detective board so creation
   tools stay close to the module without dominating the screen;
 - module toggles in Settings;
-- AI chat with draft-save flow;
+- AI chat with a unified draft-save flow;
+- one active pending draft per world across chat, adventure generation, manual
+  input, and long document extraction;
+- structured draft editing for cards, relationships, rules, random tables, and
+  table rows before publication;
 - bounded Master Assistant tab with three scenarios: resumable source
   extraction, read-only world consistency audit, and adventure generation into
   a reviewable draft;
@@ -116,7 +121,7 @@ The `/app/` UI already supports:
 - explicit UI-language forwarding to chat/extraction so local models produce
   Russian or English world text consistently;
 - review/apply/reject for extracted changes;
-- duplicate cleanup for extracted draft entities, relationships, world rules,
+- duplicate and conflict cleanup for extracted draft entities, relationships, world rules,
   random-table rows, and notes before proposals are stored; close entity-name
   variants are reconciled with one unambiguous existing card and retained as
   aliases;
@@ -211,6 +216,33 @@ Roadmap items still intentionally open:
   layout, zoom, pan, node dragging, and weighted relationship rendering.
 - relationships have confidence, 0-10 weight, validity period, evidence, and
   revision history; extraction uses structured JSON output when supported.
+- the master-only Experience tab records dated events, corrections, retcons,
+  evidence, confidence, and causal predecessors; entity/relationship edits and
+  proposal publication append history automatically.
+- world chat retrieves only a bounded relevant part of that history and its
+  immediate causes. This is RAG memory, not fine-tuning, so current card canon
+  remains authoritative and old history does not train the provider model.
+- world audit reports can be opened as a conflict-resolution drawer. Confirmed
+  findings are selected by default, hypotheses remain opt-in, negative findings
+  such as `None` are discarded, and selected corrections enter the normal
+  consolidated proposal pipeline instead of changing canon directly.
+- the conflict resolver also runs deterministic same-type duplicate detection.
+  A master compares both cards, chooses the canonical entity, edits the merged
+  result, and explicitly confirms deletion. Relationships, map pins, and board
+  nodes are rewired in one transaction; ambiguous short names are never merged
+  automatically.
+- DOCX tables preserve row and column structure in source chunks. Explicit die,
+  roll, range, percentage, and result columns can therefore become populated
+  random tables during extraction.
+- dense graphs support entity focus, one/two/all-hop neighborhoods, minimum
+  relationship weight, optional labels, and visible object counts.
+- extraction timers parse naive API timestamps as UTC, and proposal relationship
+  endpoints are rendered with entity names rather than temporary client IDs;
+  document overlap begins at a token boundary so evidence excerpts do not start
+  inside a word.
+- the extraction worker also repairs already stored legacy overlaps at runtime:
+  repeated predecessor text is context-only, not extracted again, and a lone
+  lowercase boundary fragment cannot become an entity name.
 
 ## How To Run
 

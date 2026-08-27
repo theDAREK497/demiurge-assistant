@@ -1,7 +1,7 @@
 import re
 from math import sqrt
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from worldbuilder_core.models import (
@@ -14,6 +14,7 @@ from worldbuilder_core.models import (
     Relationship,
     ViewerRole,
     World,
+    WorldChange,
     WorldRule,
 )
 from worldbuilder_core.schemas import (
@@ -23,6 +24,7 @@ from worldbuilder_core.schemas import (
     RandomTableRowRead,
     RelationshipRead,
     WorldContextRead,
+    WorldChangeRead,
     WorldRead,
     WorldRuleRead,
 )
@@ -37,6 +39,27 @@ class RetrievalWorldNotFoundError(RetrievalError):
 
 
 MAX_CONTEXT_CHARS = 32_000
+QUERY_STOPWORDS = {
+    "about",
+    "are",
+    "describe",
+    "does",
+    "how",
+    "tell",
+    "the",
+    "what",
+    "where",
+    "who",
+    "где",
+    "кто",
+    "мне",
+    "опиши",
+    "про",
+    "расскажи",
+    "такой",
+    "что",
+    "это",
+}
 
 
 def build_world_context(
@@ -50,6 +73,7 @@ def build_world_context(
     max_relationships: int = 24,
     max_random_tables: int = 12,
     max_document_chunks: int = 8,
+    max_experience_changes: int = 8,
     query_embedding: list[float] | None = None,
     embedding_model: str | None = None,
 ) -> WorldContextRead:
@@ -77,6 +101,14 @@ def build_world_context(
         embedding_model=embedding_model,
         max_chunks=max_document_chunks,
     )
+    experience_changes = _select_experience_changes(
+        session,
+        world_id,
+        role=role,
+        query=query,
+        entity_ids=[entity.id for entity in entities],
+        max_changes=max_experience_changes,
+    )
 
     return WorldContextRead(
         world=WorldRead.model_validate(world),
@@ -87,6 +119,7 @@ def build_world_context(
         world_rules=[WorldRuleRead.model_validate(rule) for rule in rules],
         random_tables=random_table_reads,
         document_chunks=document_chunks,
+        experience_changes=[WorldChangeRead.model_validate(change) for change in experience_changes],
         context_text=render_context_text(
             world,
             rules=rules,
@@ -94,8 +127,64 @@ def build_world_context(
             relationships=relationships,
             random_tables=random_table_reads,
             document_chunks=document_chunks,
+            experience_changes=experience_changes,
         ),
     )
+
+
+def _select_experience_changes(
+    session: Session,
+    world_id: str,
+    *,
+    role: ViewerRole,
+    query: str | None,
+    entity_ids: list[str],
+    max_changes: int,
+) -> list[WorldChange]:
+    if max_changes <= 0:
+        return []
+    stmt: Select[tuple[WorldChange]] = select(WorldChange).where(WorldChange.world_id == world_id)
+    if role == ViewerRole.player:
+        stmt = stmt.where(WorldChange.is_secret.is_(False))
+    candidates = list(
+        session.scalars(stmt.order_by(WorldChange.created_at.desc(), WorldChange.id.desc()).limit(200))
+    )
+    terms = _query_terms(query or "")
+    entity_id_set = set(entity_ids)
+
+    def score(change: WorldChange) -> int:
+        value = 6 if change.subject_id in entity_id_set else 0
+        fields = (
+            (str(change.subject_name or "").casefold(), 5),
+            (str(change.summary or "").casefold(), 3),
+            (str(change.evidence or "").casefold(), 1),
+        )
+        for term in terms:
+            value += sum(weight for text, weight in fields if term in text)
+        return value
+
+    ranked = [(score(change), index, change) for index, change in enumerate(candidates)]
+    ranked = [item for item in ranked if item[0] > 0]
+    ranked.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+    candidate_by_id = {change.id: change for change in candidates}
+    selected: list[WorldChange] = []
+    selected_ids: set[str] = set()
+
+    def append_with_causes(change: WorldChange) -> None:
+        if change.id in selected_ids or len(selected) >= max_changes:
+            return
+        selected.append(change)
+        selected_ids.add(change.id)
+        for cause_id in change.causal_change_ids:
+            cause = candidate_by_id.get(cause_id) or session.get(WorldChange, cause_id)
+            if cause is not None and cause.world_id == world_id and (role == ViewerRole.master or not cause.is_secret):
+                append_with_causes(cause)
+
+    for _, _, change in ranked:
+        append_with_causes(change)
+        if len(selected) >= max_changes:
+            break
+    return selected
 
 
 async def build_world_context_with_embeddings(
@@ -144,10 +233,79 @@ def _select_entities(
     if role == ViewerRole.player:
         stmt = stmt.where(Entity.is_secret.is_(False))
     if query:
-        pattern = f"%{query}%"
-        stmt = stmt.where(or_(Entity.name.ilike(pattern), Entity.summary.ilike(pattern), Entity.description.ilike(pattern)))
-    stmt = stmt.order_by(Entity.updated_at.desc(), Entity.name.asc()).limit(max_entities)
-    return list(session.scalars(stmt))
+        full_pattern = f"%{query.strip()}%"
+        term_filters = []
+        for term in _query_terms(query):
+            term_filters.append(
+                or_(
+                    *[
+                        field.ilike(f"%{variant}%")
+                        for variant in {term, term.capitalize(), term.upper()}
+                        for field in (Entity.name, Entity.summary, Entity.description)
+                    ]
+                )
+            )
+        filters = [
+            Entity.name.ilike(full_pattern),
+            Entity.summary.ilike(full_pattern),
+            Entity.description.ilike(full_pattern),
+        ]
+        if term_filters:
+            filters.extend([and_(*term_filters), *term_filters])
+        stmt = stmt.where(or_(*filters))
+    candidate_limit = max_entities * 4 if query else max_entities
+    stmt = stmt.order_by(Entity.updated_at.desc(), Entity.name.asc()).limit(candidate_limit)
+    entities = list(session.scalars(stmt))
+    if query:
+        terms = _query_terms(query)
+        entities.sort(
+            key=lambda entity: _entity_query_score(entity, terms) + _entity_type_query_bonus(entity, query),
+            reverse=True,
+        )
+    return entities[:max_entities]
+
+
+def _query_terms(query: str) -> list[str]:
+    terms = []
+    seen = set()
+    for term in re.findall(r"[^\W_]+", query.casefold()):
+        if len(term) < 3 or term in QUERY_STOPWORDS or term in seen:
+            continue
+        terms.append(term)
+        seen.add(term)
+    return terms[:6]
+
+
+def _entity_query_score(entity: Entity, terms: list[str]) -> int:
+    if not terms:
+        return 0
+    fields = [
+        str(entity.name or "").casefold(),
+        str(entity.summary or "").casefold(),
+        str(entity.description or "").casefold(),
+    ]
+    score = 0
+    exact_phrase = " ".join(terms)
+    for index, field in enumerate(fields):
+        hits = sum(term in field for term in terms)
+        score += hits * (6 - index * 2)
+        if hits == len(terms):
+            score += 12 - index * 3
+        if exact_phrase and exact_phrase in field:
+            score += 50 - index * 10
+    return score
+
+
+def _entity_type_query_bonus(entity: Entity, query: str) -> int:
+    normalized = query.casefold()
+    entity_type = str(entity.type)
+    if re.search(r"\b(?:кто|персонаж|человек|who|character|person)\b", normalized):
+        return 100 if entity_type == "character" else 0
+    if re.search(r"\b(?:где|место|локация|where|place|location)\b", normalized):
+        return 100 if entity_type == "location" else 0
+    if re.search(r"\b(?:фракция|организация|faction|organization)\b", normalized):
+        return 100 if entity_type == "faction" else 0
+    return 0
 
 
 def _select_relationships(
@@ -323,6 +481,7 @@ def render_context_text(
     relationships: list[Relationship],
     random_tables: list[RandomTableRead],
     document_chunks: list[KnowledgeChunkExcerpt],
+    experience_changes: list[WorldChange] | None = None,
 ) -> str:
     lines = [f"World: {world.name}"]
     if world.description:
@@ -354,6 +513,22 @@ def render_context_text(
             target = relationship.target_entity.name
             label = relationship.label or relationship.type
             lines.append(f"- {source} --{label}--> {target}")
+
+    if experience_changes:
+        lines.append("")
+        lines.append("Relevant world changes and causal history:")
+        change_by_id = {change.id: change for change in experience_changes}
+        for change in experience_changes:
+            when = change.effective_at or change.created_at.isoformat()
+            subject = change.subject_name or change.subject_type
+            summary = _compact_context_value(change.summary, 700)
+            confidence = round(change.confidence * 100)
+            lines.append(f"- [{when}] {subject}: {summary} ({change.change_kind}, confidence {confidence}%)")
+            causes = [change_by_id[cause_id] for cause_id in change.causal_change_ids if cause_id in change_by_id]
+            for cause in causes[:3]:
+                lines.append(f"  Caused by: {_compact_context_value(cause.summary, 300)}")
+            if change.evidence:
+                lines.append(f"  Evidence: {_compact_context_value(change.evidence, 350)}")
 
     if random_tables:
         lines.append("")

@@ -1,3 +1,4 @@
+import asyncio
 from time import monotonic
 from typing import Any
 
@@ -13,6 +14,8 @@ class LLMProviderError(Exception):
 
 
 STRUCTURED_OUTPUT_RETRY_SECONDS = 3_600
+TRANSIENT_CHAT_RETRIES = 1
+TRANSIENT_CHAT_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 _structured_output_disabled_until: dict[tuple[str, str], float] = {}
 
 
@@ -42,34 +45,48 @@ class OpenAICompatibleLLMClient:
             payload.pop("response_format", None)
         structured_output_sent = "response_format" in payload
 
+        response = None
         try:
             async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
-                response = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    headers=self._headers(),
-                    json=payload,
-                )
-                if (
-                    response.status_code == 400
-                    and "response_format" in payload
-                    and "grammar" in response.text.casefold()
-                ):
-                    _structured_output_disabled_until[structured_output_key] = (
-                        monotonic() + STRUCTURED_OUTPUT_RETRY_SECONDS
-                    )
-                    payload.pop("response_format", None)
-                    response = await client.post(
-                        f"{self.base_url}/chat/completions",
-                        headers=self._headers(),
-                        json=payload,
-                    )
-                elif response.status_code < 400 and structured_output_requested and structured_output_sent:
-                    _structured_output_disabled_until.pop(structured_output_key, None)
+                for attempt in range(TRANSIENT_CHAT_RETRIES + 1):
+                    try:
+                        response = await client.post(
+                            f"{self.base_url}/chat/completions",
+                            headers=self._headers(),
+                            json=payload,
+                        )
+                        if (
+                            response.status_code == 400
+                            and "response_format" in payload
+                            and "grammar" in response.text.casefold()
+                        ):
+                            _structured_output_disabled_until[structured_output_key] = (
+                                monotonic() + STRUCTURED_OUTPUT_RETRY_SECONDS
+                            )
+                            payload.pop("response_format", None)
+                            response = await client.post(
+                                f"{self.base_url}/chat/completions",
+                                headers=self._headers(),
+                                json=payload,
+                            )
+                        elif response.status_code < 400 and structured_output_requested and structured_output_sent:
+                            _structured_output_disabled_until.pop(structured_output_key, None)
+                    except httpx.HTTPError:
+                        if attempt >= TRANSIENT_CHAT_RETRIES:
+                            raise
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    if not _is_transient_chat_response(response) or attempt >= TRANSIENT_CHAT_RETRIES:
+                        break
+                    await asyncio.sleep(0.4 * (attempt + 1))
         except httpx.HTTPError as exc:
             detail = str(exc).strip() or exc.__class__.__name__
             if isinstance(exc, httpx.TimeoutException):
                 detail = f"{detail} after {self.timeout_seconds:g} seconds"
             raise LLMProviderError(f"LLM provider request failed: {detail}") from exc
+
+        if response is None:
+            raise LLMProviderError("LLM provider request did not return a response")
 
         if response.status_code >= 400:
             raise LLMProviderError(f"LLM provider returned HTTP {response.status_code}: {response.text}")
@@ -114,6 +131,10 @@ class OpenAICompatibleLLMClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
+
+
+def _is_transient_chat_response(response: httpx.Response) -> bool:
+    return response.status_code in TRANSIENT_CHAT_STATUS_CODES or "channel error" in response.text.casefold()
 
 
 def build_llm_client(

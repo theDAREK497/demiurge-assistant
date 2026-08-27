@@ -28,6 +28,7 @@ export const state = {
   detectiveConnections: [],
   proposals: [],
   documents: [],
+  worldChanges: [],
   documentProcessing: {},
   documentExtractionJobs: {},
   embeddingStatus: null,
@@ -42,6 +43,10 @@ export const state = {
   editingRandomTableRowId: null,
   editingDetectiveNodeId: null,
   editingDetectiveConnectionId: null,
+  editingProposalId: null,
+  editingProposalSource: "",
+  editingProposalPayload: null,
+  editingWorldChangeId: null,
   selectedEntityId: null,
   selectedReaderType: null,
   selectedReaderSourceId: null,
@@ -58,11 +63,22 @@ export const state = {
   assistantBusy: false,
   assistantRuns: [],
   assistantStorageScope: null,
+  activeAuditRunId: null,
+  auditFindingSelection: [],
+  duplicateCandidates: [],
+  duplicateCandidatesBusy: false,
+  activeDuplicateCandidate: null,
+  entityMergePrimaryId: null,
+  entityMergeBusy: false,
   moduleSettings: { ...defaultModuleSettings },
   entityTypeFilter: "all",
   graphPositions: {},
   graphPositionScope: null,
   graphZoom: 1,
+  graphFocusEntityId: null,
+  graphDepth: 1,
+  graphMinWeight: 0,
+  graphShowLabels: false,
 };
 
 export function selectedWorld() {
@@ -76,6 +92,13 @@ function assistantStorageKey(worldId) {
 export function loadAssistantRunsForWorld(worldId) {
   state.assistantStorageScope = worldId ? assistantStorageKey(worldId) : null;
   state.assistantBusy = false;
+  state.activeAuditRunId = null;
+  state.auditFindingSelection = [];
+  state.duplicateCandidates = [];
+  state.duplicateCandidatesBusy = false;
+  state.activeDuplicateCandidate = null;
+  state.entityMergePrimaryId = null;
+  state.entityMergeBusy = false;
   if (!state.assistantStorageScope) {
     state.assistantRuns = [];
     return;
