@@ -35,6 +35,7 @@ def create_db_and_tables() -> None:
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
     _ensure_relationship_columns()
+    _ensure_embedding_job_columns()
     _ensure_document_extraction_columns()
     if settings.database_url.startswith("postgresql"):
         with engine.begin() as connection:
@@ -112,6 +113,31 @@ def _ensure_document_extraction_columns() -> None:
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_document_extraction_jobs_retry_at "
                     "ON document_extraction_jobs (retry_at)"
+                )
+            )
+
+
+def _ensure_embedding_job_columns() -> None:
+    with engine.begin() as connection:
+        if settings.database_url.startswith("sqlite"):
+            existing = {row[1] for row in connection.execute(text("PRAGMA table_info(embedding_jobs)"))}
+            if "retry_at" not in existing:
+                connection.execute(text("ALTER TABLE embedding_jobs ADD COLUMN retry_at DATETIME"))
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_embedding_jobs_retry_at "
+                    "ON embedding_jobs (retry_at)"
+                )
+            )
+            return
+        if settings.database_url.startswith("postgresql"):
+            connection.execute(
+                text("ALTER TABLE embedding_jobs ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ")
+            )
+            connection.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_embedding_jobs_retry_at "
+                    "ON embedding_jobs (retry_at)"
                 )
             )
 

@@ -18,6 +18,7 @@ from worldbuilder_core.services.change_history import (
     record_relationship_change,
     relationship_snapshot,
 )
+from worldbuilder_core.services.relationship_history import build_relationship_revision
 
 WORD_RE = re.compile(r"[\w\-]+", re.UNICODE)
 STOP_WORDS = {
@@ -180,6 +181,13 @@ def merge_entities(
         if existing is not None and existing.id != relationship.id:
             existing_before = relationship_snapshot(existing)
             _merge_relationship(existing, relationship)
+            session.add(
+                build_relationship_revision(
+                    existing,
+                    effective_at=existing.valid_from,
+                    change_note=f"Merged duplicate entity {duplicate.name} into {primary.name}",
+                )
+            )
             record_relationship_change(
                 session,
                 existing,
@@ -209,6 +217,13 @@ def merge_entities(
         if target_id == primary.id:
             relationship.target_entity = primary
         relationship_index[key] = relationship
+        session.add(
+            build_relationship_revision(
+                relationship,
+                effective_at=relationship.valid_from,
+                change_note=f"Moved relationship from {duplicate.name} to {primary.name}",
+            )
+        )
         record_relationship_change(
             session,
             relationship,

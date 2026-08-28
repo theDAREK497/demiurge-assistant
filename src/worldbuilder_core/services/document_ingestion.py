@@ -19,6 +19,18 @@ TARGET_CHARS = 4_000
 OVERLAP_CHARS = 400
 MAX_DOCX_XML_BYTES = 200 * 1024 * 1024
 WORD_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+NEAR_DUPLICATE_PUNCTUATION = str.maketrans(
+    {
+        "\u2018": "'",
+        "\u2019": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u2212": "-",
+        "\u2026": "...",
+    }
+)
 
 
 class DocumentIngestionError(Exception):
@@ -351,7 +363,7 @@ def _manifest_records(path: Path, *, start: int) -> Iterator[dict]:
 
 
 def _get_or_create_chunk(session: Session, world_id: str, content: str) -> tuple[KnowledgeChunk, bool]:
-    normalized = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", content).casefold()).strip()
+    normalized = _normalized_chunk_content(content)
     content_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     existing = session.scalar(
         select(KnowledgeChunk).where(
@@ -376,7 +388,10 @@ def _get_or_create_chunk(session: Session, world_id: str, content: str) -> tuple
         )
     )
     for candidate in candidates:
-        if (int(candidate.fingerprint, 16) ^ fingerprint).bit_count() <= 3:
+        if (
+            (int(candidate.fingerprint, 16) ^ fingerprint).bit_count() <= 3
+            and _is_safe_near_duplicate(candidate.content, content)
+        ):
             return candidate, True
 
     fingerprint_hex = f"{fingerprint:016x}"
@@ -394,6 +409,17 @@ def _get_or_create_chunk(session: Session, world_id: str, content: str) -> tuple
     session.add(chunk)
     session.flush()
     return chunk, False
+
+
+def _normalized_chunk_content(value: str) -> str:
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).casefold()).strip()
+
+
+def _is_safe_near_duplicate(left: str, right: str) -> bool:
+    """Deduplicate typographic variants without erasing meaningful punctuation."""
+    left_normalized = _normalized_chunk_content(left).translate(NEAR_DUPLICATE_PUNCTUATION)
+    right_normalized = _normalized_chunk_content(right).translate(NEAR_DUPLICATE_PUNCTUATION)
+    return bool(left_normalized) and left_normalized == right_normalized
 
 
 def _simhash(value: str) -> int:

@@ -1,8 +1,10 @@
 import re
 import unicodedata
+from collections import defaultdict
 from difflib import SequenceMatcher
+from statistics import median
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from worldbuilder_core.models import (
@@ -24,6 +26,7 @@ from worldbuilder_core.services.change_history import (
     record_entity_change,
     record_relationship_change,
     record_world_change,
+    relationship_snapshot,
 )
 from worldbuilder_core.schemas import (
     ExtractionPayload,
@@ -58,6 +61,27 @@ class ProposalValidationError(ProposalError):
     pass
 
 
+def _lock_world_proposal_pipeline(session: Session, world_id: str) -> None:
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+            {"lock_key": f"world-proposal:{world_id}"},
+        )
+
+
+def _get_proposal_for_change(session: Session, proposal_id: str) -> ExtractionProposal | None:
+    world_id = session.scalar(
+        select(ExtractionProposal.world_id).where(ExtractionProposal.id == proposal_id)
+    )
+    if world_id is None:
+        return None
+    _lock_world_proposal_pipeline(session, world_id)
+    stmt = select(ExtractionProposal).where(ExtractionProposal.id == proposal_id)
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
+    return session.scalar(stmt)
+
+
 def create_extraction_proposal(
     session: Session,
     world_id: str,
@@ -66,6 +90,7 @@ def create_extraction_proposal(
     commit: bool = True,
     merge_pending: bool = True,
 ) -> ExtractionProposal:
+    _lock_world_proposal_pipeline(session, world_id)
     if session.get(World, world_id) is None:
         raise ProposalWorldNotFoundError(f"World {world_id!r} not found")
 
@@ -100,7 +125,7 @@ def update_extraction_proposal(
     proposal_id: str,
     payload: ExtractionProposalUpdate,
 ) -> ExtractionProposal:
-    proposal = session.get(ExtractionProposal, proposal_id)
+    proposal = _get_proposal_for_change(session, proposal_id)
     if proposal is None:
         raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
     if proposal.status != ProposalStatus.pending:
@@ -117,6 +142,7 @@ def update_extraction_proposal(
 
 
 def consolidate_pending_proposals(session: Session, world_id: str) -> ExtractionProposal | None:
+    _lock_world_proposal_pipeline(session, world_id)
     if session.get(World, world_id) is None:
         raise ProposalWorldNotFoundError(f"World {world_id!r} not found")
     pending = _pending_proposals(session, world_id)
@@ -149,7 +175,7 @@ def _apply_extraction_proposal(
     *,
     selection: ProposalItemSelection | None,
 ) -> ProposalApplyResult:
-    proposal = session.get(ExtractionProposal, proposal_id)
+    proposal = _get_proposal_for_change(session, proposal_id)
     if proposal is None:
         raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
     if proposal.status != ProposalStatus.pending:
@@ -169,6 +195,10 @@ def _apply_extraction_proposal(
         session.commit()
         return result
     except ProposalError as exc:
+        session.rollback()
+        proposal = _get_proposal_for_change(session, proposal_id)
+        if proposal is None:
+            raise
         proposal.error = str(exc)
         session.add(proposal)
         session.commit()
@@ -176,7 +206,7 @@ def _apply_extraction_proposal(
 
 
 def reject_extraction_proposal(session: Session, proposal_id: str) -> ExtractionProposal:
-    proposal = session.get(ExtractionProposal, proposal_id)
+    proposal = _get_proposal_for_change(session, proposal_id)
     if proposal is None:
         raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
     if proposal.status != ProposalStatus.pending:
@@ -191,7 +221,7 @@ def reject_extraction_proposal(session: Session, proposal_id: str) -> Extraction
 
 
 def delete_extraction_proposal(session: Session, proposal_id: str) -> None:
-    proposal = session.get(ExtractionProposal, proposal_id)
+    proposal = _get_proposal_for_change(session, proposal_id)
     if proposal is None:
         raise ProposalNotFoundError(f"Proposal {proposal_id!r} not found")
     session.delete(proposal)
@@ -202,9 +232,11 @@ def _prepare_payload_for_review(
     session: Session,
     world_id: str,
     payload: ExtractionPayload,
+    *,
+    dedupe_first: bool = True,
 ) -> ExtractionPayload:
     try:
-        clean = dedupe_extraction_payload(payload)
+        clean = dedupe_extraction_payload(payload) if dedupe_first else payload
         clean = sanitize_extraction_payload_for_world(session, world_id, clean)
         clean = dedupe_extraction_payload(clean)
         clean = ExtractionPayload.model_validate(clean.model_dump(mode="json"))
@@ -217,16 +249,17 @@ def _prepare_payload_for_review(
 
 
 def _pending_proposals(session: Session, world_id: str) -> list[ExtractionProposal]:
-    return list(
-        session.scalars(
-            select(ExtractionProposal)
-            .where(
-                ExtractionProposal.world_id == world_id,
-                ExtractionProposal.status == ProposalStatus.pending,
-            )
-            .order_by(ExtractionProposal.created_at.asc(), ExtractionProposal.id.asc())
+    stmt = (
+        select(ExtractionProposal)
+        .where(
+            ExtractionProposal.world_id == world_id,
+            ExtractionProposal.status == ProposalStatus.pending,
         )
+        .order_by(ExtractionProposal.created_at.asc(), ExtractionProposal.id.asc())
     )
+    if session.bind is not None and session.bind.dialect.name == "postgresql":
+        stmt = stmt.with_for_update()
+    return list(session.scalars(stmt))
 
 
 def _merge_pending_proposals(
@@ -237,11 +270,17 @@ def _merge_pending_proposals(
     incoming: ExtractionPayload | None,
     commit: bool,
 ) -> ExtractionProposal:
+    _lock_world_proposal_pipeline(session, world_id)
     pending = _pending_proposals(session, world_id)
     payloads = [ExtractionPayload.model_validate(proposal.payload) for proposal in pending]
     if incoming is not None:
         payloads.append(incoming)
-    merged = _prepare_payload_for_review(session, world_id, merge_extraction_payloads(payloads))
+    merged = _prepare_payload_for_review(
+        session,
+        world_id,
+        merge_extraction_payloads(payloads),
+        dedupe_first=False,
+    )
 
     sources = [proposal.source_text for proposal in pending]
     if source_text:
@@ -415,6 +454,7 @@ def sanitize_extraction_payload_for_world(
 ) -> ExtractionPayload:
     """Keep useful LLM output when individual references are invalid."""
     existing_entities = list(session.scalars(select(Entity).where(Entity.world_id == world_id)))
+    existing_entity_index = _build_entity_candidate_index(existing_entities)
     valid_entity_ids = {entity.id for entity in existing_entities}
     valid_table_ids = set(session.scalars(select(RandomTable.id).where(RandomTable.world_id == world_id)))
     used_client_ids = {entity.client_id for entity in payload.entities if entity.client_id}
@@ -436,7 +476,11 @@ def sanitize_extraction_payload_for_world(
             )
             continue
         if entity.match_entity_id is None:
-            existing_match = _find_single_similar_entity(existing_entities, entity)
+            existing_match = _find_single_similar_entity(
+                existing_entities,
+                entity,
+                candidate_index=existing_entity_index,
+            )
             if existing_match is not None:
                 aliases = _merge_list(entity.aliases, [entity.name]) if entity.name != existing_match.name else entity.aliases
                 if entity.client_id:
@@ -548,6 +592,7 @@ def dedupe_extraction_payload(payload: ExtractionPayload) -> ExtractionPayload:
 def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
     deduped = []
     by_key: dict[tuple, int] = {}
+    candidate_index: dict[tuple[str, str, str], set[int]] = defaultdict(set)
     client_id_aliases: dict[str, str] = {}
 
     for draft in entities:
@@ -557,7 +602,8 @@ def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
             existing_index = next(
                 (
                     index
-                    for index, existing in enumerate(deduped)
+                    for index in _candidate_entity_indices(candidate_index, draft)
+                    for existing in [deduped[index]]
                     if _entities_likely_same(existing, draft)
                 ),
                 None,
@@ -565,11 +611,14 @@ def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
         if existing_index is None:
             by_key[key] = len(deduped)
             deduped.append(draft)
+            _index_entity_candidate(candidate_index, draft, len(deduped) - 1)
             continue
 
         existing = deduped[existing_index]
         merged = _merge_entity_draft(existing, draft)
         deduped[existing_index] = merged
+        by_key[key] = existing_index
+        _index_entity_candidate(candidate_index, merged, existing_index)
         if draft.client_id and merged.client_id and draft.client_id != merged.client_id:
             client_id_aliases[draft.client_id] = merged.client_id
         if existing.client_id and merged.client_id and existing.client_id != merged.client_id:
@@ -587,7 +636,19 @@ def _dedupe_relationships(relationships: list, client_id_aliases: dict[str, str]
         if draft.target_client_id in client_id_aliases:
             updates["target_client_id"] = client_id_aliases[draft.target_client_id]
         remapped.append(draft.model_copy(update=updates) if updates else draft)
-    return _dedupe_by_key(remapped, _relationship_key, _merge_relationship_draft)
+    deduped = _dedupe_by_key(remapped, _relationship_key, _merge_relationship_draft)
+    observations_by_key: dict[tuple, list] = defaultdict(list)
+    for draft in remapped:
+        observations_by_key[_relationship_key(draft)].append(draft)
+    result = []
+    for draft in deduped:
+        observations = observations_by_key[_relationship_key(draft)]
+        strongest_confidence = max(item.confidence for item in observations)
+        strongest_weights = [
+            item.weight for item in observations if item.confidence == strongest_confidence
+        ]
+        result.append(draft.model_copy(update={"weight": float(median(strongest_weights))}))
+    return result
 
 
 def _dedupe_random_tables(random_tables: list) -> tuple[list, dict[str, str]]:
@@ -673,12 +734,32 @@ def _relationship_key(draft) -> tuple:
 
 
 def _world_rule_key(draft) -> tuple:
-    return (_normalized_text(draft.condition), _normalized_text(draft.effect))
+    return _world_rule_identity(draft.condition, draft.effect)
 
 
 def _random_table_row_key(draft) -> tuple:
     table_ref = draft.table_id or f"client:{draft.table_client_id}"
-    return (table_ref, _normalized_text(draft.label or ""), _normalized_text(draft.result))
+    return _persisted_random_table_row_key(table_ref, draft.label, draft.result)
+
+
+def _world_rule_identity(condition: str, effect: str) -> tuple[str, str]:
+    return (_normalized_text(condition), _normalized_text(effect))
+
+
+def _persisted_relationship_key(
+    source_entity_id: str,
+    target_entity_id: str,
+    relationship_type: str,
+) -> tuple[str, str, str]:
+    return (source_entity_id, target_entity_id, _normalized_text(relationship_type))
+
+
+def _persisted_random_table_row_key(
+    table_id: str,
+    label: str | None,
+    result: str,
+) -> tuple[str, str, str]:
+    return (table_id, _normalized_text(label or ""), _normalized_text(result))
 
 
 def _merge_entity_draft(current, incoming):
@@ -828,11 +909,23 @@ DETAIL_STOPWORDS = {
 }
 
 
-def _find_single_similar_entity(existing_entities: list[Entity], draft) -> Entity | None:
+def _find_single_similar_entity(
+    existing_entities: list[Entity],
+    draft,
+    *,
+    candidate_index: dict[tuple[str, str, str], set[int]] | None = None,
+) -> Entity | None:
+    candidate_indices = (
+        _candidate_entity_indices(candidate_index, draft)
+        if candidate_index is not None
+        else range(len(existing_entities))
+    )
+    candidates_to_check = [existing_entities[index] for index in candidate_indices]
     exact_candidates = [
         entity
-        for entity in existing_entities
-        if any(
+        for entity in candidates_to_check
+        if str(entity.type) == str(draft.type)
+        and any(
             _normalized_entity_name(existing_name) == _normalized_entity_name(draft_name)
             for existing_name in [entity.name, *(entity.aliases or [])]
             for draft_name in [draft.name, *(draft.aliases or [])]
@@ -840,8 +933,64 @@ def _find_single_similar_entity(existing_entities: list[Entity], draft) -> Entit
     ]
     if len(exact_candidates) == 1:
         return exact_candidates[0]
-    candidates = [entity for entity in existing_entities if _entities_likely_same(entity, draft)]
+    candidates = [entity for entity in candidates_to_check if _entities_likely_same(entity, draft)]
     return candidates[0] if len(candidates) == 1 else None
+
+
+def _build_entity_candidate_index(entities: list) -> dict[tuple[str, str, str], set[int]]:
+    index: dict[tuple[str, str, str], set[int]] = defaultdict(set)
+    for entity_index, entity in enumerate(entities):
+        _index_entity_candidate(index, entity, entity_index)
+    return index
+
+
+def _index_entity_candidate(
+    index: dict[tuple[str, str, str], set[int]],
+    entity,
+    entity_index: int,
+) -> None:
+    for key in _entity_candidate_keys(entity):
+        index[key].add(entity_index)
+
+
+def _candidate_entity_indices(
+    index: dict[tuple[str, str, str], set[int]],
+    entity,
+) -> list[int]:
+    candidates: set[int] = set()
+    keys_by_kind: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for key in _entity_candidate_keys(entity):
+        if index.get(key):
+            keys_by_kind[key[1]].append(key)
+    for kind in ("name", "phonetic"):
+        for key in keys_by_kind.get(kind, []):
+            candidates.update(index[key])
+    for kind, limit in (("token", 3), ("trigram", 6)):
+        selective_keys = sorted(keys_by_kind.get(kind, []), key=lambda key: len(index[key]))[:limit]
+        for key in selective_keys:
+            candidates.update(index[key])
+    return sorted(candidates)
+
+
+def _entity_candidate_keys(entity) -> set[tuple[str, str, str]]:
+    entity_type = str(entity.type)
+    keys: set[tuple[str, str, str]] = set()
+    for name in [entity.name, *(getattr(entity, "aliases", None) or [])]:
+        normalized = _normalized_entity_name(name)
+        if not normalized:
+            continue
+        keys.add((entity_type, "name", normalized))
+        phonetic = _phonetic_name_key(name)
+        if phonetic:
+            keys.add((entity_type, "phonetic", phonetic))
+        for token in _entity_name_tokens(name):
+            if token:
+                keys.add((entity_type, "token", token))
+        compact = normalized.replace(" ", "")
+        if len(compact) >= 3:
+            for offset in range(len(compact) - 2):
+                keys.add((entity_type, "trigram", compact[offset : offset + 3]))
+    return keys
 
 
 def _entities_likely_same(left, right) -> bool:
@@ -876,6 +1025,10 @@ def _names_likely_same(left: str, right: str) -> bool:
         return False
     if left_normalized == right_normalized:
         return True
+    left_numbers = set(re.findall(r"\d+", left_normalized))
+    right_numbers = set(re.findall(r"\d+", right_normalized))
+    if left_numbers and right_numbers and left_numbers != right_numbers:
+        return False
     left_phonetic = _phonetic_name_key(left)
     right_phonetic = _phonetic_name_key(right)
     if (
@@ -1004,18 +1157,24 @@ def _apply_payload(
     payload: ExtractionPayload,
 ) -> ProposalApplyResult:
     result = ProposalApplyResult(proposal_id=proposal.id)
+    updated_relationships = 0
+    updated_world_rules = 0
+    updated_random_tables = 0
+    updated_random_table_rows = 0
     client_entity_ids: dict[str, str] = {}
 
     for draft in payload.entities:
         ensure_entity_type(session, proposal.world_id, draft.type)
-        entity = None
+        entity: Entity
         previous_state = None
-        change_kind = "updated"
+        change_kind: str | None = None
         if draft.match_entity_id is not None:
             entity = _ensure_entity_in_world(session, proposal.world_id, draft.match_entity_id)
             previous_state = entity_snapshot(entity)
             _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id", "source_excerpt"}))
-            result.updated_entities += 1
+            if entity_snapshot(entity) != previous_state:
+                change_kind = "updated"
+                result.updated_entities += 1
         else:
             entity = _find_entity_by_type_and_name(session, proposal.world_id, draft.type, draft.name)
             if entity is None:
@@ -1030,61 +1189,139 @@ def _apply_payload(
             else:
                 previous_state = entity_snapshot(entity)
                 _merge_entity(entity, draft.model_dump(exclude={"client_id", "match_entity_id", "source_excerpt"}))
-                result.updated_entities += 1
+                if entity_snapshot(entity) != previous_state:
+                    change_kind = "updated"
+                    result.updated_entities += 1
 
-        record_entity_change(
-            session,
-            entity,
-            change_kind,
-            before_state=previous_state,
-            source_type="proposal",
-            source_id=proposal.id,
-            evidence=draft.source_excerpt,
-        )
+        if change_kind is not None:
+            record_entity_change(
+                session,
+                entity,
+                change_kind,
+                before_state=previous_state,
+                source_type="proposal",
+                source_id=proposal.id,
+                evidence=draft.source_excerpt,
+            )
 
         if draft.client_id:
             client_entity_ids[draft.client_id] = entity.id
 
-    for draft in payload.relationships:
-        source_entity_id = draft.source_entity_id or client_entity_ids[draft.source_client_id or ""]
-        target_entity_id = draft.target_entity_id or client_entity_ids[draft.target_client_id or ""]
-        relationship = Relationship(
-            world_id=proposal.world_id,
-            source_entity_id=source_entity_id,
-            target_entity_id=target_entity_id,
-            type=draft.type,
-            label=draft.label,
-            description=draft.description,
-            confidence=draft.confidence,
-            weight=draft.weight,
-            valid_from=draft.valid_from,
-            valid_to=draft.valid_to,
-            evidence=draft.evidence,
-            is_secret=draft.is_secret,
-            status=draft.status,
-            attributes=draft.attributes,
+    resolved_relationships = [
+        (
+            draft,
+            draft.source_entity_id or client_entity_ids[draft.source_client_id or ""],
+            draft.target_entity_id or client_entity_ids[draft.target_client_id or ""],
         )
-        session.add(relationship)
-        session.flush()
-        session.add(build_relationship_revision(relationship))
-        record_relationship_change(
-            session,
+        for draft in payload.relationships
+    ]
+    relationship_index: dict[tuple[str, str, str], Relationship] = {}
+    relationship_stmt = (
+        select(Relationship)
+        .where(
+            Relationship.world_id == proposal.world_id,
+            Relationship.source_entity_id.in_({item[1] for item in resolved_relationships}),
+            Relationship.target_entity_id.in_({item[2] for item in resolved_relationships}),
+        )
+        .order_by(Relationship.created_at.asc(), Relationship.id.asc())
+    )
+    existing_relationships = session.scalars(relationship_stmt) if resolved_relationships else []
+    for relationship in existing_relationships:
+        relationship_index.setdefault(
+            _persisted_relationship_key(
+                relationship.source_entity_id,
+                relationship.target_entity_id,
+                relationship.type,
+            ),
             relationship,
-            "created",
-            source_type="proposal",
-            source_id=proposal.id,
-            evidence=draft.evidence,
         )
-        result.created_relationships += 1
 
+    for draft, source_entity_id, target_entity_id in resolved_relationships:
+        relationship_key = _persisted_relationship_key(source_entity_id, target_entity_id, draft.type)
+        relationship = relationship_index.get(relationship_key)
+        if relationship is None:
+            relationship = Relationship(
+                world_id=proposal.world_id,
+                source_entity_id=source_entity_id,
+                target_entity_id=target_entity_id,
+                type=draft.type,
+                label=draft.label,
+                description=draft.description,
+                confidence=draft.confidence,
+                weight=draft.weight,
+                valid_from=draft.valid_from,
+                valid_to=draft.valid_to,
+                evidence=draft.evidence or draft.source_excerpt,
+                is_secret=draft.is_secret,
+                status=draft.status,
+                attributes=draft.attributes,
+            )
+            session.add(relationship)
+            session.flush()
+            session.add(build_relationship_revision(relationship))
+            record_relationship_change(
+                session,
+                relationship,
+                "created",
+                source_type="proposal",
+                source_id=proposal.id,
+                evidence=draft.evidence or draft.source_excerpt,
+            )
+            relationship_index[relationship_key] = relationship
+            result.created_relationships += 1
+            continue
+
+        previous_state = relationship_snapshot(relationship)
+        _merge_persisted_relationship(relationship, draft)
+        if relationship_snapshot(relationship) != previous_state:
+            session.add(
+                build_relationship_revision(
+                    relationship,
+                    effective_at=draft.valid_from,
+                    change_note="Updated from reviewed proposal",
+                )
+            )
+            record_relationship_change(
+                session,
+                relationship,
+                "updated",
+                before_state=previous_state,
+                source_type="proposal",
+                source_id=proposal.id,
+                evidence=draft.evidence or draft.source_excerpt,
+            )
+            updated_relationships += 1
+
+    rule_index = {
+        _world_rule_identity(rule.condition, rule.effect): rule
+        for rule in session.scalars(
+            select(WorldRule).where(WorldRule.world_id == proposal.world_id)
+        )
+    }
     for draft in payload.world_rules:
-        rule = WorldRule(world_id=proposal.world_id, **draft.model_dump(exclude={"source_excerpt"}))
-        session.add(rule)
-        result.created_world_rules += 1
+        rule_key = _world_rule_identity(draft.condition, draft.effect)
+        rule = rule_index.get(rule_key)
+        if rule is None:
+            rule = WorldRule(world_id=proposal.world_id, **draft.model_dump(exclude={"source_excerpt"}))
+            session.add(rule)
+            rule_index[rule_key] = rule
+            result.created_world_rules += 1
+            continue
+        before = _world_rule_state(rule)
+        _merge_persisted_world_rule(rule, draft)
+        if _world_rule_state(rule) != before:
+            updated_world_rules += 1
 
     table_client_ids: dict[str, str] = {}
+    table_index = {
+        _normalized_text(table.name): table
+        for table in session.scalars(
+            select(RandomTable).where(RandomTable.world_id == proposal.world_id)
+        )
+    }
     for draft in payload.random_tables:
-        table = _find_random_table_by_name(session, proposal.world_id, draft.name)
+        table_key = _normalized_text(draft.name)
+        table = table_index.get(table_key)
         if table is None:
             table = RandomTable(
                 world_id=proposal.world_id,
@@ -1094,20 +1331,51 @@ def _apply_payload(
             )
             session.add(table)
             session.flush()
+            table_index[table_key] = table
             result.created_random_tables += 1
         else:
-            table.description = table.description or draft.description
+            before = (table.name, table.description, table.is_secret)
+            table.description = _prefer_richer_text(table.description, draft.description)
             table.is_secret = table.is_secret or draft.is_secret
+            if (table.name, table.description, table.is_secret) != before:
+                updated_random_tables += 1
         table_client_ids[draft.client_id] = table.id
 
+    referenced_table_ids = {
+        draft.table_id or table_client_ids[draft.table_client_id or ""]
+        for draft in payload.random_table_rows
+    }
+    existing_rows = (
+        session.scalars(
+            select(RandomTableRow).where(RandomTableRow.table_id.in_(referenced_table_ids))
+        )
+        if referenced_table_ids
+        else []
+    )
+    row_index = {
+        _persisted_random_table_row_key(row.table_id, row.label, row.result): row
+        for row in existing_rows
+    }
     for draft in payload.random_table_rows:
         table_id = draft.table_id or table_client_ids[draft.table_client_id or ""]
-        row = RandomTableRow(
-            table_id=table_id,
-            **draft.model_dump(exclude={"table_id", "table_client_id", "source_excerpt"}),
-        )
-        session.add(row)
-        result.created_random_table_rows += 1
+        row_key = _persisted_random_table_row_key(table_id, draft.label, draft.result)
+        row = row_index.get(row_key)
+        if row is None:
+            row = RandomTableRow(
+                table_id=table_id,
+                **draft.model_dump(exclude={"table_id", "table_client_id", "source_excerpt"}),
+            )
+            session.add(row)
+            row_index[row_key] = row
+            result.created_random_table_rows += 1
+            continue
+        before = (row.label, row.result, row.weight, row.is_secret)
+        row.label = _prefer_richer_text(row.label, draft.label)
+        row.result = _prefer_richer_text(row.result, draft.result) or row.result
+        row.weight = draft.weight
+        row.is_secret = row.is_secret or draft.is_secret
+        if (row.label, row.result, row.weight, row.is_secret) != before:
+            updated_random_table_rows += 1
 
     record_world_change(
         session,
@@ -1121,8 +1389,10 @@ def _apply_payload(
         summary=(
             "Draft published: "
             f"entities +{result.created_entities}/~{result.updated_entities}, "
-            f"relationships +{result.created_relationships}, rules +{result.created_world_rules}, "
-            f"tables +{result.created_random_tables}, rows +{result.created_random_table_rows}"
+            f"relationships +{result.created_relationships}/~{updated_relationships}, "
+            f"rules +{result.created_world_rules}/~{updated_world_rules}, "
+            f"tables +{result.created_random_tables}/~{updated_random_tables}, "
+            f"rows +{result.created_random_table_rows}/~{updated_random_table_rows}"
         ),
     )
 
@@ -1161,22 +1431,56 @@ def _select_by_indices(items: list, indices: list[int] | None) -> list:
     return selected
 
 
+def _merge_persisted_relationship(relationship: Relationship, draft) -> None:
+    relationship.label = _prefer_richer_text(relationship.label, draft.label)
+    relationship.description = _prefer_richer_text(relationship.description, draft.description)
+    relationship.confidence = max(relationship.confidence, draft.confidence)
+    relationship.weight = draft.weight
+    relationship.valid_from = draft.valid_from or relationship.valid_from
+    relationship.valid_to = draft.valid_to or relationship.valid_to
+    relationship.evidence = _prefer_richer_text(
+        relationship.evidence,
+        draft.evidence or draft.source_excerpt,
+    )
+    relationship.is_secret = relationship.is_secret or draft.is_secret
+    if relationship.status != VerificationStatus.verified:
+        relationship.status = draft.status
+    relationship.attributes = _merge_attributes(relationship.attributes, draft.attributes)
+
+
+def _world_rule_state(rule: WorldRule) -> tuple:
+    return (
+        rule.priority,
+        rule.condition,
+        rule.effect,
+        tuple(rule.tags or []),
+        rule.is_active,
+        rule.is_secret,
+        rule.status,
+    )
+
+
+def _merge_persisted_world_rule(rule: WorldRule, draft) -> None:
+    rule.priority = max(rule.priority, draft.priority)
+    rule.condition = _prefer_richer_text(rule.condition, draft.condition) or rule.condition
+    rule.effect = _prefer_richer_text(rule.effect, draft.effect) or rule.effect
+    rule.tags = _merge_list(rule.tags, draft.tags)
+    rule.is_active = rule.is_active or draft.is_active
+    rule.is_secret = rule.is_secret or draft.is_secret
+    if rule.status != VerificationStatus.verified:
+        rule.status = draft.status
+
+
 def _merge_entity(entity: Entity, data: dict) -> None:
-    for key in ("type", "name", "summary", "description", "is_secret", "status"):
+    for key in ("type", "name", "summary", "description", "status"):
         value = data.get(key)
         if value is not None:
             setattr(entity, key, value)
 
+    entity.is_secret = entity.is_secret or bool(data.get("is_secret", False))
     entity.aliases = _merge_list(entity.aliases, data.get("aliases") or [])
     entity.tags = _merge_list(entity.tags, data.get("tags") or [])
     entity.attributes = {**entity.attributes, **(data.get("attributes") or {})}
-
-    if entity.status == VerificationStatus.verified and data.get("status") in {
-        VerificationStatus.proposed,
-        VerificationStatus.unknown,
-    }:
-        entity.status = data["status"]
-
 
 def _merge_list(current: list[str], incoming: list[str]) -> list[str]:
     merged = list(current)

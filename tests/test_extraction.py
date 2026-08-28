@@ -195,6 +195,46 @@ def test_dedupe_extraction_payload_matches_cyrillic_and_latin_names() -> None:
     assert deduped.entities[0].aliases == ["Alexander"]
 
 
+def test_dedupe_extraction_payload_keeps_distinct_numbered_entities() -> None:
+    payload = ExtractionPayload.model_validate(
+        {
+            "entities": [
+                {"client_id": "lab-115", "type": "location", "name": "Лаборатория T-115"},
+                {"client_id": "lab-116", "type": "location", "name": "Лаборатория T-116"},
+            ]
+        }
+    )
+
+    deduped = dedupe_extraction_payload(payload)
+
+    assert [entity.name for entity in deduped.entities] == ["Лаборатория T-115", "Лаборатория T-116"]
+
+
+def test_dedupe_relationship_weight_uses_median_instead_of_maximum() -> None:
+    payload = ExtractionPayload.model_validate(
+        {
+            "entities": [
+                {"client_id": "mira", "type": "character", "name": "Мира"},
+                {"client_id": "tower", "type": "location", "name": "Башня"},
+            ],
+            "relationships": [
+                {
+                    "source_client_id": "mira",
+                    "target_client_id": "tower",
+                    "type": "guards",
+                    "weight": weight,
+                }
+                for weight in (1, 4, 10)
+            ],
+        }
+    )
+
+    deduped = dedupe_extraction_payload(payload)
+
+    assert len(deduped.relationships) == 1
+    assert deduped.relationships[0].weight == 4
+
+
 def test_parse_extraction_payload_prefers_meaningful_client_id_over_long_summary() -> None:
     payload = parse_extraction_payload(
         json.dumps(

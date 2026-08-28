@@ -736,6 +736,7 @@ class EmbeddingJobRead(ORMModel):
     lease_owner: str | None
     lease_expires_at: datetime | None
     heartbeat_at: datetime | None
+    retry_at: datetime | None
     error: str | None
     created_at: datetime
     updated_at: datetime

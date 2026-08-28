@@ -147,11 +147,21 @@ structured editor and one publish action; selected apply/reject remain API
 compatibility operations.
 Deleting a proposal removes the draft/review record without applying it.
 
+Publishing also performs a canonical-world upsert. Same-type entities are
+matched without crossing entity-type boundaries; relationships use their
+source, target, and type; rules use condition and effect; random-table rows use
+table, label, and result. Existing secret records stay secret. A failure after
+any write rolls the entire publication back before the proposal error is saved.
+
 New chat answers, adventure packages, manual payloads, and document chunks do
 not create parallel pending drafts. The merge remaps temporary IDs, reconciles
 duplicate entities, keeps richer non-empty text, preserves the strongest
-relationship weight and confidence, and validates every reference again.
+relationship confidence, uses the median weight among equally confident
+observations instead of biasing it upward, and validates every reference again.
 Applied and rejected records remain as compact history.
+Fuzzy entity comparison uses a bounded candidate index instead of scanning the
+whole draft for every item, and distinct numeric identifiers such as `T-115`
+and `T-116` are never merged by edit-distance similarity.
 
 World-audit reports are also review input, not executable instructions. The UI
 splits report sections into selectable findings, leaves probable and weak items

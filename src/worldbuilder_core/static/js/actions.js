@@ -44,6 +44,7 @@ import {
 const CHAT_CONTEXT_MESSAGE_LIMIT = 12;
 let worldDataAbortController = null;
 const documentExtractionPolling = {};
+let embeddingOperation = 0;
 
 export function splitTags(value) {
   return value
@@ -872,30 +873,52 @@ function replaceDocument(document) {
 
 export async function buildEmbeddingIndex() {
   if (!requireWorld() || state.embeddingBusy) return;
+  const worldId = state.selectedWorldId;
+  const operation = ++embeddingOperation;
   state.embeddingBusy = true;
   state.embeddingJob = null;
   renderDocuments();
   try {
-    let job = await api(`/worlds/${state.selectedWorldId}/embeddings/process?batch_size=16`, { method: "POST" });
+    let job = await api(`/worlds/${worldId}/embeddings/process?batch_size=16`, { method: "POST" });
+    if (operation !== embeddingOperation) return;
     state.embeddingJob = job;
-    while (state.embeddingBusy && !["completed", "failed", "cancelled"].includes(job.status)) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    while (
+      operation === embeddingOperation &&
+      state.embeddingBusy &&
+      state.selectedWorldId === worldId &&
+      !["completed", "failed", "cancelled"].includes(job.status)
+    ) {
+      await new Promise((resolve) => window.setTimeout(resolve, embeddingJobPollDelay(job)));
+      if (operation !== embeddingOperation || !state.embeddingBusy || state.selectedWorldId !== worldId) return;
       job = await api(`/embedding-jobs/${job.id}`);
+      if (operation !== embeddingOperation) return;
       state.embeddingJob = job;
       renderDocuments();
     }
+    if (operation !== embeddingOperation || state.selectedWorldId !== worldId) return;
     if (job.status === "failed") throw new Error(job.error || t("embeddings.failed"));
-    state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embedding-status`);
+    state.embeddingStatus = await api(`/worlds/${worldId}/embedding-status`);
     await refreshWorldDataQuietly();
     toast(t("embeddings.ready"));
   } finally {
-    state.embeddingBusy = false;
-    renderDocuments();
+    if (operation === embeddingOperation) {
+      state.embeddingBusy = false;
+      renderDocuments();
+    }
   }
+}
+
+function embeddingJobPollDelay(job) {
+  if (job.retry_at) {
+    const remaining = new Date(job.retry_at).getTime() - Date.now();
+    return Math.max(2_500, Math.min(remaining, 10_000));
+  }
+  return job.status === "running" ? 3_000 : 5_000;
 }
 
 export async function clearEmbeddingIndex() {
   if (!requireWorld() || !window.confirm(t("embeddings.clearConfirm"))) return;
+  embeddingOperation += 1;
   state.embeddingBusy = false;
   state.embeddingJob = null;
   state.embeddingStatus = await api(`/worlds/${state.selectedWorldId}/embeddings`, { method: "DELETE" });

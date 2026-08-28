@@ -78,6 +78,13 @@ through the model-repair and retry flow instead of being silently accepted.
 Long-running document jobs show elapsed wall time and an ETA derived from average
 completed-chunk time; retries and pauses can move the ETA.
 
+Embedding jobs use the same bounded retry discipline instead of immediately
+hammering a failed local provider. A successful batch resets attempts. The index
+rejects non-finite vectors and a dimension change within the same model, while a
+configured model change cancels the stale active job and starts a new index pass.
+Before vectors are committed, the worker atomically rechecks its lease; a late
+provider response cannot restore an index that the user already cleared.
+
 ## API
 
 Inspect current config:

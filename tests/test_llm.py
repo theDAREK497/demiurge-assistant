@@ -118,6 +118,24 @@ def test_openai_compatible_client_parses_embedding_batch() -> None:
     assert vectors == [[1.0, 0.0], [0.0, 1.0]]
 
 
+def test_openai_compatible_client_rejects_non_finite_embeddings() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"model": "embed-model", "data": [{"index": 0, "embedding": [1.0, "NaN"]}]},
+        )
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://llm.test/v1",
+        default_model="embed-model",
+        timeout_seconds=10,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="non-finite"):
+        asyncio.run(client.embeddings(["one"]))
+
+
 def test_openai_response_parser_rejects_malformed_payload() -> None:
     with pytest.raises(LLMProviderError):
         parse_openai_chat_response({"choices": []}, fallback_model="story-model")

@@ -1,6 +1,11 @@
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from worldbuilder_core.services.document_ingestion import _read_docx, _tail_overlap_at_boundary
+from worldbuilder_core.services.document_ingestion import (
+    _is_safe_near_duplicate,
+    _read_docx,
+    _simhash,
+    _tail_overlap_at_boundary,
+)
 
 
 def test_document_overlap_never_starts_inside_a_word() -> None:
@@ -9,6 +14,30 @@ def test_document_overlap_never_starts_inside_a_word() -> None:
     overlap = _tail_overlap_at_boundary(text, 14)
 
     assert overlap == "gamma delta"
+
+
+def test_near_duplicate_guard_never_discards_a_changed_name() -> None:
+    original = "Александр вошел в лабораторию и увидел красный кристалл. " * 70
+    changed = original.replace("Александр", "Алексей", 1)
+
+    distance = (_simhash(original.casefold()) ^ _simhash(changed.casefold())).bit_count()
+
+    assert distance <= 3
+    assert _is_safe_near_duplicate(original, changed) is False
+
+
+def test_near_duplicate_guard_preserves_meaningful_punctuation() -> None:
+    assert not _is_safe_near_duplicate(
+        "Александр вошел в лабораторию.",
+        "Александр вошел в лабораторию?",
+    )
+
+
+def test_near_duplicate_guard_accepts_typographic_variants() -> None:
+    assert _is_safe_near_duplicate(
+        '"Александр" - исследователь...',
+        "“Александр” — исследователь…",
+    )
 
 
 def test_docx_tables_keep_rows_and_columns(tmp_path) -> None:

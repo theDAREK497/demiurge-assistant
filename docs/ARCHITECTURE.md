@@ -204,6 +204,9 @@ Imported knowledge sources participate in hybrid retrieval. Lexical matches are
 combined with cosine similarity from an OpenAI-compatible embedding endpoint.
 Indexing is resumable in bounded batches and falls back to lexical retrieval
 when no embedding model is configured or the provider is unavailable.
+Entity aliases participate in SQL candidate selection and ranking, and are
+included in model context. Vector-only retrieval remains available for short
+queries that do not produce a safe lexical term.
 
 ### World Experience And Causality
 
@@ -264,7 +267,7 @@ streamed upload
   -> resumable chunk manifest
   -> batches of at most 500 chunks
   -> normalized SHA-256 exact deduplication
-  -> conservative SimHash near-duplicate check
+  -> SimHash candidate lookup + lossless token equality guard
   -> shared knowledge chunk + per-document position link
   -> role-aware retrieval for chat
 ```
@@ -274,6 +277,10 @@ the completed positions again. Secret sources are never added to Player
 context. The local SQLite runtime is suitable for one-machine use; a
 Multi-worker deployment uses PostgreSQL, pgvector search, and an external job
 worker.
+
+SimHash never decides deletion by itself. A near candidate is shared only when
+its normalized word and number sequence is identical, so a changed name, date,
+or fact cannot be discarded as a duplicate.
 
 After chunking, the master can enqueue bounded AI extraction:
 
@@ -320,7 +327,12 @@ FastAPI -> embedding_jobs/document_extraction_jobs <- AI worker(s)
 
 Workers claim jobs with `FOR UPDATE SKIP LOCKED`. A lease and heartbeat allow a
 different worker to recover work after a crashed process. Provider failures are
-retried up to five times with checkpoint-safe backoff. SQLite keeps a single-machine fallback without
+retried up to five times with checkpoint-safe backoff. Successful embedding
+batches reset their retry budget; configuration errors fail immediately, model
+switches cancel stale active jobs, and an unexpected job exception is isolated
+so the worker loop stays alive. Vector writes revalidate the active job lease in
+the same transaction, preventing late provider responses from defeating a
+cancellation. SQLite keeps a single-machine fallback without
 `SKIP LOCKED` or a database vector index.
 
 ### Import/Export
@@ -355,6 +367,12 @@ LLM/chat text
 ```
 
 The LLM should propose changes. The core decides what is safe to write.
+
+Publication is atomic. PostgreSQL serializes proposal mutation per world and
+locks the changed proposal row. Repeated reviewed entities, relationships,
+rules, tables, and table rows update their canonical records instead of creating
+parallel copies. Existing secrecy is monotonic in AI publication: a public
+draft cannot expose an already secret canonical object.
 
 Current API:
 

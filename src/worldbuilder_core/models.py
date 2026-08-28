@@ -478,6 +478,7 @@ class EmbeddingJob(TimestampMixin, Base):
     lease_owner: Mapped[str | None] = mapped_column(String(120), index=True, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 

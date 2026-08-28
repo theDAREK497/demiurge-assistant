@@ -1,7 +1,8 @@
+import json
 import re
 from math import sqrt
 
-from sqlalchemy import Select, and_, or_, select
+from sqlalchemy import Select, String, and_, cast, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from worldbuilder_core.models import (
@@ -234,22 +235,34 @@ def _select_entities(
         stmt = stmt.where(Entity.is_secret.is_(False))
     if query:
         full_pattern = f"%{query.strip()}%"
+        text_fields = (
+            Entity.name,
+            Entity.summary,
+            Entity.description,
+        )
+        alias_field = cast(Entity.aliases, String)
         term_filters = []
         for term in _query_terms(query):
+            variants = {term, term.capitalize(), term.upper()}
             term_filters.append(
                 or_(
-                    *[
+                    *(
                         field.ilike(f"%{variant}%")
-                        for variant in {term, term.capitalize(), term.upper()}
-                        for field in (Entity.name, Entity.summary, Entity.description)
-                    ]
+                        for variant in variants
+                        for field in text_fields
+                    ),
+                    *(
+                        alias_field.ilike(f"%{variant}%")
+                        for value in variants
+                        for variant in _json_storage_search_variants(value)
+                    ),
                 )
             )
-        filters = [
-            Entity.name.ilike(full_pattern),
-            Entity.summary.ilike(full_pattern),
-            Entity.description.ilike(full_pattern),
-        ]
+        filters = [field.ilike(full_pattern) for field in text_fields]
+        filters.extend(
+            alias_field.ilike(f"%{variant}%")
+            for variant in _json_storage_search_variants(query.strip())
+        )
         if term_filters:
             filters.extend([and_(*term_filters), *term_filters])
         stmt = stmt.where(or_(*filters))
@@ -276,23 +289,33 @@ def _query_terms(query: str) -> list[str]:
     return terms[:6]
 
 
+def _json_storage_search_variants(value: str) -> set[str]:
+    return {
+        value,
+        json.dumps(value, ensure_ascii=True)[1:-1],
+    }
+
+
 def _entity_query_score(entity: Entity, terms: list[str]) -> int:
     if not terms:
         return 0
     fields = [
         str(entity.name or "").casefold(),
+        " ".join(entity.aliases or []).casefold(),
         str(entity.summary or "").casefold(),
         str(entity.description or "").casefold(),
     ]
+    hit_weights = (8, 7, 4, 2)
+    phrase_weights = (60, 55, 30, 20)
     score = 0
     exact_phrase = " ".join(terms)
     for index, field in enumerate(fields):
         hits = sum(term in field for term in terms)
-        score += hits * (6 - index * 2)
+        score += hits * hit_weights[index]
         if hits == len(terms):
-            score += 12 - index * 3
+            score += phrase_weights[index] // 4
         if exact_phrase and exact_phrase in field:
-            score += 50 - index * 10
+            score += phrase_weights[index]
     return score
 
 
@@ -374,15 +397,22 @@ def _select_document_chunks(
     if max_chunks <= 0:
         return []
     terms = _search_terms(query)
-    if not terms:
-        return []
-    lexical_filter = or_(*(KnowledgeChunk.content.ilike(f"%{term}%") for term in terms))
     vector_search = bool(query_embedding and embedding_model)
-    match_filter = (
-        or_(lexical_filter, KnowledgeChunk.embedding_model == embedding_model)
-        if vector_search
-        else lexical_filter
+    if not terms and not vector_search:
+        return []
+    lexical_filter = (
+        or_(*(KnowledgeChunk.content.ilike(f"%{term}%") for term in terms))
+        if terms
+        else None
     )
+    if vector_search:
+        match_filter = (
+            or_(lexical_filter, KnowledgeChunk.embedding_model == embedding_model)
+            if lexical_filter is not None
+            else KnowledgeChunk.embedding_model == embedding_model
+        )
+    else:
+        match_filter = lexical_filter
     stmt = (
         select(KnowledgeChunk, DocumentChunkLink, KnowledgeDocument)
         .join(DocumentChunkLink, DocumentChunkLink.chunk_id == KnowledgeChunk.id)
@@ -500,8 +530,9 @@ def render_context_text(
         lines.append("Relevant entities:")
         for entity in entities:
             detail = entity.summary or entity.description or "No summary."
+            aliases = f" (aliases: {', '.join(entity.aliases)})" if entity.aliases else ""
             lines.append(
-                f"- {entity.type}: {entity.name} [{entity.id}] - "
+                f"- {entity.type}: {entity.name}{aliases} [{entity.id}] - "
                 f"{_compact_context_value(detail, 1_000)}"
             )
 

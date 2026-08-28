@@ -1,4 +1,5 @@
 import asyncio
+from math import isfinite
 from time import monotonic
 from typing import Any
 
@@ -14,6 +15,7 @@ class LLMProviderError(Exception):
 
 
 STRUCTURED_OUTPUT_RETRY_SECONDS = 3_600
+STRUCTURED_OUTPUT_CACHE_MAX_ENTRIES = 256
 TRANSIENT_CHAT_RETRIES = 1
 TRANSIENT_CHAT_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 _structured_output_disabled_until: dict[tuple[str, str], float] = {}
@@ -40,6 +42,7 @@ class OpenAICompatibleLLMClient:
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
         structured_output_key = (self.base_url, model)
+        _prune_structured_output_cache(monotonic())
         structured_output_requested = "response_format" in payload
         if _structured_output_disabled_until.get(structured_output_key, 0) > monotonic():
             payload.pop("response_format", None)
@@ -63,6 +66,7 @@ class OpenAICompatibleLLMClient:
                             _structured_output_disabled_until[structured_output_key] = (
                                 monotonic() + STRUCTURED_OUTPUT_RETRY_SECONDS
                             )
+                            _prune_structured_output_cache(monotonic())
                             payload.pop("response_format", None)
                             response = await client.post(
                                 f"{self.base_url}/chat/completions",
@@ -121,6 +125,8 @@ class OpenAICompatibleLLMClient:
             raise LLMProviderError("Embedding provider returned malformed vectors") from exc
         if len(vectors) != len(inputs) or any(not vector for vector in vectors):
             raise LLMProviderError("Embedding provider returned an unexpected vector count")
+        if any(not isfinite(value) for vector in vectors for value in vector):
+            raise LLMProviderError("Embedding provider returned non-finite vector values")
         dimensions = len(vectors[0])
         if any(len(vector) != dimensions for vector in vectors):
             raise LLMProviderError("Embedding vectors have inconsistent dimensions")
@@ -135,6 +141,16 @@ class OpenAICompatibleLLMClient:
 
 def _is_transient_chat_response(response: httpx.Response) -> bool:
     return response.status_code in TRANSIENT_CHAT_STATUS_CODES or "channel error" in response.text.casefold()
+
+
+def _prune_structured_output_cache(now: float) -> None:
+    for key, expires_at in list(_structured_output_disabled_until.items()):
+        if expires_at <= now:
+            _structured_output_disabled_until.pop(key, None)
+    overflow = len(_structured_output_disabled_until) - STRUCTURED_OUTPUT_CACHE_MAX_ENTRIES
+    if overflow > 0:
+        for key, _ in sorted(_structured_output_disabled_until.items(), key=lambda item: item[1])[:overflow]:
+            _structured_output_disabled_until.pop(key, None)
 
 
 def build_llm_client(

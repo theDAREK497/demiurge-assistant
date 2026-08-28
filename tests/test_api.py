@@ -63,6 +63,174 @@ def test_duplicate_candidates_keep_ambiguous_short_names_separate() -> None:
     assert all("ambiguous_short_name" in candidate["reasons"] for candidate in candidates)
 
 
+def test_proposal_matching_never_changes_an_entity_of_another_type() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Type Guard"}).json()["id"]
+    location = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Аврора", "summary": "Полярная станция."},
+    ).json()
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Аврора является руководителем экспедиции.",
+            "payload": {
+                "entities": [
+                    {
+                        "client_id": "aurora-character",
+                        "type": "character",
+                        "name": "Аврора",
+                        "summary": "Руководитель экспедиции.",
+                    }
+                ]
+            },
+        },
+    ).json()
+
+    response = client.post(f"/api/proposals/{proposal['id']}/apply")
+
+    assert response.status_code == 200, response.text
+    entities = client.get(f"/api/worlds/{world_id}/entities").json()
+    assert {(entity["name"], entity["type"]) for entity in entities} == {
+        ("Аврора", "location"),
+        ("Аврора", "character"),
+    }
+    assert next(entity for entity in entities if entity["type"] == "location")["id"] == location["id"]
+
+
+def test_repeated_proposal_publish_upserts_canonical_objects_and_keeps_secrets() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Canonical Guard"}).json()["id"]
+    source = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "character", "name": "Мира", "is_secret": True},
+    ).json()
+    target = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={"type": "location", "name": "Башня"},
+    ).json()
+    relationship = client.post(
+        f"/api/worlds/{world_id}/relationships",
+        json={
+            "source_entity_id": source["id"],
+            "target_entity_id": target["id"],
+            "type": "guards",
+            "label": "тайно охраняет",
+            "weight": 9,
+            "is_secret": True,
+        },
+    ).json()
+    client.post(
+        f"/api/worlds/{world_id}/world-rules",
+        json={
+            "condition": "Башня открыта.",
+            "effect": "Звон слышен во всем городе.",
+            "is_secret": True,
+        },
+    )
+    table = client.post(
+        f"/api/worlds/{world_id}/random-tables",
+        json={"name": "Шепот башни"},
+    ).json()
+    client.post(
+        f"/api/random-tables/{table['id']}/rows",
+        json={"label": "1", "result": "Мира проходит по стене.", "weight": 8, "is_secret": True},
+    )
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={
+            "source_text": "Мира охраняет Башню. Таблица и правило подтверждены.",
+            "payload": {
+                "entities": [
+                    {
+                        "match_entity_id": source["id"],
+                        "type": "character",
+                        "name": "Мира",
+                        "summary": "Хранительница Башни.",
+                        "is_secret": False,
+                    }
+                ],
+                "relationships": [
+                    {
+                        "source_entity_id": source["id"],
+                        "target_entity_id": target["id"],
+                        "type": "guards",
+                        "label": "охраняет Башню",
+                        "weight": 3,
+                        "is_secret": False,
+                    }
+                ],
+                "world_rules": [
+                    {
+                        "condition": "Башня открыта.",
+                        "effect": "Звон слышен во всем городе.",
+                        "is_secret": False,
+                    }
+                ],
+                "random_tables": [
+                    {"client_id": "tower-whispers", "name": "Шепот башни", "is_secret": False}
+                ],
+                "random_table_rows": [
+                    {
+                        "table_client_id": "tower-whispers",
+                        "label": "1",
+                        "result": "Мира проходит по стене.",
+                        "weight": 2,
+                        "is_secret": False,
+                    }
+                ],
+            },
+        },
+    ).json()
+
+    response = client.post(f"/api/proposals/{proposal['id']}/apply")
+
+    assert response.status_code == 200, response.text
+    stored_source = client.get(f"/api/entities/{source['id']}").json()
+    assert stored_source["is_secret"] is True
+    relationships = client.get(f"/api/worlds/{world_id}/relationships").json()
+    assert len(relationships) == 1
+    assert relationships[0]["id"] == relationship["id"]
+    assert relationships[0]["weight"] == 3
+    assert relationships[0]["is_secret"] is True
+    assert len(client.get(f"/api/worlds/{world_id}/relationship-revisions").json()) == 2
+    rules = client.get(f"/api/worlds/{world_id}/world-rules?active_only=false").json()
+    assert len(rules) == 1
+    assert rules[0]["is_secret"] is True
+    tables = client.get(f"/api/worlds/{world_id}/random-tables").json()
+    assert len(tables) == 1
+    assert len(tables[0]["rows"]) == 1
+    assert tables[0]["rows"][0]["weight"] == 2
+    assert tables[0]["rows"][0]["is_secret"] is True
+
+
+def test_proposal_apply_rolls_back_partial_writes(monkeypatch) -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Atomic Publish"}).json()["id"]
+    proposal = client.post(
+        f"/api/worlds/{world_id}/proposals",
+        json={"source_text": "Failure fixture.", "payload": {}},
+    ).json()
+
+    import worldbuilder_core.services.proposals as proposal_service
+    from worldbuilder_core.models import Entity
+
+    def fail_after_write(session, stored_proposal, _payload):
+        session.add(Entity(world_id=stored_proposal.world_id, type="concept", name="Partial write"))
+        session.flush()
+        raise proposal_service.ProposalValidationError("forced failure")
+
+    monkeypatch.setattr(proposal_service, "_apply_payload", fail_after_write)
+
+    response = client.post(f"/api/proposals/{proposal['id']}/apply")
+
+    assert response.status_code == 422
+    assert client.get(f"/api/worlds/{world_id}/entities").json() == []
+    stored_proposal = client.get(f"/api/proposals/{proposal['id']}").json()
+    assert stored_proposal["status"] == "pending"
+    assert stored_proposal["error"] == "forced failure"
+
+
 def test_merge_entities_preserves_data_and_rewires_references() -> None:
     client = build_client()
     world_id = client.post("/api/worlds", json={"name": "Merge"}).json()["id"]
@@ -148,6 +316,10 @@ def test_merge_entities_preserves_data_and_rewires_references() -> None:
     relationships = client.get(f"/api/worlds/{world_id}/relationships").json()
     assert len(relationships) == 1
     assert relationships[0]["source_entity_id"] == primary["id"]
+    revisions = client.get(f"/api/worlds/{world_id}/relationship-revisions").json()
+    assert len(revisions) == 2
+    assert {revision["relationship_id"] for revision in revisions} == {relationships[0]["id"]}
+    assert any("Merged duplicate entity" in (revision["change_note"] or "") for revision in revisions)
     assert client.get(f"/api/worlds/{world_id}/map-pins").json()[0]["linked_entity_id"] == primary["id"]
     assert client.get(f"/api/worlds/{world_id}/detective-board").json()["nodes"][0]["entity_id"] == primary["id"]
 
@@ -990,6 +1162,27 @@ def test_world_context_respects_player_visibility() -> None:
     assert [table["name"] for table in player_payload["random_tables"]] == ["Gate rumors"]
     assert "Silver Choir" not in player_payload["context_text"]
     assert "Choir secrets" not in player_payload["context_text"]
+
+
+def test_world_context_finds_entities_by_alias_and_exposes_alias_to_the_model() -> None:
+    client = build_client()
+    world_id = client.post("/api/worlds", json={"name": "Alias Search"}).json()["id"]
+    entity = client.post(
+        f"/api/worlds/{world_id}/entities",
+        json={
+            "type": "character",
+            "name": "Александр Тимофеев",
+            "aliases": ["Саша"],
+            "summary": "Исследователь проекта Эон.",
+        },
+    ).json()
+
+    response = client.get(f"/api/worlds/{world_id}/context?role=master&q=Саша")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert [item["id"] for item in payload["entities"]] == [entity["id"]]
+    assert "aliases: Саша" in payload["context_text"]
 
 
 def test_extraction_proposal_apply_and_reject_flow() -> None:

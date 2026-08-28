@@ -243,6 +243,10 @@ Roadmap items still intentionally open:
 - the extraction worker also repairs already stored legacy overlaps at runtime:
   repeated predecessor text is context-only, not extracted again, and a lone
   lowercase boundary fragment cannot become an entity name.
+- the pipeline audit now keeps near-chunk deduplication lossless, uses indexed
+  same-type entity matching, searches aliases in RAG, atomically upserts reviewed
+  canonical objects without reducing secrecy, and applies bounded embedding
+  retries without letting one unexpected job error terminate the worker loop.
 
 ## How To Run
 

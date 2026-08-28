@@ -6,8 +6,10 @@ The first retrieval layer builds a compact, role-aware world context from:
 - matching wiki entities;
 - relationships touching those entities.
 
-It is intentionally structured and SQL-based for the MVP. Vector search can be
-added later without changing the public goal of the service.
+Retrieval combines structured SQL candidates with optional embedding similarity.
+It falls back to lexical search when the embedding provider is unavailable.
+Names stored as aliases are searchable and are rendered into model context, so
+an alias can resolve to the canonical full entity name.
 
 ## Context Endpoint
 

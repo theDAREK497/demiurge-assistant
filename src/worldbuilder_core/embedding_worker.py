@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import logging
 import time
 from threading import Event
 
@@ -14,6 +15,8 @@ from worldbuilder_core.services.embedding_jobs import (
     worker_identity,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def run_worker(
     *,
@@ -24,28 +27,52 @@ def run_worker(
     create_db_and_tables()
     worker_id = worker_identity()
     while stop_event is None or not stop_event.is_set():
-        with SessionLocal() as session:
-            job = claim_embedding_job(session, worker_id)
-        if job is not None:
+        try:
             with SessionLocal() as session:
-                asyncio.run(run_embedding_job_batch(session, job.id, worker_id))
+                job = claim_embedding_job(session, worker_id)
+        except Exception:
+            logger.exception("Embedding job claim failed")
+            if once:
+                return
+            _wait_for_next_poll(stop_event, poll_seconds)
+            continue
+        if job is not None:
+            try:
+                with SessionLocal() as session:
+                    asyncio.run(run_embedding_job_batch(session, job.id, worker_id))
+            except Exception:
+                logger.exception("Embedding job %s failed unexpectedly", job.id)
             if once:
                 return
             continue
-        with SessionLocal() as session:
-            extraction_job = claim_document_extraction_job(session, worker_id)
+        try:
+            with SessionLocal() as session:
+                extraction_job = claim_document_extraction_job(session, worker_id)
+        except Exception:
+            logger.exception("Document extraction job claim failed")
+            if once:
+                return
+            _wait_for_next_poll(stop_event, poll_seconds)
+            continue
         if extraction_job is None:
             if once:
                 return
-            if stop_event is None:
-                time.sleep(poll_seconds)
-            else:
-                stop_event.wait(poll_seconds)
+            _wait_for_next_poll(stop_event, poll_seconds)
             continue
-        with SessionLocal() as session:
-            asyncio.run(run_document_extraction_batch(session, extraction_job.id, worker_id))
+        try:
+            with SessionLocal() as session:
+                asyncio.run(run_document_extraction_batch(session, extraction_job.id, worker_id))
+        except Exception:
+            logger.exception("Document extraction job %s failed unexpectedly", extraction_job.id)
         if once:
             return
+
+
+def _wait_for_next_poll(stop_event: Event | None, poll_seconds: float) -> None:
+    if stop_event is None:
+        time.sleep(poll_seconds)
+    else:
+        stop_event.wait(poll_seconds)
 
 
 def main() -> None:
