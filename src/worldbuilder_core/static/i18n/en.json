@@ -450,6 +450,7 @@
   "llm.title": "AI connection",
   "llm.baseUrl": "Base URL",
   "llm.defaultModel": "Default model",
+  "llm.modelPlaceholder": "not selected",
   "llm.chatModel": "Chat model",
   "llm.extractorModel": "Extractor model",
   "llm.summarizerModel": "Summarizer model",

@@ -640,7 +640,7 @@ class LLMConfigRead(BaseModel):
 
 class LLMConfigUpdate(BaseModel):
     base_url: str = Field(min_length=1, max_length=2_048)
-    default_model: str = Field(min_length=1, max_length=200)
+    default_model: str = Field(default="", max_length=200)
     chat_model: str | None = Field(default=None, max_length=200)
     extractor_model: str | None = Field(default=None, max_length=200)
     summarizer_model: str | None = Field(default=None, max_length=200)

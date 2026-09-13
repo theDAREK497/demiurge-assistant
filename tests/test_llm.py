@@ -56,6 +56,23 @@ def test_openai_compatible_client_chat_parses_response() -> None:
     assert response.usage.total_tokens == 20
 
 
+def test_openai_compatible_client_rejects_empty_model_before_request() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("Provider must not be called without an explicit model")
+
+    client = OpenAICompatibleLLMClient(
+        base_url="http://llm.test/v1",
+        default_model="",
+        timeout_seconds=10,
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(LLMProviderError, match="Configure a chat or default model"):
+        asyncio.run(client.chat(LLMChatRequest(messages=[LLMMessage(role="user", content="Hello")])))
+    with pytest.raises(LLMProviderError, match="Configure an embedding model"):
+        asyncio.run(client.embeddings(["Hello"]))
+
+
 def test_chat_caches_unsupported_structured_output() -> None:
     calls: list[dict] = []
 

@@ -38,7 +38,9 @@ class OpenAICompatibleLLMClient:
         self.transport = transport
 
     async def chat(self, request: LLMChatRequest) -> LLMChatResponse:
-        model = request.model or self.default_model
+        model = str(request.model or self.default_model or "").strip()
+        if not model:
+            raise LLMProviderError("Configure a chat or default model before sending an AI request")
         payload = request.model_dump(exclude_none=True)
         payload["model"] = model
         structured_output_key = (self.base_url, model)
@@ -103,7 +105,9 @@ class OpenAICompatibleLLMClient:
         return parse_openai_chat_response(data, fallback_model=model)
 
     async def embeddings(self, inputs: list[str], *, model: str | None = None) -> tuple[str, list[list[float]]]:
-        selected_model = model or self.default_model
+        selected_model = str(model or self.default_model or "").strip()
+        if not selected_model:
+            raise LLMProviderError("Configure an embedding model before building the semantic index")
         if not inputs:
             return selected_model, []
         try:
@@ -166,7 +170,7 @@ def build_llm_client(
     return OpenAICompatibleLLMClient(
         base_url=base_url,
         api_key=api_key,
-        default_model=default_model or model,
+        default_model=str(default_model or model or "").strip(),
         timeout_seconds=timeout_seconds,
     )
 

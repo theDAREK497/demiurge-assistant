@@ -450,6 +450,7 @@
   "llm.title": "Подключение ИИ",
   "llm.baseUrl": "Base URL",
   "llm.defaultModel": "Модель по умолчанию",
+  "llm.modelPlaceholder": "не выбрана",
   "llm.chatModel": "Модель для чата",
   "llm.extractorModel": "Модель для извлечения фактов",
   "llm.summarizerModel": "Модель для саммари",

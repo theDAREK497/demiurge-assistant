@@ -46,7 +46,9 @@ Content-Type: application/json
 }
 ```
 
-Model role fields are optional. Empty role fields fall back to `default_model`.
+No model name is built into a clean installation. Model role fields are optional
+and empty role fields fall back to `default_model`. If both are empty, the
+backend rejects the AI request before contacting the provider.
 The current pipeline uses:
 
 - `chat_model` for normal chat and world-aware chat;

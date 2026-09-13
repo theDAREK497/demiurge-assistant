@@ -374,6 +374,12 @@ rules, tables, and table rows update their canonical records instead of creating
 parallel copies. Existing secrecy is monotonic in AI publication: a public
 draft cannot expose an already secret canonical object.
 
+Before review and again before publication, proposal relationships are grouped
+by directed entity pair. Self-relationships are discarded. Repeated pair
+observations become one bounded-strength relationship while retaining merged
+types, labels, evidence, and support counts in its attributes. `A -> B` and
+`B -> A` remain distinct facts.
+
 Current API:
 
 - `POST /api/worlds/{world_id}/proposals`;

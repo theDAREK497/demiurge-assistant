@@ -2,6 +2,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from difflib import SequenceMatcher
+from math import isfinite
 from statistics import median
 
 from sqlalchemy import select, text
@@ -628,27 +629,19 @@ def _dedupe_entities(entities: list) -> tuple[list, dict[str, str]]:
 
 
 def _dedupe_relationships(relationships: list, client_id_aliases: dict[str, str]) -> list:
-    remapped = []
+    grouped: dict[tuple[str, str], list] = defaultdict(list)
     for draft in relationships:
         updates = {}
         if draft.source_client_id in client_id_aliases:
             updates["source_client_id"] = client_id_aliases[draft.source_client_id]
         if draft.target_client_id in client_id_aliases:
             updates["target_client_id"] = client_id_aliases[draft.target_client_id]
-        remapped.append(draft.model_copy(update=updates) if updates else draft)
-    deduped = _dedupe_by_key(remapped, _relationship_key, _merge_relationship_draft)
-    observations_by_key: dict[tuple, list] = defaultdict(list)
-    for draft in remapped:
-        observations_by_key[_relationship_key(draft)].append(draft)
-    result = []
-    for draft in deduped:
-        observations = observations_by_key[_relationship_key(draft)]
-        strongest_confidence = max(item.confidence for item in observations)
-        strongest_weights = [
-            item.weight for item in observations if item.confidence == strongest_confidence
-        ]
-        result.append(draft.model_copy(update={"weight": float(median(strongest_weights))}))
-    return result
+        candidate = draft.model_copy(update=updates) if updates else draft
+        pair_key = _relationship_key(candidate)
+        if pair_key[0] == pair_key[1]:
+            continue
+        grouped[pair_key].append(candidate)
+    return [_merge_relationship_group(observations) for observations in grouped.values()]
 
 
 def _dedupe_random_tables(random_tables: list) -> tuple[list, dict[str, str]]:
@@ -725,11 +718,10 @@ def _entity_key(draft) -> tuple:
     return ("new", str(draft.type), _normalized_text(draft.name))
 
 
-def _relationship_key(draft) -> tuple:
+def _relationship_key(draft) -> tuple[str, str]:
     return (
         draft.source_entity_id or f"client:{draft.source_client_id}",
         draft.target_entity_id or f"client:{draft.target_client_id}",
-        _normalized_text(draft.type),
     )
 
 
@@ -796,6 +788,123 @@ def _merge_relationship_draft(current, incoming):
             "attributes": _merge_attributes(current.attributes, incoming.attributes),
         }
     )
+
+
+def _merge_relationship_group(observations: list):
+    representative = max(
+        observations,
+        key=lambda item: (
+            item.confidence,
+            item.weight,
+            len(item.evidence or ""),
+            len(item.description or ""),
+        ),
+    )
+    merged = representative
+    for observation in observations:
+        if observation is not representative:
+            merged = _merge_relationship_draft(merged, observation)
+
+    support_count = sum(_relationship_support_count(item) for item in observations)
+    support_confidence = max(_relationship_support_confidence(item) for item in observations)
+    support_weights = [
+        weight
+        for item in observations
+        if _relationship_support_confidence(item) == support_confidence
+        for weight in _relationship_support_weights(item)
+    ][:32]
+    base_weight = float(median(support_weights))
+    support_bonus = min(2.0, 0.5 * max(0, len(support_weights) - 1))
+
+    attributes = dict(merged.attributes or {})
+    attributes.update(
+        {
+            "support_count": support_count,
+            "support_confidence": support_confidence,
+            "support_weights": support_weights,
+            "merged_types": _relationship_metadata(observations, "type", "merged_types"),
+            "merged_labels": _relationship_metadata(observations, "label", "merged_labels"),
+        }
+    )
+    return merged.model_copy(
+        update={
+            "type": representative.type,
+            "label": representative.label or merged.label,
+            "source_excerpt": _merge_distinct_text_values(
+                [item.source_excerpt for item in observations],
+                limit=240,
+            ),
+            "description": _merge_distinct_text_values(
+                [item.description for item in observations],
+                limit=50_000,
+            ),
+            "evidence": _merge_distinct_text_values(
+                [item.evidence for item in observations],
+                limit=5_000,
+            ),
+            "confidence": support_confidence,
+            "weight": min(10.0, round(base_weight + support_bonus, 2)),
+            "status": representative.status,
+            "attributes": attributes,
+        }
+    )
+
+
+def _relationship_support_count(draft) -> int:
+    value = (draft.attributes or {}).get("support_count", 1)
+    if isinstance(value, (int, float)) and isfinite(float(value)):
+        return min(5_000, max(1, int(value)))
+    return 1
+
+
+def _relationship_support_confidence(draft) -> float:
+    value = (draft.attributes or {}).get("support_confidence", draft.confidence)
+    if isinstance(value, (int, float)) and isfinite(float(value)) and 0 <= float(value) <= 1:
+        return float(value)
+    return draft.confidence
+
+
+def _relationship_support_weights(draft) -> list[float]:
+    values = (draft.attributes or {}).get("support_weights")
+    if isinstance(values, list):
+        weights = [
+            float(value)
+            for value in values
+            if isinstance(value, (int, float)) and isfinite(float(value)) and 0 <= float(value) <= 10
+        ]
+        if weights:
+            return weights[:32]
+    return [draft.weight]
+
+
+def _relationship_metadata(observations: list, field: str, attribute: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for observation in observations:
+        stored = (observation.attributes or {}).get(attribute)
+        candidates = [getattr(observation, field, None)]
+        if isinstance(stored, list):
+            candidates.extend(stored)
+        for candidate in candidates:
+            cleaned = str(candidate or "").strip()
+            normalized = _normalized_text(cleaned)
+            if normalized and normalized not in seen:
+                values.append(cleaned)
+                seen.add(normalized)
+    return values[:32]
+
+
+def _merge_distinct_text_values(values: list[str | None], *, limit: int) -> str | None:
+    merged: list[str] = []
+    normalized: list[str] = []
+    for value in values:
+        cleaned = str(value or "").strip()
+        key = _normalized_text(cleaned)
+        if not key or any(key == known or key in known for known in normalized):
+            continue
+        merged.append(cleaned)
+        normalized.append(key)
+    return "\n\n".join(merged)[:limit] or None
 
 
 def _merge_world_rule_draft(current, incoming):

@@ -11,7 +11,7 @@ class Settings(BaseModel):
     app_name: str = "Worldbuilder Core"
     llm_base_url: str = "http://127.0.0.1:1234/v1"
     llm_api_key: str | None = None
-    llm_model: str = "local-model"
+    llm_model: str = ""
     llm_timeout_seconds: float = 120.0
     max_entities_per_extract: int = 12
     master_token: str | None = None

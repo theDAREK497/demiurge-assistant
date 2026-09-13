@@ -156,8 +156,13 @@ any write rolls the entire publication back before the proposal error is saved.
 New chat answers, adventure packages, manual payloads, and document chunks do
 not create parallel pending drafts. The merge remaps temporary IDs, reconciles
 duplicate entities, keeps richer non-empty text, preserves the strongest
-relationship confidence, uses the median weight among equally confident
-observations instead of biasing it upward, and validates every reference again.
+relationship confidence, removes self-relationships, and collapses repeated
+directed source-target observations into one relationship. The representative
+type and label come from the strongest observation; other types, labels, and
+evidence remain in proposal metadata. Its weight uses the median among equally
+confident observations plus a bounded corroboration bonus, capped at `10`, and
+the cleanup is idempotent when a proposal is edited or validated again. Reverse
+directions remain separate. Every reference is validated again.
 Applied and rejected records remain as compact history.
 Fuzzy entity comparison uses a bounded candidate index instead of scanning the
 whole draft for every item, and distinct numeric identifiers such as `T-115`

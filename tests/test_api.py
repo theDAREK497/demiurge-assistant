@@ -875,6 +875,7 @@ def test_llm_config_can_be_persisted() -> None:
     initial_response = client.get("/api/llm/config")
     assert initial_response.status_code == 200
     assert initial_response.json()["persisted"] is False
+    assert initial_response.json()["default_model"] == ""
 
     update_response = client.put(
         "/api/llm/config",
@@ -907,7 +908,7 @@ def test_llm_config_can_be_persisted() -> None:
         "/api/llm/config",
         json={
             "base_url": "http://127.0.0.1:1234/v1",
-            "default_model": "local-default",
+            "default_model": "",
             "api_key": "",
             "clear_api_key": True,
             "timeout_seconds": 45,
@@ -916,6 +917,7 @@ def test_llm_config_can_be_persisted() -> None:
     )
     assert clear_response.status_code == 200
     assert clear_response.json()["has_api_key"] is False
+    assert clear_response.json()["default_model"] == ""
 
 
 def test_image_asset_upload_and_serving(monkeypatch, tmp_path) -> None:
@@ -1812,7 +1814,9 @@ def test_pending_proposals_merge_into_one_review_draft() -> None:
     assert payload["entities"][0]["summary"] == "Senior scout and pathfinder of the guild."
     assert payload["relationships"][0]["weight"] == 8
     assert payload["relationships"][0]["confidence"] == 0.9
-    assert payload["relationships"][0]["evidence"] == "The guild ledger names Mira as its senior scout."
+    assert "A short mention." in payload["relationships"][0]["evidence"]
+    assert "The guild ledger names Mira as its senior scout." in payload["relationships"][0]["evidence"]
+    assert payload["relationships"][0]["attributes"]["support_count"] == 2
     pending = client.get(f"/api/worlds/{world_id}/proposals?status_filter=pending").json()
     assert len(pending) == 1
     assert "Mira serves" in pending[0]["source_text"]
