@@ -1,5 +1,7 @@
 # Demiurge Assistant — Worldbuilder Core
 
+[![CI](https://github.com/theDAREK497/demiurge-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/theDAREK497/demiurge-assistant/actions/workflows/ci.yml)
+
 A local-first knowledge system for fictional worlds, tabletop campaigns, investigations and long-running narrative projects.
 
 The core idea is simple: **an LLM should be able to help develop a world without silently rewriting its canon**.
