@@ -41,9 +41,9 @@ by commas, to `WORLDBUILDER_ALLOWED_HOSTS` when using a reverse proxy.
 
 ## Audit Snapshot
 
-Checked on 2026-07-15:
+Checked on 2026-09-13:
 
-- `pytest`: 44 passed;
+- `pytest`: 116 passed;
 - `ruff check src tests`: passed;
 - `bandit -r src -q`: no findings;
 - `pip-audit --local --skip-editable`: no known dependency vulnerabilities;
