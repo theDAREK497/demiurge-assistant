@@ -3,7 +3,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from worldbuilder_core.db import Base
-from worldbuilder_core.models import DocumentChunkLink, Entity, KnowledgeChunk, KnowledgeDocument, ViewerRole, World
+from worldbuilder_core.models import (
+    DocumentChunkLink,
+    Entity,
+    KnowledgeChunk,
+    KnowledgeDocument,
+    ViewerRole,
+    World,
+)
 from worldbuilder_core.services.retrieval import (
     _entity_query_score,
     _entity_type_query_bonus,

@@ -14,7 +14,10 @@ from worldbuilder_core.models import (
 )
 from worldbuilder_core.schemas import ExtractionPayload, ExtractionProposalCreate
 from worldbuilder_core.services.embedding_jobs import LEASE_SECONDS
-from worldbuilder_core.services.extraction import ExtractionParseError, extract_payload_with_llm
+from worldbuilder_core.services.extraction import (
+    ExtractionParseError,
+    extract_payload_with_llm,
+)
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
 from worldbuilder_core.services.proposals import (
@@ -31,7 +34,7 @@ RETRY_BASE_SECONDS = 15
 RETRY_MAX_SECONDS = 120
 OVERLAP_SEARCH_CHARS = 2_000
 MIN_REPEATED_OVERLAP_CHARS = 80
-
+SECRET_UPDATE = {"is_secret": True}  # nosec B105
 
 def enqueue_document_extraction(
     session: Session,
@@ -568,18 +571,25 @@ def _build_namespaced_ids(client_ids: list[str], prefix: str) -> dict[str, str]:
 def _apply_source_secrecy(payload: ExtractionPayload) -> ExtractionPayload:
     return payload.model_copy(
         update={
-            "entities": [item.model_copy(update={"is_secret": True}) for item in payload.entities],
+            "entities": [
+                item.model_copy(update=SECRET_UPDATE)
+                for item in payload.entities
+            ],
             "relationships": [
-                item.model_copy(update={"is_secret": True}) for item in payload.relationships
+                item.model_copy(update=SECRET_UPDATE)
+                for item in payload.relationships
             ],
             "world_rules": [
-                item.model_copy(update={"is_secret": True}) for item in payload.world_rules
+                item.model_copy(update=SECRET_UPDATE)
+                for item in payload.world_rules
             ],
             "random_tables": [
-                item.model_copy(update={"is_secret": True}) for item in payload.random_tables
+                item.model_copy(update=SECRET_UPDATE)
+                for item in payload.random_tables
             ],
             "random_table_rows": [
-                item.model_copy(update={"is_secret": True}) for item in payload.random_table_rows
+                item.model_copy(update=SECRET_UPDATE)
+                for item in payload.random_table_rows
             ],
         }
     )

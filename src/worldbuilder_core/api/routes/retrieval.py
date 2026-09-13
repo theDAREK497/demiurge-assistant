@@ -2,8 +2,17 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import ViewerRole
-from worldbuilder_core.schemas import ExtractionProposalCreate, ExtractionProposalRead, WorldContextRead, WorldLLMChatRequest, WorldLLMChatResponse
-from worldbuilder_core.services.extraction import ExtractionParseError, extract_payload_with_llm
+from worldbuilder_core.schemas import (
+    ExtractionProposalCreate,
+    ExtractionProposalRead,
+    WorldContextRead,
+    WorldLLMChatRequest,
+    WorldLLMChatResponse,
+)
+from worldbuilder_core.services.extraction import (
+    ExtractionParseError,
+    extract_payload_with_llm,
+)
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
 from worldbuilder_core.services.proposals import (
@@ -11,7 +20,10 @@ from worldbuilder_core.services.proposals import (
     create_extraction_proposal,
     sanitize_extraction_payload_for_world,
 )
-from worldbuilder_core.services.retrieval import RetrievalWorldNotFoundError, build_world_context_with_embeddings
+from worldbuilder_core.services.retrieval import (
+    RetrievalWorldNotFoundError,
+    build_world_context_with_embeddings,
+)
 from worldbuilder_core.services.world_chat import build_world_llm_request
 
 router = APIRouter(tags=["retrieval"])

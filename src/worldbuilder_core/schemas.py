@@ -671,7 +671,7 @@ class WorldContextRead(BaseModel):
     relationships: list[RelationshipRead] = Field(default_factory=list)
     world_rules: list[WorldRuleRead] = Field(default_factory=list)
     random_tables: list[RandomTableRead] = Field(default_factory=list)
-    document_chunks: list["KnowledgeChunkExcerpt"] = Field(default_factory=list)
+    document_chunks: list[KnowledgeChunkExcerpt] = Field(default_factory=list)
     experience_changes: list[WorldChangeRead] = Field(default_factory=list)
     context_text: str
 
@@ -828,7 +828,7 @@ class ExtractedRelationshipDraft(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_refs(self) -> "ExtractedRelationshipDraft":
+    def validate_refs(self) -> ExtractedRelationshipDraft:
         if bool(self.source_entity_id) == bool(self.source_client_id):
             raise ValueError("Provide exactly one source reference")
         if bool(self.target_entity_id) == bool(self.target_client_id):
@@ -865,7 +865,7 @@ class ExtractedRandomTableRowDraft(BaseModel):
     is_secret: bool = False
 
     @model_validator(mode="after")
-    def validate_table_ref(self) -> "ExtractedRandomTableRowDraft":
+    def validate_table_ref(self) -> ExtractedRandomTableRowDraft:
         if bool(self.table_id) == bool(self.table_client_id):
             raise ValueError("Provide exactly one table reference")
         return self
@@ -882,7 +882,7 @@ class ExtractionPayload(BaseModel):
     notes: list[str] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
-    def validate_client_ids(self) -> "ExtractionPayload":
+    def validate_client_ids(self) -> ExtractionPayload:
         client_ids = [entity.client_id for entity in self.entities if entity.client_id]
         if len(client_ids) != len(set(client_ids)):
             raise ValueError("Entity client_id values must be unique")

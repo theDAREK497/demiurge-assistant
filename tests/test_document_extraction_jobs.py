@@ -1,5 +1,4 @@
 import asyncio
-
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import create_engine, select
@@ -20,13 +19,16 @@ from worldbuilder_core.schemas import LLMChatResponse, LLMMessage
 from worldbuilder_core.services.document_extraction_jobs import (
     _drop_fragmentary_boundary_entities,
     _merge_segment_payloads,
-    _split_repeated_chunk_overlap,
     _split_for_extraction,
+    _split_repeated_chunk_overlap,
     claim_document_extraction_job,
     enqueue_document_extraction,
     run_document_extraction_batch,
 )
-from worldbuilder_core.services.extraction import annotate_payload_with_source_excerpts, parse_extraction_payload
+from worldbuilder_core.services.extraction import (
+    annotate_payload_with_source_excerpts,
+    parse_extraction_payload,
+)
 from worldbuilder_core.services.llm import LLMProviderError
 
 

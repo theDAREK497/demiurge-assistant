@@ -5,8 +5,18 @@ import httpx
 import pytest
 
 from worldbuilder_core.models import ViewerRole
-from worldbuilder_core.schemas import LLMChatRequest, LLMMessage, WorldContextRead, WorldLLMChatRequest, WorldRead
-from worldbuilder_core.services.llm import LLMProviderError, OpenAICompatibleLLMClient, parse_openai_chat_response
+from worldbuilder_core.schemas import (
+    LLMChatRequest,
+    LLMMessage,
+    WorldContextRead,
+    WorldLLMChatRequest,
+    WorldRead,
+)
+from worldbuilder_core.services.llm import (
+    LLMProviderError,
+    OpenAICompatibleLLMClient,
+    parse_openai_chat_response,
+)
 from worldbuilder_core.services.world_chat import build_world_llm_request
 
 

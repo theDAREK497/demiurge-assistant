@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from worldbuilder_core.schemas import ExtractionPayload
 from worldbuilder_core.services.extraction import (
     ExtractionParseError,
     annotate_payload_with_source_excerpts,
@@ -12,7 +13,6 @@ from worldbuilder_core.services.extraction import (
     parse_extraction_payload,
     prefer_source_language_names,
 )
-from worldbuilder_core.schemas import ExtractionPayload
 from worldbuilder_core.services.proposals import dedupe_extraction_payload
 
 

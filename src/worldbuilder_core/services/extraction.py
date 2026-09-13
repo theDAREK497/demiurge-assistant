@@ -6,7 +6,12 @@ from json_repair import repair_json
 from pydantic import ValidationError
 
 from worldbuilder_core.models import EntityType, VerificationStatus
-from worldbuilder_core.schemas import ExtractedEntityDraft, ExtractionPayload, LLMChatRequest, LLMMessage
+from worldbuilder_core.schemas import (
+    ExtractedEntityDraft,
+    ExtractionPayload,
+    LLMChatRequest,
+    LLMMessage,
+)
 from worldbuilder_core.services.world_configuration import normalize_key
 
 
@@ -1098,7 +1103,7 @@ def _extract_json_text(content: str) -> str:
     stripped = content.strip()
     match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.DOTALL)
     candidate = match.group(1).strip() if match else stripped
-    if candidate.startswith("{") or candidate.startswith("["):
+    if candidate.startswith(("{", "[")):
         return candidate
 
     first_object = candidate.find("{")

@@ -1,5 +1,9 @@
-from worldbuilder_core.schemas import LLMChatRequest, LLMMessage, WorldContextRead, WorldLLMChatRequest
-
+from worldbuilder_core.schemas import (
+    LLMChatRequest,
+    LLMMessage,
+    WorldContextRead,
+    WorldLLMChatRequest,
+)
 
 LANGUAGE_NAMES = {
     "ru": "Russian",

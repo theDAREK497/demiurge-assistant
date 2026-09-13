@@ -7,13 +7,20 @@ import unicodedata
 from collections.abc import Iterator
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
-from xml.etree import ElementTree
 
+from defusedxml import ElementTree
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
-from worldbuilder_core.models import DocumentChunkLink, KnowledgeChunk, KnowledgeDocument
-from worldbuilder_core.schemas import KnowledgeDocumentProcessResult, KnowledgeDocumentRead
+from worldbuilder_core.models import (
+    DocumentChunkLink,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
+from worldbuilder_core.schemas import (
+    KnowledgeDocumentProcessResult,
+    KnowledgeDocumentRead,
+)
 
 TARGET_CHARS = 4_000
 OVERLAP_CHARS = 400
@@ -236,7 +243,7 @@ def _read_docx(path: Path) -> Iterator[str]:
             with archive.open(info) as source:
                 table_depth = 0
                 table_rows: list[list[str]] = []
-                for event, element in ElementTree.iterparse(source, events=("start", "end")):
+                for event, element in ElementTree.iterparse(source,events=("start", "end"),forbid_dtd=True,):
                     if event == "start" and element.tag == f"{WORD_NS}tbl":
                         table_depth += 1
                         if table_depth == 1:

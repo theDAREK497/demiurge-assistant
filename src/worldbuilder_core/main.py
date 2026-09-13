@@ -20,8 +20,8 @@ from worldbuilder_core.api.routes import (
     random_tables,
     relationships,
     retrieval,
-    world_rules,
     world_configuration,
+    world_rules,
     worlds,
 )
 from worldbuilder_core.config import get_settings

@@ -5,7 +5,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import DetectiveBoardConnection, DetectiveBoardNode, Entity, ViewerRole, World
+from worldbuilder_core.models import (
+    DetectiveBoardConnection,
+    DetectiveBoardNode,
+    Entity,
+    ViewerRole,
+    World,
+)
 from worldbuilder_core.schemas import (
     DetectiveBoardConnectionCreate,
     DetectiveBoardConnectionRead,
@@ -16,7 +22,10 @@ from worldbuilder_core.schemas import (
     DetectiveBoardNodeUpdate,
     DetectiveBoardRead,
 )
-from worldbuilder_core.services.detective_generation import DetectiveGenerationParseError, generate_detective_board_with_llm
+from worldbuilder_core.services.detective_generation import (
+    DetectiveGenerationParseError,
+    generate_detective_board_with_llm,
+)
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings
 from worldbuilder_core.services.retrieval import build_world_context

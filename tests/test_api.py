@@ -1,16 +1,16 @@
 import base64
+from collections.abc import Generator
 from io import BytesIO
 from zipfile import ZIP_DEFLATED, ZipFile
-from collections.abc import Generator
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from worldbuilder_core.schemas import LLMChatResponse, LLMMessage
 from worldbuilder_core.db import Base, get_session
 from worldbuilder_core.main import create_app
+from worldbuilder_core.schemas import LLMChatResponse, LLMMessage
 
 
 def build_client(*, client_address: tuple[str, int] = ("testclient", 50000)) -> TestClient:

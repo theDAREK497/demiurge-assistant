@@ -2,7 +2,12 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import func, select
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import Entity, EntityTypeDefinition, QuestStatusDefinition, World
+from worldbuilder_core.models import (
+    Entity,
+    EntityTypeDefinition,
+    QuestStatusDefinition,
+    World,
+)
 from worldbuilder_core.schemas import (
     EntityTypeDefinitionCreate,
     EntityTypeDefinitionRead,

@@ -10,7 +10,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import DocumentExtractionJob, EmbeddingJob, KnowledgeDocument, World
+from worldbuilder_core.models import (
+    DocumentExtractionJob,
+    EmbeddingJob,
+    KnowledgeDocument,
+    World,
+)
 from worldbuilder_core.schemas import (
     DocumentExtractionJobRead,
     EmbeddingIndexStatus,
@@ -23,15 +28,6 @@ from worldbuilder_core.services.document_extraction_jobs import (
     pause_document_extraction_job,
     resume_document_extraction_job,
 )
-from worldbuilder_core.services.embedding_index import (
-    EmbeddingConfigurationError,
-    clear_embedding_index,
-    embedding_status,
-)
-from worldbuilder_core.services.embedding_jobs import (
-    cancel_world_embedding_jobs,
-    enqueue_embedding_job,
-)
 from worldbuilder_core.services.document_ingestion import (
     DocumentIngestionError,
     InvalidDocumentError,
@@ -41,6 +37,15 @@ from worldbuilder_core.services.document_ingestion import (
     process_document,
     resume_document,
     safe_filename,
+)
+from worldbuilder_core.services.embedding_index import (
+    EmbeddingConfigurationError,
+    clear_embedding_index,
+    embedding_status,
+)
+from worldbuilder_core.services.embedding_jobs import (
+    cancel_world_embedding_jobs,
+    enqueue_embedding_job,
 )
 
 router = APIRouter(tags=["documents"])

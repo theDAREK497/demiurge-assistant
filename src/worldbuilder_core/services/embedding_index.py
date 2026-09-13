@@ -3,8 +3,13 @@ from datetime import UTC, datetime
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
-from worldbuilder_core.models import DocumentChunkLink, EmbeddingJob, KnowledgeChunk, KnowledgeDocument
 from worldbuilder_core.config import get_settings
+from worldbuilder_core.models import (
+    DocumentChunkLink,
+    EmbeddingJob,
+    KnowledgeChunk,
+    KnowledgeDocument,
+)
 from worldbuilder_core.schemas import EmbeddingBatchResult, EmbeddingIndexStatus
 from worldbuilder_core.services.llm import build_llm_client
 from worldbuilder_core.services.llm_settings import get_llm_runtime_settings

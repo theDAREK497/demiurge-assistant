@@ -85,7 +85,7 @@ class ApplicationSecurityMiddleware:
 
     def _body_limit(self, scope: Scope) -> int:
         path = scope.get("path", "")
-        relative_path = path[len(self.api_prefix) :] if path.startswith(self.api_prefix) else path
+        relative_path = path.removeprefix(self.api_prefix)
         is_document_upload = (
             scope.get("method", "GET").upper() == "POST"
             and re.fullmatch(r"/worlds/[^/]+/documents/?", relative_path) is not None

@@ -12,7 +12,10 @@ from worldbuilder_core.schemas import (
     EntityRead,
     EntityUpdate,
 )
-from worldbuilder_core.services.assets import cleanup_unreferenced_assets, entity_asset_url
+from worldbuilder_core.services.assets import (
+    cleanup_unreferenced_assets,
+    entity_asset_url,
+)
 from worldbuilder_core.services.change_history import (
     entity_snapshot,
     record_entity_change,

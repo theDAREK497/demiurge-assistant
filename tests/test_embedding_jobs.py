@@ -9,9 +9,9 @@ from worldbuilder_core.db import Base
 from worldbuilder_core.models import (
     AppSetting,
     DocumentChunkLink,
+    EmbeddingJob,
     KnowledgeChunk,
     KnowledgeDocument,
-    EmbeddingJob,
     World,
 )
 from worldbuilder_core.services.embedding_jobs import (
@@ -76,7 +76,7 @@ def test_worker_claims_and_completes_embedding_job(monkeypatch) -> None:
                 assert inputs == ["The worker embeds this text."]
                 return model, [[0.25, 0.75]]
 
-        import worldbuilder_core.services.embedding_index as embedding_index
+        from worldbuilder_core.services import embedding_index
 
         monkeypatch.setattr(embedding_index, "build_llm_client", lambda *_, **__: FakeClient())
         job = enqueue_embedding_job(session, world.id)
@@ -148,7 +148,7 @@ def test_embedding_failure_waits_before_retry_and_success_resets_attempts(monkey
                 return model, [[0.4, 0.6]]
 
         fake_client = FakeClient()
-        import worldbuilder_core.services.embedding_index as embedding_index
+        from worldbuilder_core.services import embedding_index
 
         monkeypatch.setattr(embedding_index, "build_llm_client", lambda *_, **__: fake_client)
         job = enqueue_embedding_job(session, world.id)
@@ -294,7 +294,7 @@ def test_cancelled_embedding_job_cannot_write_a_late_provider_response(monkeypat
                 session.commit()
                 return model, [[0.1, 0.9]]
 
-        import worldbuilder_core.services.embedding_index as embedding_index
+        from worldbuilder_core.services import embedding_index
 
         monkeypatch.setattr(embedding_index, "build_llm_client", lambda *_, **__: CancellingClient())
         cancelled = asyncio.run(run_embedding_job_batch(session, job.id, "worker-cancelled"))

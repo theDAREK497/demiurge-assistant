@@ -4,8 +4,14 @@ from sqlalchemy import select
 from worldbuilder_core.api.deps import DbSession
 from worldbuilder_core.models import World
 from worldbuilder_core.schemas import WorldCreate, WorldRead, WorldUpdate
-from worldbuilder_core.services.assets import cleanup_unreferenced_assets, world_asset_urls
-from worldbuilder_core.services.document_ingestion import cleanup_document_paths, world_document_paths
+from worldbuilder_core.services.assets import (
+    cleanup_unreferenced_assets,
+    world_asset_urls,
+)
+from worldbuilder_core.services.document_ingestion import (
+    cleanup_document_paths,
+    world_document_paths,
+)
 from worldbuilder_core.services.world_configuration import ensure_world_configuration
 
 router = APIRouter(prefix="/worlds", tags=["worlds"])

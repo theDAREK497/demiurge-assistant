@@ -3,7 +3,13 @@ from sqlalchemy import Select, select
 from sqlalchemy.orm import joinedload
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.models import Entity, Relationship, RelationshipRevision, ViewerRole, World
+from worldbuilder_core.models import (
+    Entity,
+    Relationship,
+    RelationshipRevision,
+    ViewerRole,
+    World,
+)
 from worldbuilder_core.schemas import (
     RelationshipCreate,
     RelationshipRead,

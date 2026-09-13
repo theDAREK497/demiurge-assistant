@@ -1,9 +1,18 @@
 from fastapi import APIRouter, HTTPException, status
 
 from worldbuilder_core.api.deps import DbSession
-from worldbuilder_core.schemas import LLMChatRequest, LLMChatResponse, LLMConfigRead, LLMConfigUpdate
+from worldbuilder_core.schemas import (
+    LLMChatRequest,
+    LLMChatResponse,
+    LLMConfigRead,
+    LLMConfigUpdate,
+)
 from worldbuilder_core.services.llm import LLMProviderError, build_llm_client
-from worldbuilder_core.services.llm_settings import get_llm_runtime_settings, llm_config_read, save_llm_runtime_settings
+from worldbuilder_core.services.llm_settings import (
+    get_llm_runtime_settings,
+    llm_config_read,
+    save_llm_runtime_settings,
+)
 
 router = APIRouter(prefix="/llm", tags=["llm"])
 

@@ -20,15 +20,6 @@ from worldbuilder_core.models import (
     World,
     WorldRule,
 )
-from worldbuilder_core.services.world_configuration import ensure_entity_type
-from worldbuilder_core.services.relationship_history import build_relationship_revision
-from worldbuilder_core.services.change_history import (
-    entity_snapshot,
-    record_entity_change,
-    record_relationship_change,
-    record_world_change,
-    relationship_snapshot,
-)
 from worldbuilder_core.schemas import (
     ExtractionPayload,
     ExtractionProposalCreate,
@@ -36,7 +27,15 @@ from worldbuilder_core.schemas import (
     ProposalApplyResult,
     ProposalItemSelection,
 )
-
+from worldbuilder_core.services.change_history import (
+    entity_snapshot,
+    record_entity_change,
+    record_relationship_change,
+    record_world_change,
+    relationship_snapshot,
+)
+from worldbuilder_core.services.relationship_history import build_relationship_revision
+from worldbuilder_core.services.world_configuration import ensure_entity_type
 
 MAX_PROPOSAL_SOURCE_CHARS = 200_000
 SOURCE_SEPARATOR = "\n\n--- SOURCE ---\n\n"
