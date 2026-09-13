@@ -19,6 +19,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2.0",
+    "ruff>=0.12.0",
+    "bandit>=1.8.0",
+    "pip-audit>=2.9.0",
 ]
 
 [build-system]
