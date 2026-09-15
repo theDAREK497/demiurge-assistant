@@ -53,6 +53,8 @@ class EntityBase(BaseModel):
     @field_validator("type", mode="before")
     @classmethod
     def validate_type(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("Entity type must be a string")  # noqa: TRY004
         return normalize_key(value)
 
 
@@ -74,7 +76,16 @@ class EntityUpdate(BaseModel):
     @field_validator("type", mode="before")
     @classmethod
     def validate_type(cls, value: str | None) -> str | None:
+        if value is not None and not isinstance(value, str):
+            raise ValueError("Entity type must be a string")
         return normalize_key(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def reject_null_required_fields(self) -> EntityUpdate:
+        for field in ("type", "name", "aliases", "tags", "is_secret", "status", "attributes"):
+            if field in self.model_fields_set and getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null; omit it to leave it unchanged")
+        return self
 
 
 class EntityRead(EntityBase, ORMModel):

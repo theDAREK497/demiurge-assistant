@@ -1,8 +1,11 @@
 import base64
 from collections.abc import Generator
+from datetime import datetime
 from io import BytesIO
+from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -42,6 +45,69 @@ def process_uploaded_document(client: TestClient, document_id: str) -> dict:
         if document["status"] == "ready":
             return document
     raise AssertionError("Document did not finish processing")
+
+
+def test_manual_entity_creation_contract_and_name_conflict() -> None:
+    client = build_client()
+    world = client.post("/api/worlds", json={"name": "Manual"}).json()["id"]
+    other = client.post("/api/worlds", json={"name": "Other"}).json()["id"]
+    path = f"/api/worlds/{world}/entities"
+    payload = {
+        "type": "character", "name": "Rex", "summary": None, "description": None,
+        "tags": [], "is_secret": False, "attributes": {"color": "#123456"},
+    }
+    response = client.post(path, json=payload)
+    assert response.status_code == 201, response.text
+    entity = response.json()
+    assert entity.items() >= payload.items()
+    assert entity["world_id"] == world
+    assert entity["aliases"] == []
+    assert entity["status"] == "verified"
+    assert str(UUID(entity["id"])) == entity["id"]
+    assert datetime.fromisoformat(entity["created_at"]) <= datetime.fromisoformat(entity["updated_at"])
+    duplicate = client.post(path, json=payload)
+    assert duplicate.status_code == 409, duplicate.text
+    assert "already exists" in duplicate.json()["detail"]
+    assert client.get(path).json() == [entity]
+    assert client.get(f"/api/entities/{entity['id']}").json() == entity
+    assert client.post(f"/api/worlds/{other}/entities", json=payload).status_code == 201
+    different_type = client.post(path, json={"type": "custom_type", "name": "Rex"})
+    assert different_type.status_code == 201, different_type.text
+    collision = client.patch(f"/api/entities/{different_type.json()['id']}", json={"type": "character"})
+    assert collision.status_code == 409, collision.text
+    edited = client.patch(f"/api/entities/{entity['id']}", json={"summary": "Updated", "is_secret": True})
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["summary"] == "Updated"
+    assert entity["id"] not in {item["id"] for item in client.get(path + "?role=player").json()}
+    assert client.post("/api/worlds/missing/entities", json=payload).status_code == 404
+
+
+@pytest.mark.parametrize("invalid", [
+    {}, {"name": "Rex"}, {"type": None, "name": "Rex"},
+    {"type": 123, "name": "Rex"}, {"type": [], "name": "Rex"},
+    {"type": "!!!", "name": "Rex"}, {"type": "character", "name": ""},
+    {"type": "character", "name": "Rex", "status": "bad"},
+    {"type": "character", "name": "Rex", "attributes": []},
+    {"type": "character", "name": "Rex", "summary": "x" * 501},
+])
+def test_manual_entity_invalid_payload_returns_422(invalid: dict) -> None:
+    client = build_client()
+    world = client.post("/api/worlds", json={"name": "Invalid"}).json()["id"]
+    path = f"/api/worlds/{world}/entities"
+    response = client.post(path, json=invalid)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]
+    assert client.get(path).json() == []
+
+
+@pytest.mark.parametrize("field", ["type", "name", "aliases", "tags", "is_secret", "status", "attributes"])
+def test_entity_update_rejects_explicit_null_required_fields(field: str) -> None:
+    client = build_client()
+    world = client.post("/api/worlds", json={"name": "Nullable"}).json()["id"]
+    entity = client.post(f"/api/worlds/{world}/entities", json={"type": "character", "name": "Rex"}).json()
+    path = f"/api/entities/{entity['id']}"
+    assert client.patch(path, json={field: None}).status_code == 422
+    assert client.get(path).json() == entity
 
 
 def test_duplicate_candidates_keep_ambiguous_short_names_separate() -> None:
