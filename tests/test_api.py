@@ -1,8 +1,8 @@
 import base64
-from datetime import datetime
-from uuid import UUID
 from collections.abc import Generator
+from datetime import datetime
 from io import BytesIO
+from uuid import UUID
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest

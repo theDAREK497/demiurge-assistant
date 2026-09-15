@@ -54,7 +54,7 @@ class EntityBase(BaseModel):
     @classmethod
     def validate_type(cls, value: str) -> str:
         if not isinstance(value, str):
-            raise ValueError("Entity type must be a string")
+            raise ValueError("Entity type must be a string")  # noqa: TRY004
         return normalize_key(value)
 
 
