@@ -37,14 +37,7 @@ export async function api(path, options = {}) {
   });
 
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      const payload = await response.json();
-      detail = payload.detail || detail;
-    } catch {
-      detail = await response.text();
-    }
-    throw new Error(detail);
+    throw new Error(await responseError(response));
   }
 
   if (response.status === 204) {
@@ -64,15 +57,27 @@ export async function apiRaw(path, options = {}) {
     },
   });
   if (!response.ok) {
-    let detail = `${response.status} ${response.statusText}`;
-    try {
-      detail = (await response.json()).detail || detail;
-    } catch {
-      detail = await response.text();
-    }
-    throw new Error(detail);
+    throw new Error(await responseError(response));
   }
   return response.status === 204 ? null : response.json();
+}
+
+async function responseError(response) {
+  const fallback = `${response.status} ${response.statusText}`;
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return text || fallback;
+  }
+  if (Array.isArray(payload?.detail)) {
+    return payload.detail.map((item) => {
+      const field = (item.loc || []).filter((part) => part !== "body").join(".");
+      return `${field ? `${field}: ` : ""}${item.msg || fallback}`;
+    }).join("; ") || fallback;
+  }
+  return typeof payload?.detail === "string" ? payload.detail : fallback;
 }
 
 function captureMasterTokenFromFragment() {

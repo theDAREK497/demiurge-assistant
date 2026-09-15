@@ -32,6 +32,19 @@ from worldbuilder_core.services.world_configuration import ensure_entity_type
 router = APIRouter(tags=["entities"])
 
 
+def raise_entity_name_conflict(exc: IntegrityError) -> None:
+    constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+    if constraint == "uq_entity_world_type_name" or str(exc.orig) == (
+        "UNIQUE constraint failed: entities.world_id, entities.type, entities.name"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An entity with this name and type already exists in this world. "
+            "Choose another name or edit the existing entity.",
+        ) from exc
+    raise exc
+
+
 def ensure_world(session: DbSession, world_id: str) -> World:
     world = session.get(World, world_id)
     if world is None:
@@ -51,9 +64,13 @@ def create_entity(world_id: str, payload: EntityCreate, session: DbSession) -> E
     ensure_entity_type(session, world_id, payload.type)
     entity = Entity(world_id=world_id, **payload.model_dump())
     session.add(entity)
-    session.flush()
-    record_entity_change(session, entity, "created")
-    session.commit()
+    try:
+        session.flush()
+        record_entity_change(session, entity, "created")
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise_entity_name_conflict(exc)
     session.refresh(entity)
     return entity
 
@@ -131,9 +148,13 @@ def update_entity(entity_id: str, payload: EntityUpdate, session: DbSession) -> 
         setattr(entity, key, value)
 
     session.add(entity)
-    session.flush()
-    record_entity_change(session, entity, "updated", before_state=previous_state)
-    session.commit()
+    try:
+        session.flush()
+        record_entity_change(session, entity, "updated", before_state=previous_state)
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        raise_entity_name_conflict(exc)
     session.refresh(entity)
     cleanup_unreferenced_assets(session, {previous_asset_url})
     return entity
